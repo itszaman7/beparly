@@ -1,0 +1,38 @@
+# Local dependency and tool caches
+.pnpm-store/
+.tool-cache/
+.git-backups/
+node_modules/
+.expo/
+dist/
+web-build/
+
+# Python environments and generated files
+env/
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.sqlite3
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+*.p12
+*.jks
+*.mobileprovision
+
+# Editor, OS, and logs
+.DS_Store
+Thumbs.db
+*.log
+*.tsbuildinfo
