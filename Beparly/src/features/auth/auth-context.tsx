@@ -18,7 +18,7 @@ type AuthContextValue = {
   signIn: (phone: string, password: string) => Promise<void>;
   register: (data: { username?: string; phone: string; password: string }) => Promise<void>;
   selectBusiness: (businessId: number) => void;
-  createBusiness: (name: string) => Promise<void>;
+  createBusiness: (name: string, openingCash?: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -102,9 +102,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } });
       void sessionStorage.saveBusinessId(businessId);
     },
-    async createBusiness(name) {
+    async createBusiness(name, openingCash) {
       if (!session) throw new Error('Please sign in.');
-      const { business } = await api.createBusiness(session.token, name);
+      const { business } = await api.createBusiness(session.token, name, openingCash);
       setSession((current) => current && {
         ...current,
         businesses: [...current.businesses, business],

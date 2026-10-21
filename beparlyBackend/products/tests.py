@@ -1,0 +1,388 @@
+import io
+import json
+import uuid
+import tempfile
+from decimal import Decimal
+
+from django.test import TestCase, override_settings
+from django.db import DatabaseError, connection, transaction
+from unittest import skipUnless
+from PIL import Image
+
+from accounts.models import Business, BusinessMember, User
+from audit.models import AuditEvent
+
+from .models import Category, Product, ProductVariant, ProductUnit, StockBatch
+from stockkeeper.models import StockBalance, StockMovement, StockLocation
+
+
+class ProductApiTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(phone='01711111111', password='ExamplePass#83')
+        self.other = User.objects.create_user(phone='01811111111', password='ExamplePass#83')
+        self.business = Business.objects.create(name='One')
+        self.other_business = Business.objects.create(name='Two')
+        BusinessMember.objects.create(user=self.user, business=self.business, role=BusinessMember.OWNER)
+        BusinessMember.objects.create(user=self.other, business=self.other_business, role=BusinessMember.OWNER)
+        self.token = self.login('01711111111')
+        self.other_token = self.login('01811111111')
+        self.base = f'/api/v1/businesses/{self.business.pk}/'
+
+    def login(self, phone):
+        response = self.client.post('/api/v1/auth/login/',
+                                    json.dumps({'phone': phone, 'password': 'ExamplePass#83'}),
+                                    content_type='application/json')
+        return response.json()['token']
+
+    def call(self, method, path, data=None, token=None, command=None):
+        headers = {'HTTP_AUTHORIZATION': f'Bearer {token or self.token}'}
+        if command:
+            headers['HTTP_X_COMMAND_ID'] = str(command)
+        if data is None:
+            return getattr(self.client, method)(path, **headers)
+        return getattr(self.client, method)(path, json.dumps(data), content_type='application/json', **headers)
+
+    def test_nested_categories_and_descendant_filter(self):
+        root = self.call('post', self.base + 'categories/', {'name': 'Computer'})
+        self.assertEqual(root.status_code, 201, root.content)
+        parent = root.json()['category']['id']
+        for name in ('Apple', 'Mac', 'MacBook'):
+            result = self.call('post', self.base + 'categories/', {'name': name, 'parent': parent})
+            self.assertEqual(result.status_code, 201, result.content)
+            parent = result.json()['category']['id']
+        product = self.call('post', self.base + 'products/', {'name': 'Air', 'category': parent}, command=uuid.uuid4())
+        self.assertEqual(product.status_code, 201, product.content)
+        listed = self.call('get', self.base + f'products/?category={root.json()["category"]["id"]}')
+        self.assertEqual(len(listed.json()['products']), 1)
+        cycle = self.call('patch', self.base + f'categories/{root.json()["category"]["id"]}/', {'parent': parent})
+        self.assertEqual(cycle.status_code, 400)
+        duplicate = self.call('post', self.base + 'categories/', {'name': 'computer'})
+        self.assertEqual(duplicate.status_code, 409)
+
+    def test_product_activity_is_scoped_to_business(self):
+        created = self.call('post', self.base + 'products/', {
+            'name': 'Rice', 'opening_stock': {'quantity': '4', 'unit_cost': '20'},
+        }, command=uuid.uuid4())
+        self.assertEqual(created.status_code, 201, created.content)
+        path = self.base + f'products/{created.json()["product"]["id"]}/movements/'
+        activity = self.call('get', path)
+        self.assertEqual(activity.status_code, 200)
+        self.assertEqual(len(activity.json()['movements']), 1)
+        self.assertEqual(activity.json()['movements'][0]['quantity_change'], '4.000')
+        self.assertEqual(self.call('get', path, token=self.other_token).status_code, 404)
+
+    def test_catalog_money_search_isolation_and_idempotency(self):
+        command = uuid.uuid4()
+        data = {'name': '  Rice  ', 'purchase_price': '29.15', 'retail_price': '30.20', 'barcode': '12345'}
+        created = self.call('post', self.base + 'products/', data, command=command)
+        self.assertEqual(created.status_code, 201, created.content)
+        product = created.json()['product']
+        self.assertEqual(product['name'], 'Rice')
+        self.assertEqual(product['purchase_price'], '29.15')
+        self.assertTrue(product['sku'].startswith('P-'))
+        self.assertEqual(self.call('post', self.base + 'products/', data, command=command).json()['product']['id'], product['id'])
+        self.assertEqual(Product.objects.filter(business=self.business).count(), 1)
+        self.assertEqual(len(self.call('get', self.base + 'products/?search=12345').json()['products']), 1)
+        self.assertEqual(self.call('post', self.base + 'products/', data, command=uuid.uuid4()).status_code, 409)
+        self.assertEqual(self.call('post', self.base + 'products/', {'name': 'Bad', 'retail_price': '-1'}, command=uuid.uuid4()).status_code, 400)
+        detail = self.base + f'products/{product["id"]}/'
+        self.assertEqual(self.call('get', detail, token=self.other_token).status_code, 404)
+        changed = self.call('patch', detail, {'is_active': False, 'retail_price': '0.00'})
+        self.assertEqual(changed.status_code, 200, changed.content)
+        self.assertEqual(Product.objects.get(pk=product['id']).retail_price, Decimal('0.00'))
+        self.assertFalse(Product.objects.get(pk=product['id']).is_active)
+        update_command = uuid.uuid4()
+        update = self.call('patch', detail, {'name': 'New rice'}, command=update_command)
+        self.assertEqual(update.status_code, 200, update.content)
+        self.assertEqual(self.call('patch', detail, {'name': 'New rice'}, command=update_command).status_code, 200)
+        self.assertEqual(AuditEvent.objects.filter(business=self.business, reference_id=update_command).count(), 1)
+
+    def test_variant_creation_stock_isolation_and_ambiguous_command(self):
+        product_id, red_id, blue_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+        command = uuid.uuid4()
+        body = {'id': product_id, 'name': 'Shirt', 'product_type': 'variant',
+                'attributes': [{'name': 'Color', 'values': ['Red', 'Blue']}],
+                'variants': [
+                    {'id': red_id, 'sku': 'SHIRT-RED', 'base_unit': 'Piece', 'retail_price': '120',
+                     'selections': {'Color': 'Red'}, 'opening_stock': {'quantity': '3', 'unit_cost': '80'}},
+                    {'id': blue_id, 'sku': 'SHIRT-BLUE', 'base_unit': 'Piece', 'retail_price': '100',
+                     'selections': {'Color': 'Blue'}, 'opening_stock': {'quantity': '5', 'unit_cost': '70'}},
+                ]}
+        created = self.call('post', self.base + 'products/', body, command=command)
+        self.assertEqual(created.status_code, 201, created.content)
+        self.assertEqual(created.json()['product']['id'], product_id)
+        self.assertEqual(self.call('post', self.base + 'products/', body, command=command).status_code, 200)
+        self.assertEqual(Product.objects.get(pk=product_id).retail_price, Decimal('100'))
+        self.assertEqual(ProductVariant.objects.filter(product_id=product_id).count(), 2)
+        self.assertEqual(list(StockBalance.objects.filter(product_id=product_id).order_by('quantity').values_list('quantity', flat=True)),
+                         [Decimal('3'), Decimal('5')])
+        self.assertEqual(len(self.call('get', self.base + 'products/?search=SHIRT-BLUE').json()['products']), 1)
+        receipt = {'product_id': product_id, 'location_id': StockLocation.objects.get(business=self.business, is_default=True).pk,
+                   'quantity': '1', 'unit_cost': '80', 'reason': 'More stock'}
+        self.assertEqual(self.call('post', self.base + 'stock/receipts/', receipt, command=uuid.uuid4()).status_code, 409)
+        receipt['variant_id'] = red_id
+        receipt_command = uuid.uuid4()
+        response = self.call('post', self.base + 'stock/receipts/', receipt, command=receipt_command)
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()['variant_id'], red_id)
+        self.assertEqual(self.call('post', self.base + 'stock/receipts/', receipt, command=receipt_command).json(), response.json())
+        self.assertEqual(StockBalance.objects.get(variant_id=red_id).quantity, Decimal('4'))
+        self.assertEqual(StockBalance.objects.get(variant_id=blue_id).quantity, Decimal('5'))
+        second_location = self.call('post', self.base + 'locations/', {'name': 'Godown', 'type': 'warehouse'}).json()['location']['id']
+        transfer = self.call('post', self.base + 'stock/transfers/', {'product_id': product_id,
+            'variant_id': red_id, 'location_id': receipt['location_id'], 'destination_id': second_location,
+            'quantity': '2'}, command=uuid.uuid4())
+        self.assertEqual(transfer.status_code, 201, transfer.content)
+        waste = self.call('post', self.base + 'stock/waste/', {'product_id': product_id,
+            'variant_id': blue_id, 'location_id': receipt['location_id'], 'quantity': '1',
+            'reason': 'damaged'}, command=uuid.uuid4())
+        self.assertEqual(waste.status_code, 201, waste.content)
+        self.assertEqual(StockBalance.objects.get(variant_id=red_id, location_id=second_location).quantity, Decimal('2'))
+        self.assertEqual(StockBalance.objects.get(variant_id=blue_id).quantity, Decimal('4'))
+        self.assertEqual(self.call('get', self.base + f'products/{product_id}/variants/{red_id}/', token=self.other_token).status_code, 404)
+        unit_path = self.base + f'products/{product_id}/units/'
+        unit = self.call('post', unit_path, {'variant_id': red_id, 'name': 'Box', 'factor': '10'})
+        self.assertEqual(unit.status_code, 201, unit.content)
+        other_unit = self.call('post', unit_path, {'variant_id': blue_id, 'name': 'Box', 'factor': '5'})
+        self.assertEqual(other_unit.status_code, 201, other_unit.content)
+        wrong_unit_receipt = {**receipt, 'variant_id': blue_id, 'unit_id': unit.json()['unit']['id']}
+        self.assertEqual(self.call('post', self.base + 'stock/receipts/', wrong_unit_receipt,
+                                   command=uuid.uuid4()).status_code, 409)
+        duplicate = {**body, 'id': str(uuid.uuid4()), 'name': 'Duplicate',
+                     'variants': [{**body['variants'][0], 'id': str(uuid.uuid4()), 'sku': 'SHIRT-DUP-A'},
+                                  {**body['variants'][0], 'id': str(uuid.uuid4()), 'sku': 'SHIRT-DUP'}]}
+        self.assertEqual(self.call('post', self.base + 'products/', duplicate, command=uuid.uuid4()).status_code, 409)
+
+    def test_single_and_variant_auto_codes_keep_optional_fields(self):
+        single_id, variant_product_id, variant_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        single = self.call('post', self.base + 'products/', {
+            'id': str(single_id), 'name': 'Mug', 'barcode': '', 'sku': '',
+            'wholesale_price': '95.00', 'specifications': {'Color': 'White'},
+        }, command=uuid.uuid4())
+        self.assertEqual(single.status_code, 201, single.content)
+        item = single.json()['product']
+        self.assertEqual(item['sku'], 'P-' + single_id.hex[:12].upper())
+        self.assertEqual(item['barcode'], 'B-' + single_id.hex[:16].upper())
+        self.assertEqual(item['wholesale_price'], '95.00')
+        self.assertEqual(item['specifications'], {'Color': 'White'})
+        self.assertEqual(ProductVariant.objects.get(product_id=single_id).barcode, item['barcode'])
+
+        created = self.call('post', self.base + 'products/', {
+            'id': str(variant_product_id), 'name': 'Shirt', 'product_type': 'variant',
+            'attributes': [{'name': 'Color', 'values': ['Red']}],
+            'variants': [{'id': str(variant_id), 'sku': '', 'barcode': '', 'base_unit': 'Piece',
+                          'purchase_price': '80', 'retail_price': '120', 'wholesale_price': '100',
+                          'tracking_mode': 'batch', 'selections': {'Color': 'Red'}}],
+        }, command=uuid.uuid4())
+        self.assertEqual(created.status_code, 201, created.content)
+        variant = ProductVariant.objects.get(pk=variant_id)
+        self.assertEqual(variant.sku, 'V-' + variant_id.hex[:12].upper())
+        self.assertEqual(variant.barcode, 'B-' + variant_id.hex[:16].upper())
+        self.assertEqual(variant.wholesale_price, Decimal('100'))
+        self.assertEqual(variant.tracking_mode, 'batch')
+        updated = self.call('patch', self.base + f'products/{variant_product_id}/variants/{variant_id}/',
+                            {'sku': '', 'barcode': '', 'wholesale_price': '105.00'})
+        self.assertEqual(updated.status_code, 200, updated.content)
+        self.assertEqual(updated.json()['variant']['sku'], 'V-' + variant_id.hex[:12].upper())
+        self.assertEqual(updated.json()['variant']['barcode'], 'B-' + variant_id.hex[:16].upper())
+        self.assertEqual(updated.json()['variant']['wholesale_price'], '105.00')
+
+    @skipUnless(connection.vendor == 'postgresql', 'Ownership triggers are PostgreSQL specific.')
+    def test_database_rejects_cross_product_variant_reference(self):
+        first = self.call('post', self.base + 'products/', {'name': 'First',
+            'opening_stock': {'quantity': '1', 'unit_cost': '5'}}, command=uuid.uuid4()).json()['product']['id']
+        second = self.call('post', self.base + 'products/', {'name': 'Second'}, command=uuid.uuid4()).json()['product']['id']
+        other_variant = ProductVariant.objects.get(product_id=second)
+        balance = StockBalance.objects.get(product_id=first)
+        with self.assertRaises(DatabaseError), transaction.atomic():
+            with connection.cursor() as cursor:
+                cursor.execute('UPDATE stockkeeper_stockbalance SET variant_id = %s WHERE id = %s',
+                               [other_variant.pk, balance.pk])
+        self.assertEqual(StockBalance.objects.get(pk=balance.pk).product_id, uuid.UUID(first))
+
+    def test_variant_batches_and_expiry_are_scoped(self):
+        red_id, blue_id = str(uuid.uuid4()), str(uuid.uuid4())
+        created = self.call('post', self.base + 'products/', {'name': 'Medicine', 'product_type': 'variant',
+            'attributes': [{'name': 'Strength', 'values': ['10mg', '20mg']}],
+            'variants': [{'id': red_id, 'sku': 'MED-10', 'base_unit': 'Piece', 'tracking_mode': 'expiry',
+                          'selections': {'Strength': '10mg'}},
+                         {'id': blue_id, 'sku': 'MED-20', 'base_unit': 'Piece', 'tracking_mode': 'expiry',
+                          'selections': {'Strength': '20mg'}}]}, command=uuid.uuid4())
+        self.assertEqual(created.status_code, 201, created.content)
+        product_id = created.json()['product']['id']
+        path = self.base + f'products/{product_id}/batches/'
+        self.assertEqual(self.call('post', path, {'variant_id': red_id, 'lot_code': 'LOT-1'}).status_code, 400)
+        batch = self.call('post', path, {'variant_id': red_id, 'lot_code': 'LOT-1', 'expires_on': '2027-01-01'})
+        self.assertEqual(batch.status_code, 201, batch.content)
+        location = StockLocation.objects.get(business=self.business, is_default=True)
+        wrong = self.call('post', self.base + 'stock/receipts/', {'product_id': product_id,
+            'variant_id': blue_id, 'location_id': location.pk, 'batch_id': batch.json()['batch']['id'],
+            'quantity': '1', 'unit_cost': '20', 'reason': 'Purchase'}, command=uuid.uuid4())
+        self.assertEqual(wrong.status_code, 409)
+        correct = self.call('post', self.base + 'stock/receipts/', {'product_id': product_id,
+            'variant_id': red_id, 'location_id': location.pk, 'batch_id': batch.json()['batch']['id'],
+            'quantity': '1', 'unit_cost': '20', 'reason': 'Purchase'}, command=uuid.uuid4())
+        self.assertEqual(correct.status_code, 201, correct.content)
+        self.assertEqual(StockBalance.objects.get(variant_id=red_id).quantity, Decimal('1'))
+        self.assertFalse(StockBalance.objects.filter(variant_id=blue_id).exists())
+
+    def test_catalog_filters_sort_and_summary_are_business_scoped(self):
+        shop = StockLocation.objects.get(business=self.business, is_default=True)
+        rice = Product.objects.create(business=self.business, name='Rice', sku='RICE',
+                                      retail_price=Decimal('80'), minimum_stock=Decimal('5'))
+        tea = Product.objects.create(business=self.business, name='Tea', sku='TEA',
+                                     retail_price=Decimal('20'), minimum_stock=Decimal('2'), tracking_mode='batch')
+        Product.objects.create(business=self.business, name='Oil', sku='OIL', retail_price=None)
+        Product.objects.create(business=self.business, name='Hidden', sku='HIDDEN', is_active=False)
+        Product.objects.create(business=self.other_business, name='Secret', sku='SECRET')
+        StockBalance.objects.create(business=self.business, product=rice, variant=rice.variants.get(), location=shop, quantity=Decimal('10'))
+        StockBalance.objects.create(business=self.business, product=tea, variant=tea.variants.get(), location=shop, quantity=Decimal('1'))
+        base = self.base + 'products/'
+
+        def names(query):
+            response = self.call('get', base + '?' + query)
+            self.assertEqual(response.status_code, 200, response.content)
+            return [item['name'] for item in response.json()['products']]
+
+        self.assertEqual(names('active=true&stock=low_stock'), ['Tea'])
+        self.assertEqual(names('active=true&stock=out_of_stock'), ['Oil'])
+        self.assertEqual(names('active=true&stock=in_stock&tracking=batch'), ['Tea'])
+        self.assertEqual(names('active=false'), ['Hidden'])
+        self.assertEqual(names('active=true&sort=price_asc'), ['Tea', 'Rice', 'Oil'])
+        self.assertEqual(names('active=true&sort=stock_desc'), ['Rice', 'Tea', 'Oil'])
+        self.assertEqual(names('search=SECRET'), [])
+        self.assertEqual(self.call('get', base + '?sort=bad').status_code, 400)
+        summary = self.call('get', base + 'summary/')
+        self.assertEqual(summary.json(), {'active_products': 3, 'low_stock': 1, 'out_of_stock': 1})
+        self.assertEqual(self.call('get', base + 'summary/', token=self.other_token).status_code, 404)
+
+    def test_opening_stock_atomic_multiple_locations_and_receipt_retry(self):
+        location = StockLocation.objects.get(business=self.business, is_default=True)
+        warehouse = StockLocation.objects.create(business=self.business, name='Godown', type='warehouse')
+        command = uuid.uuid4()
+        created = self.call('post', self.base + 'products/', {'name': 'Rice', 'opening_stock': {
+            'quantity': '12.500', 'unit_cost': '25.2500', 'location_id': warehouse.pk}}, command=command)
+        self.assertEqual(created.status_code, 201, created.content)
+        product_id = created.json()['product']['id']
+        self.assertEqual(self.call('get', self.base + f'products/{product_id}/').json()['stock']['physical'], '12.500')
+        self.assertEqual(StockBalance.objects.get(product_id=product_id, location=warehouse).quantity, Decimal('12.500'))
+        self.assertEqual(StockMovement.objects.filter(product_id=product_id).count(), 1)
+        self.assertEqual(self.call('post', self.base + 'products/', {'name': 'Rice'}, command=command).status_code, 200)
+        self.assertEqual(StockMovement.objects.filter(product_id=product_id).count(), 1)
+        receipt = {'product_id': product_id, 'location_id': location.pk, 'quantity': '2.000', 'unit_cost': '27.0000', 'reason': 'Previously unrecorded stock'}
+        receipt_id = uuid.uuid4()
+        first = self.call('post', self.base + 'stock/receipts/', receipt, command=receipt_id)
+        self.assertEqual(first.status_code, 201, first.content)
+        self.assertEqual(self.call('post', self.base + 'stock/receipts/', receipt, command=receipt_id).status_code, 201)
+        self.assertEqual(StockMovement.objects.filter(product_id=product_id).count(), 2)
+        self.assertEqual(self.call('get', self.base + f'locations/{location.pk}/stock/').json()['stock'][0]['quantity'], '2.000')
+        failed = self.call('post', self.base + 'products/', {'name': 'Bad', 'opening_stock': {
+            'quantity': '3', 'unit_cost': '1', 'location_id': 999999}}, command=uuid.uuid4())
+        self.assertEqual(failed.status_code, 400)
+        self.assertFalse(Product.objects.filter(business=self.business, name='Bad').exists())
+
+    def test_package_batch_expiry_waste_and_transfer(self):
+        shop = StockLocation.objects.get(business=self.business, is_default=True)
+        warehouse = StockLocation.objects.create(business=self.business, name='Godown', type='warehouse')
+        product_id = self.call('post', self.base + 'products/', {'name': 'Eggs', 'tracking_mode': 'expiry'}, command=uuid.uuid4()).json()['product']['id']
+        package = self.call('post', self.base + f'products/{product_id}/units/', {'name': 'Tray', 'factor': '30.000'})
+        self.assertEqual(package.status_code, 201, package.content)
+        unit_id = package.json()['unit']['id']
+        expired = self.call('post', self.base + f'products/{product_id}/batches/', {'lot_code': 'OLD', 'expires_on': '2020-01-01'})
+        self.assertEqual(expired.status_code, 201, expired.content)
+        fresh = self.call('post', self.base + f'products/{product_id}/batches/', {'lot_code': 'NEW', 'expires_on': '2099-01-01'})
+        self.assertEqual(fresh.status_code, 201, fresh.content)
+        old_id, new_id = expired.json()['batch']['id'], fresh.json()['batch']['id']
+        self.assertEqual(len(self.call('get', self.base + f'products/{product_id}/batches/').json()['batches']), 2)
+        for batch_id in (old_id, new_id):
+            receipt = self.call('post', self.base + 'stock/receipts/', {
+                'product_id': product_id, 'location_id': shop.pk, 'quantity': '2', 'unit_cost': '5',
+                'unit_id': unit_id, 'batch_id': batch_id, 'reason': 'Opening count'}, command=uuid.uuid4())
+            self.assertEqual(receipt.status_code, 201, receipt.content)
+        detail = self.call('get', self.base + f'products/{product_id}/').json()
+        self.assertEqual(detail['stock']['physical'], '120.000')
+        self.assertEqual(detail['stock']['sellable'], '60.000')
+        self.assertEqual(detail['stock']['expired'], '60.000')
+        recommendation = self.call('get', self.base + f'products/{product_id}/fefo/?location_id={shop.pk}')
+        self.assertEqual(recommendation.json()['recommended_batch_ids'], [new_id])
+        selection_path = self.base + f'products/{product_id}/batch-selection/'
+        self.assertEqual(self.call('post', selection_path, {'location_id': shop.pk, 'batch_id': old_id, 'quantity': '1'}).status_code, 409)
+        self.assertEqual(self.call('post', selection_path, {'location_id': shop.pk, 'batch_id': new_id, 'quantity': '1'}).status_code, 200)
+        transfer_id = uuid.uuid4()
+        transfer = {'product_id': product_id, 'location_id': shop.pk, 'destination_id': warehouse.pk,
+                    'quantity': '1', 'unit_id': unit_id, 'batch_id': new_id}
+        self.assertEqual(self.call('post', self.base + 'stock/transfers/', transfer, command=transfer_id).status_code, 201)
+        self.assertEqual(self.call('post', self.base + 'stock/transfers/', transfer, command=transfer_id).status_code, 201)
+        self.assertEqual(self.call('get', self.base + f'products/{product_id}/').json()['stock']['physical'], '120.000')
+        waste_id = uuid.uuid4()
+        waste = {'product_id': product_id, 'location_id': warehouse.pk, 'quantity': '10', 'batch_id': new_id, 'reason': 'broken'}
+        first = self.call('post', self.base + 'stock/waste/', waste, command=waste_id)
+        self.assertEqual(first.status_code, 201, first.content)
+        self.assertEqual(first.json()['inventory_cost'], '50.0000000')
+        self.assertEqual(self.call('post', self.base + 'stock/waste/', waste, command=waste_id).status_code, 201)
+        self.assertEqual(self.call('get', self.base + f'products/{product_id}/').json()['stock']['physical'], '110.000')
+        self.assertEqual(Decimal(self.call('get', self.base + f'products/{product_id}/').json()['stock']['inventory_value']), Decimal('550'))
+        too_much = self.call('post', self.base + 'stock/waste/', {**waste, 'quantity': '100'}, command=uuid.uuid4())
+        self.assertEqual(too_much.status_code, 409)
+        self.assertEqual(AuditEvent.objects.filter(product_id=product_id, entity_type='batch', action='created').count(), 2)
+        self.assertEqual(AuditEvent.objects.filter(product_id=product_id, action='transfer').count(), 2)
+        self.assertEqual(AuditEvent.objects.filter(product_id=product_id, action='waste').count(), 1)
+
+    def test_tracking_conversion_preserves_stock_and_audit_history(self):
+        created = self.call('post', self.base + 'products/', {'name': 'Milk', 'opening_stock': {
+            'quantity': '5', 'unit_cost': '20'}}, command=uuid.uuid4())
+        self.assertEqual(created.status_code, 201, created.content)
+        product_id = created.json()['product']['id']
+        path = self.base + f'products/{product_id}/convert-tracking/'
+        command = uuid.uuid4()
+        converted = self.call('post', path, {'tracking_mode': 'expiry', 'lot_code': 'M1', 'expires_on': '2099-01-01'}, command=command)
+        self.assertEqual(converted.status_code, 200, converted.content)
+        self.assertEqual(self.call('post', path, {'tracking_mode': 'expiry'}, command=command).status_code, 200)
+        self.assertEqual(self.call('get', self.base + f'products/{product_id}/').json()['stock']['physical'], '5.000')
+        self.assertEqual(StockMovement.objects.filter(product_id=product_id, type='tracking_conversion').count(), 1)
+        self.assertEqual(AuditEvent.objects.filter(product_id=product_id, action='tracking_changed').count(), 1)
+        self.assertEqual(StockBalance.objects.get(product_id=product_id).batch.lot_code, 'M1')
+        self.assertEqual(self.call('patch', self.base + f'products/{product_id}/', {'tracking_mode': 'simple'}).status_code, 400)
+
+    def test_catalog_staff_can_create_but_stock_permission_is_enforced(self):
+        employee = User.objects.create_user(phone='01611111111', password='ExamplePass#83')
+        BusinessMember.objects.create(user=employee, business=self.business, role=BusinessMember.EMPLOYEE,
+                                      can_post_stock=False)
+        token = self.login('01611111111')
+        plain = self.call('post', self.base + 'products/', {'name': 'Plain'}, token=token, command=uuid.uuid4())
+        self.assertEqual(plain.status_code, 201)
+        blocked = self.call('post', self.base + 'products/', {'name': 'With stock', 'opening_stock': {
+            'quantity': '1', 'unit_cost': '10'}}, token=token, command=uuid.uuid4())
+        self.assertEqual(blocked.status_code, 403)
+        self.assertFalse(Product.objects.filter(business=self.business, name='With stock').exists())
+
+    def test_image_upload_authorization_and_replace(self):
+        with tempfile.TemporaryDirectory() as directory, override_settings(MEDIA_ROOT=directory):
+            self.check_image_upload_authorization_and_replace()
+
+    def check_image_upload_authorization_and_replace(self):
+        product_id = self.call('post', self.base + 'products/', {'name': 'Photo'}, command=uuid.uuid4()).json()['product']['id']
+        path = self.base + f'products/{product_id}/image/'
+
+        def png(color):
+            data = io.BytesIO()
+            Image.new('RGB', (12, 12), color).save(data, format='PNG')
+            data.seek(0)
+            data.name = 'photo.png'
+            return data
+
+        denied = self.client.post(path, {'image': png('red')}, HTTP_AUTHORIZATION=f'Bearer {self.other_token}')
+        self.assertEqual(denied.status_code, 404)
+        first = self.client.post(path, {'image': png('red')}, HTTP_AUTHORIZATION=f'Bearer {self.token}')
+        self.assertEqual(first.status_code, 200, first.content)
+        old_key = Product.objects.get(pk=product_id).image_key
+        self.assertTrue(old_key.endswith('.webp'))
+        second = self.client.post(path, {'image': png('blue')}, HTTP_AUTHORIZATION=f'Bearer {self.token}')
+        self.assertEqual(second.status_code, 200, second.content)
+        self.assertNotEqual(Product.objects.get(pk=product_id).image_key, old_key)
+        removed = self.client.delete(path, HTTP_AUTHORIZATION=f'Bearer {self.token}')
+        self.assertEqual(removed.status_code, 200)
+        self.assertEqual(Product.objects.get(pk=product_id).image_key, '')
+        self.assertEqual(list(AuditEvent.objects.filter(product_id=product_id, action__startswith='image_')
+                             .order_by('created_at').values_list('action', flat=True)),
+                         ['image_added', 'image_replaced', 'image_removed'])

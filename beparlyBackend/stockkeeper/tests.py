@@ -9,6 +9,17 @@ from django.test import TestCase
 from accounts.models import Business, BusinessMember, User
 
 from .models import StockLocation
+from .models import StockBalance, StockMovement
+from .services import StockError, receive, post_waste
+from products.models import Product, StockBatch
+from django.test import TransactionTestCase
+from django.db import close_old_connections, transaction
+from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
+from datetime import timedelta
+from django.utils import timezone
+import uuid
+from unittest import skipUnless
 
 
 class LocationApiTests(TestCase):
@@ -52,6 +63,54 @@ class LocationApiTests(TestCase):
         self.assertTrue(response.json()['can_manage_locations'])
         self.assertEqual(self.request('get', self.list_path, self.outsider_token).status_code, 404)
         self.assertEqual(self.request('get', self.list_path).status_code, 401)
+
+    def test_location_overview_uses_variant_stock_and_cost_layers(self):
+        product = Product.objects.create(business=self.business, name='Soap', sku='SOAP-1',
+                                         base_unit='Piece', retail_price=Decimal('5.00'),
+                                         purchase_price=Decimal('2.00'), minimum_stock=Decimal('4'))
+        receive(product, self.default, Decimal('3'), Decimal('2'), self.owner, uuid.uuid4())
+        path = f'{self.list_path}{self.default.id}/overview/'
+        response = self.request('get', path, self.owner_token)
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(Decimal(payload['summary']['inventory_value']), Decimal('6'))
+        self.assertEqual({key: payload['summary'][key] for key in ('sku_count', 'low_stock_count', 'expiring_soon_count')},
+                         {'sku_count': 1, 'low_stock_count': 1, 'expiring_soon_count': 0})
+        row = payload['inventory'][0]
+        self.assertEqual(row['available_quantity'], '3.000')
+        self.assertEqual(Decimal(row['stock_value']), Decimal('15'))
+        self.assertEqual(Decimal(row['purchase_cost']), Decimal('6'))
+        self.assertIsNone(row['returning_quantity'])
+        self.assertIsNone(row['shortage_quantity'])
+        self.assertEqual(self.request('get', path, self.outsider_token).status_code, 404)
+
+    def test_location_movements_fetch_ten_more_without_duplicates(self):
+        product = Product.objects.create(business=self.business, name='Soap', sku='SOAP-2', base_unit='Piece')
+        for _ in range(12):
+            receive(product, self.default, Decimal('1'), Decimal('2'), self.owner, uuid.uuid4())
+        path = f'{self.list_path}{self.default.id}/movements/'
+        first = self.request('get', path + '?page=1', self.owner_token).json()
+        second = self.request('get', path + '?page=2', self.owner_token).json()
+        self.assertEqual((len(first['movements']), first['next_page']), (10, 2))
+        self.assertEqual((len(second['movements']), second['next_page']), (2, None))
+        self.assertEqual(len({item['id'] for item in first['movements'] + second['movements']}), 12)
+        self.assertEqual(self.request('get', path + '?page=0', self.owner_token).status_code, 400)
+
+    def test_location_overview_excludes_expired_stock_from_available_quantity(self):
+        product = Product.objects.create(business=self.business, name='Milk', sku='MILK-1',
+                                         retail_price=Decimal('10.00'), tracking_mode='expiry')
+        variant = product.variants.get(is_default=True)
+        expired = StockBatch.objects.create(product=product, variant=variant, lot_code='OLD',
+                                            expires_on=timezone.localdate() - timedelta(days=1))
+        soon = StockBatch.objects.create(product=product, variant=variant, lot_code='SOON',
+                                         expires_on=timezone.localdate() + timedelta(days=2))
+        receive(product, self.default, Decimal('2'), Decimal('3'), self.owner, uuid.uuid4(), batch=expired)
+        receive(product, self.default, Decimal('3'), Decimal('3'), self.owner, uuid.uuid4(), batch=soon)
+        payload = self.request('get', f'{self.list_path}{self.default.id}/overview/', self.owner_token).json()
+        self.assertEqual(payload['summary']['expiring_soon_count'], 1)
+        self.assertEqual(payload['inventory'][0]['physical_quantity'], '5.000')
+        self.assertEqual(payload['inventory'][0]['available_quantity'], '3.000')
+        self.assertEqual(Decimal(payload['inventory'][0]['stock_value']), Decimal('30'))
 
     def test_backfill_creates_default_for_existing_business(self):
         StockLocation.objects.filter(business=self.business, is_default=True).delete()
@@ -164,3 +223,29 @@ class LocationApiTests(TestCase):
         self.assertEqual(response.status_code, 204)
         self.assertIn('PATCH', response['Access-Control-Allow-Methods'])
         self.assertEqual(response['Access-Control-Allow-Origin'], 'http://localhost:8082')
+
+
+class ConcurrentStockTests(TransactionTestCase):
+    @skipUnless(connection.vendor == 'postgresql', 'SQLite has no row-level select_for_update locking.')
+    def test_two_deductions_cannot_oversell_one_balance(self):
+        user = User.objects.create_user(phone='01722222222', password='ExamplePass#83')
+        business = Business.objects.create(name='Concurrent Shop')
+        location = StockLocation.objects.get(business=business, is_default=True)
+        product = Product.objects.create(business=business, name='Item', sku='I-1')
+        with transaction.atomic():
+            receive(product, location, Decimal('5'), Decimal('12'), user, uuid.uuid4())
+
+        def deduct(_):
+            close_old_connections()
+            try:
+                return post_waste(product, location, Decimal('5'), user, uuid.uuid4(), 'damaged')
+            except StockError:
+                return None
+            finally:
+                close_old_connections()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            outcomes = list(pool.map(deduct, range(2)))
+        self.assertEqual(sum(value is not None for value in outcomes), 1)
+        self.assertEqual(StockBalance.objects.get(product=product, location=location).quantity, Decimal('0'))
+        self.assertEqual(StockMovement.objects.filter(product=product, type='waste').count(), 1)

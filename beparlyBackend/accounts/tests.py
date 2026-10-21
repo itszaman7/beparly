@@ -59,6 +59,23 @@ class AccountApiTests(TestCase):
         self.assertEqual([(item['id'], item['role']) for item in profiles], [(retail, 'owner'), (wholesale, 'owner')])
         self.assertEqual(User.objects.get().first_name, 'Selim')
 
+    def test_opening_cash_is_posted_only_during_business_creation(self):
+        from decimal import Decimal
+        from accounting.models import JournalEntry, MoneyAccount
+        from accounting.services import balance
+
+        token = self.register()
+        created = self.post_json('/api/v1/businesses/', {'name': 'With cash', 'opening_cash': '1500.25'}, token)
+        self.assertEqual(created.status_code, 201, created.content)
+        business_id = created.json()['business']['id']
+        cash = MoneyAccount.objects.get(business_id=business_id, is_default=True)
+        self.assertEqual(balance(cash.ledger_account), Decimal('1500.25'))
+        self.assertEqual(JournalEntry.objects.filter(business_id=business_id, source_type='money').count(), 1)
+
+        invalid = self.post_json('/api/v1/businesses/', {'name': 'Invalid cash', 'opening_cash': '-2'}, token)
+        self.assertEqual(invalid.status_code, 400)
+        self.assertFalse(Business.objects.filter(name='Invalid cash').exists())
+
     def test_employees_are_scoped_to_business(self):
         owner = self.register()
         retail = self.create_business(owner, 'Retail Shop')
@@ -112,6 +129,23 @@ class AccountApiTests(TestCase):
         self.assertEqual(expo.status_code, 204)
         self.assertEqual(expo['Access-Control-Allow-Origin'], 'http://localhost:8082')
         self.assertIn('Content-Type', expo['Access-Control-Allow-Headers'])
+        product_create = self.client.options(
+            '/api/v1/businesses/1/products/',
+            HTTP_ORIGIN='http://localhost:8081',
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD='POST',
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS='authorization,content-type,x-command-id',
+        )
+        self.assertEqual(product_create.status_code, 204)
+        self.assertIn('POST', product_create['Access-Control-Allow-Methods'])
+        self.assertIn('X-Command-ID', product_create['Access-Control-Allow-Headers'])
+        product_image_remove = self.client.options(
+            '/api/v1/businesses/1/products/00000000-0000-0000-0000-000000000000/image/',
+            HTTP_ORIGIN='http://localhost:8081',
+            HTTP_ACCESS_CONTROL_REQUEST_METHOD='DELETE',
+            HTTP_ACCESS_CONTROL_REQUEST_HEADERS='authorization',
+        )
+        self.assertEqual(product_image_remove.status_code, 204)
+        self.assertIn('DELETE', product_image_remove['Access-Control-Allow-Methods'])
         denied = self.client.options('/api/v1/auth/login/', HTTP_ORIGIN='https://unknown.example')
         self.assertNotIn('Access-Control-Allow-Origin', denied)
         with override_settings(DEBUG=False, API_ALLOWED_ORIGINS=set()):

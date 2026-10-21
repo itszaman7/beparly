@@ -11,7 +11,7 @@ import { palette, radius, spacing } from '@/constants/design-system';
 
 export default function AppTabs() {
   const pathname = usePathname();
-  const selected = pathname === '/explore' ? 1 : 0;
+  const selected = pathname === '/stock-tab' ? 1 : pathname === '/more' || pathname === '/explore' ? 2 : 0;
 
   return (
     <Tabs>
@@ -19,7 +19,8 @@ export default function AppTabs() {
       <TabList asChild>
         <AppTabList selected={selected}>
           <TabTrigger name="index" href="/" asChild><TabButton label="Home" icon="home" /></TabTrigger>
-          <TabTrigger name="explore" href="/explore" asChild><TabButton label="Account" icon="account" /></TabTrigger>
+          <TabTrigger name="stock-tab" href="/stock-tab" asChild><TabButton label="Stock" icon="stock" /></TabTrigger>
+          <TabTrigger name="more" href="/more" asChild><TabButton label="More" icon="account" /></TabTrigger>
         </AppTabList>
       </TabList>
     </Tabs>
@@ -37,20 +38,20 @@ function AppTabList({ selected, children, ...props }: TabListProps & { selected:
   }, [position, reducedMotion, selected]);
 
   const indicator = useAnimatedStyle(() => ({
-    transform: [{ translateX: position.value * (width / 2) }],
+    transform: [{ translateX: position.value * (width / 3) }],
   }));
 
   return (
     <View {...props} style={[styles.bar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
       <View style={styles.inner} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
-        {width > 0 && <Animated.View pointerEvents="none" style={[styles.indicator, { left: width / 4 - 50 }, indicator]} />}
+        {width > 0 && <Animated.View pointerEvents="none" style={[styles.indicator, { left: width / 6 - 43 }, indicator]} />}
         {children}
       </View>
     </View>
   );
 }
 
-function TabButton({ label, icon, isFocused, ref: _ref, ...props }: TabTriggerSlotProps & { label: string; icon: 'home' | 'account' }) {
+function TabButton({ label, icon, isFocused, ref: _ref, ...props }: TabTriggerSlotProps & { label: string; icon: 'home' | 'stock' | 'account' }) {
   const reducedMotion = useReducedMotion();
   const scale = useSharedValue(1);
   const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
@@ -82,7 +83,7 @@ const styles = StyleSheet.create({
   slot: { flex: 1 },
   bar: { width: '100%', backgroundColor: palette.surface, borderTopWidth: 1, borderTopColor: palette.border, paddingTop: spacing.sm, paddingHorizontal: spacing.lg, alignItems: 'center' },
   inner: { width: '100%', maxWidth: 480, minHeight: 52, flexDirection: 'row', alignItems: 'center' },
-  indicator: { position: 'absolute', top: 2, width: 100, height: 46, borderRadius: radius.sm, backgroundColor: palette.primarySoft },
+  indicator: { position: 'absolute', top: 2, width: 86, height: 46, borderRadius: radius.sm, backgroundColor: palette.primarySoft },
   trigger: { flex: 1, minHeight: 52, alignItems: 'center', justifyContent: 'center' },
   triggerContent: { alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: spacing.sm },
   label: { color: palette.muted, fontSize: 13, fontWeight: '600' },

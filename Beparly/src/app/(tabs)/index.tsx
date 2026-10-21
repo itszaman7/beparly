@@ -19,7 +19,16 @@ const actions = [
   { label: 'Parties', icon: 'parties', color: palette.rose, background: palette.roseSoft },
   { label: 'Dues', icon: 'dues', color: palette.amber, background: palette.amberSoft },
   { label: 'Reports', icon: 'reports', color: palette.blue, background: palette.blueSoft },
+  { label: 'Accounting', icon: 'money', color: palette.primary, background: palette.primarySoft },
+  { label: 'Expense', icon: 'expense', color: palette.orange, background: palette.orangeSoft },
 ] as const satisfies ReadonlyArray<{ label: string; icon: keyof typeof symbols; color: string; background: string }>;
+
+const actionRoutes: Partial<Record<(typeof actions)[number]['label'], string>> = {
+  Products: '/products',
+  Stock: '/stock',
+  Accounting: '/money',
+  Expense: '/money/new?flow=expense',
+};
 
 const overview = [
   { label: 'Customer বাকি', value: '৳8,500', detail: 'To collect', icon: 'receive', color: palette.primary, background: palette.primarySoft },
@@ -99,12 +108,16 @@ export default function HomeScreen() {
             <View>
               <Entrance delay={130}><SectionTitle title="Quick actions" /></Entrance>
               <View style={styles.actionGrid}>
-                {actions.map((action, index) => (
+                {actions.filter((action) => account.role === 'owner' || (action.label !== 'Accounting' && action.label !== 'Expense')).map((action, index) => (
                   <Entrance key={action.label} delay={160 + index * 45} style={styles.actionSlot}>
                     <PressScale
-                      onPress={() => action.label === 'Stock' ? router.push('/stock' as Href) : showPreview(action.label)}
+                      onPress={() => {
+                        const route = actionRoutes[action.label];
+                        if (route) router.push(route as Href);
+                        else showPreview(action.label);
+                      }}
                       accessibilityRole="button"
-                      accessibilityLabel={action.label === 'Stock' ? 'Open shops and warehouses' : `${action.label}, coming soon`}
+                      accessibilityLabel={actionRoutes[action.label] ? `Open ${action.label === 'Stock' ? 'shops and warehouses' : action.label}` : `${action.label}, coming soon`}
                       style={styles.actionPressable}>
                       <View style={styles.actionCell}>
                         <View style={[styles.actionIcon, { backgroundColor: action.background }]}><AppSymbol name={action.icon} size={25} color={action.color} /></View>
@@ -229,7 +242,7 @@ const styles = StyleSheet.create({
   sectionRule: { flex: 1, height: 1, backgroundColor: palette.border },
   sectionSample: { color: palette.muted, fontSize: 10, fontWeight: '700', letterSpacing: 0.8 },
   actionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  actionSlot: { width: '22%', flexGrow: 1 },
+  actionSlot: { width: '22%' },
   actionPressable: { width: '100%' },
   actionCell: { backgroundColor: palette.surface, borderRadius: radius.md, borderWidth: 1, borderColor: palette.border, minHeight: 99, alignItems: 'center', justifyContent: 'center', gap: spacing.sm, paddingHorizontal: spacing.xs, ...elevation.card },
   actionIcon: { width: 46, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },

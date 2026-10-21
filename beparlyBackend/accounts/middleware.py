@@ -31,7 +31,7 @@ class ApiCorsMiddleware:
             response = self.get_response(request)
         if allowed:
             response['Access-Control-Allow-Origin'] = origin
-            response['Access-Control-Allow-Methods'] = 'GET, POST, PATCH, OPTIONS'
-            response['Access-Control-Allow-Headers'] = 'Authorization, Content-Type'
+            response['Access-Control-Allow-Methods'] = 'GET, POST, PATCH, DELETE, OPTIONS'
+            response['Access-Control-Allow-Headers'] = 'Authorization, Content-Type, X-Command-ID'
             response['Vary'] = 'Origin'
         return response

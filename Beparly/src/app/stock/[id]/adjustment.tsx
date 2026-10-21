@@ -1,3 +1,3 @@
-import { PendingStockScreen } from '@/features/stock/stock-ui';
+import { ManualStockScreen } from '@/features/stock/stock-flows';
 
-export default function Adjustment() { return <PendingStockScreen kind="adjustment" />; }
+export default ManualStockScreen;

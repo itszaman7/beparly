@@ -51,6 +51,8 @@ class User(AbstractUser):
 
 class Business(models.Model):
     name = models.CharField(max_length=160)
+    timezone = models.CharField(max_length=64, default='Asia/Dhaka')
+    expiry_warning_days = models.PositiveSmallIntegerField(default=30)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

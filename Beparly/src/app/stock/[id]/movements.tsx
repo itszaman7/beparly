@@ -1,3 +1,3 @@
-import { PendingStockScreen } from '@/features/stock/stock-ui';
+import { LocationStockScreen } from '@/features/stock/stock-flows';
 
-export default function Movements() { return <PendingStockScreen kind="movements" />; }
+export default function Movements() { return <LocationStockScreen movements />; }

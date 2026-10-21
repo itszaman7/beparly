@@ -2,6 +2,7 @@ import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { useFonts } from 'expo-font';
 import { ActivityIndicator, Pressable, View } from 'react-native';
 import { TamaguiProvider } from 'tamagui';
+import { Toast } from 'tamagui/toast';
 
 import { AppText } from '@/components/app-text';
 import { AuthProvider, useAuth } from '@/features/auth/auth-context';
@@ -36,18 +37,25 @@ function Navigation() {
   );
   return (
     <TamaguiProvider config={tamaguiConfig} defaultTheme={colorScheme ?? 'light'}>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Protected guard={!!session} redirectTo="/sign-in">
-            <Stack.Screen name="(tabs)" />
-            <Stack.Screen name="stock" />
-          </Stack.Protected>
-          <Stack.Protected guard={!session} redirectTo="/">
-            <Stack.Screen name="sign-in" />
-            <Stack.Screen name="register" />
-          </Stack.Protected>
-        </Stack>
-      </ThemeProvider>
+      <Toast position="top-center" duration={4000}>
+        <Toast.Viewport offset={64}><Toast.List /></Toast.Viewport>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Protected guard={!!session} redirectTo="/sign-in">
+              <Stack.Screen name="(tabs)" />
+              <Stack.Screen name="stock" />
+              <Stack.Screen name="products" />
+              <Stack.Screen name="money" />
+              <Stack.Screen name="contacts" />
+              <Stack.Screen name="assets" />
+            </Stack.Protected>
+            <Stack.Protected guard={!session} redirectTo="/">
+              <Stack.Screen name="sign-in" />
+              <Stack.Screen name="register" />
+            </Stack.Protected>
+          </Stack>
+        </ThemeProvider>
+      </Toast>
     </TamaguiProvider>
   );
 }

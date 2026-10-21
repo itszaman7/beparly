@@ -1,14 +1,15 @@
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
-import { useCallback, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useCallback, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol, type symbols } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
-import { Entrance } from '@/components/motion';
-import { appFontFamily, elevation, palette, radius, spacing } from '@/constants/design-system';
+import { Entrance, PressScale } from '@/components/motion';
+import { appFontFamily, elevation, palette, radius, spacing, typography } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
-import { api, LocationInput, StockLocation } from '@/services/api';
+import { api, type LocationInput, type LocationMovement, type LocationOverview, type StockLocation } from '@/services/api';
+import { formatBdt } from '@/features/products/product-rules';
 
 type LocationState = { location: StockLocation; canManage: boolean };
 
@@ -37,18 +38,21 @@ function useLocation() {
   return { session, businessId, token, locationId, state, loading, error, setError, refresh };
 }
 
-function Page({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+function Page({ title, subtitle, children, floatingAction, root = false }: { title: string; subtitle?: string; children: React.ReactNode; floatingAction?: React.ReactNode; root?: boolean }) {
   return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+    <View style={styles.pageHeader}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.canGoBack() ? router.back() : router.replace(root ? '/' : '/stock' as Href)} style={styles.back}>
+        <AppSymbol name="back" size={24} color={palette.primary} />
+      </Pressable>
+      <Text style={styles.headerTitle}>{title}</Text>
+    </View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
       <View style={styles.content}>
-        <Pressable accessibilityRole="button" onPress={() => router.canGoBack() ? router.back() : router.replace(title === 'My Locations' ? '/' : '/stock' as Href)} style={styles.back}>
-          <AppSymbol name="chevron" size={18} color={palette.primary} />
-          <Text style={styles.backText}>Back</Text>
-        </Pressable>
-        <Entrance><Text style={styles.eyebrow}>STOCK</Text><Text style={styles.title}>{title}</Text>{subtitle && <Text style={styles.subtitle}>{subtitle}</Text>}</Entrance>
+        {subtitle && <Entrance><Text style={styles.subtitle}>{subtitle}</Text></Entrance>}
         <View style={styles.body}>{children}</View>
       </View>
     </ScrollView>
+    {floatingAction && <View style={styles.floatingWrap}>{floatingAction}</View>}
   </SafeAreaView>;
 }
 
@@ -78,27 +82,37 @@ function DetailAction({ label, icon, onPress, disabled = false, tone = 'outline'
 }) {
   const iconColor = disabled ? palette.muted : tone === 'danger' ? palette.rose : color;
   const iconBackground = tone === 'danger' ? palette.roseSoft : background;
-  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
-    style={({ pressed }) => [styles.detailAction, tone === 'danger' && styles.detailActionDanger, disabled && styles.detailActionDisabled, pressed && styles.pressed]}>
-    <View style={[styles.detailActionIcon, { backgroundColor: iconBackground }]}><AppSymbol name={icon} size={19} color={iconColor} /></View>
-    <Text style={[styles.detailActionText, tone === 'danger' && styles.detailActionDangerText]} numberOfLines={2}>{label}</Text>
-  </Pressable>;
+  return <PressScale accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress}
+    style={[styles.detailAction, disabled && styles.detailActionDisabled]}>
+    <View style={styles.detailActionCell}>
+      <View style={[styles.detailActionIcon, { backgroundColor: iconBackground }]}><AppSymbol name={icon} size={24} color={iconColor} /></View>
+      <Text style={styles.detailActionText} numberOfLines={2}>{label}</Text>
+    </View>
+  </PressScale>;
 }
 
 function LocationCard({ location }: { location: StockLocation }) {
-  return <Pressable accessibilityRole="button" accessibilityLabel={`Open ${location.name}`} onPress={() => router.push(`/stock/${location.id}` as Href)}
-    style={({ pressed }) => [styles.card, styles.locationCard, pressed && styles.pressed]}>
+  return <PressScale accessibilityRole="button" accessibilityLabel={`Open ${location.name}`} onPress={() => router.push(`/stock/${location.id}` as Href)}
+    style={styles.locationPress}><View style={[styles.card, styles.locationCard]}>
     <View style={[styles.icon, location.type === 'warehouse' && { backgroundColor: palette.purpleSoft }]}><AppSymbol name={location.type === 'warehouse' ? 'stock' : 'home'} color={location.type === 'warehouse' ? palette.purple : palette.primary} size={24} /></View>
-    <View style={{ flex: 1 }}>
+    <View style={styles.locationCopy}>
       <Text style={styles.cardTitle}>{location.name}</Text>
       <Text style={styles.muted}>{location.type === 'warehouse' ? 'Warehouse' : 'Shop'}{location.address ? ` · ${location.address}` : ''}</Text>
-      {(location.is_default || !location.is_active) && <Text style={styles.badge}>{location.is_default ? 'Default' : 'Inactive'}</Text>}
+      {(location.is_default || !location.is_active) && <View style={[styles.badge, !location.is_active && styles.inactiveBadge]}><Text style={[styles.badgeText, !location.is_active && styles.inactiveBadgeText]}>{location.is_default ? 'Default' : 'Inactive'}</Text></View>}
     </View>
     <AppSymbol name="chevron" size={19} color={palette.muted} />
-  </Pressable>;
+  </View></PressScale>;
+}
+
+function LocationKpi({ label, value, icon, color, background, compact }: { label: string; value: number; icon: keyof typeof symbols; color: string; background: string; compact: boolean }) {
+  return <View style={[styles.kpiCard, compact ? styles.kpiCardCompact : styles.kpiCardWide]}>
+    <View style={[styles.kpiIcon, { backgroundColor: background }]}><AppSymbol name={icon} size={21} color={color} /></View>
+    <View style={styles.kpiBottom}><Text style={styles.kpiLabel} numberOfLines={1} adjustsFontSizeToFit>{label}</Text><Text style={styles.kpiValue}>{value}</Text></View>
+  </View>;
 }
 
 export function LocationsScreen() {
+  const { width } = useWindowDimensions();
   const { session } = useAuth();
   const businessId = session?.account?.business.id;
   const token = session?.token;
@@ -116,23 +130,72 @@ export function LocationsScreen() {
     finally { setLoading(false); }
   }, [token, businessId]);
   useFocusEffect(useCallback(() => { void refresh(); }, [refresh]));
-  return <Page title="My Locations" subtitle={session?.account?.business.name}>
-    {canManage && <Action label="+ Add location" onPress={() => router.push('/stock/new')} />}
-    {loading ? <ActivityIndicator color={palette.primary} /> : error ? <Message title="Locations unavailable" detail={error} retry={() => void refresh()} /> :
-      locations.length ? locations.map((location) => <LocationCard key={location.id} location={location} />) :
-        <Message title="No locations yet" detail="Add a shop or warehouse to get started." />}
+  const shops = locations.filter((location) => location.type === 'shop').length;
+  const warehouses = locations.filter((location) => location.type === 'warehouse').length;
+  const inactive = locations.filter((location) => !location.is_active).length;
+  const compactKpis = width < 480;
+  return <Page title="My storage units" root floatingAction={canManage && !loading && !error ?
+    <PressScale accessibilityRole="button" accessibilityLabel="Add storage unit" onPress={() => router.push('/stock/new')} style={styles.floatingAdd}>
+      <View style={styles.floatingFace}><AppSymbol name="plus" size={27} color={palette.surface} /></View>
+    </PressScale> : null}>
+    {loading ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.muted}>Loading storage units…</Text></View> :
+      error ? <Message title="Storage units unavailable" detail={error} retry={() => void refresh()} /> : <>
+        <View style={styles.kpiGrid}>
+          <LocationKpi label="Total" value={locations.length} icon="stock" color={palette.primaryDeep} background={palette.primarySoft} compact={compactKpis} />
+          <LocationKpi label="Shops" value={shops} icon="home" color={palette.blue} background={palette.blueSoft} compact={compactKpis} />
+          <LocationKpi label="Warehouses" value={warehouses} icon="products" color={palette.purple} background={palette.purpleSoft} compact={compactKpis} />
+          <LocationKpi label="Inactive" value={inactive} icon="deactivate" color={palette.rose} background={palette.roseSoft} compact={compactKpis} />
+        </View>
+        <View style={styles.sectionHeading}><Text style={styles.listTitle}>Shops & warehouses</Text><Text style={styles.listCount}>{locations.length}</Text></View>
+        {locations.length ? locations.map((location) => <LocationCard key={location.id} location={location} />) :
+          <Message title="No storage units yet" detail="Add a shop or warehouse to start tracking stock by location." />}
+      </>}
   </Page>;
 }
 
-function Info({ label, value }: { label: string; value: string }) {
-  return <View style={styles.infoRow}><Text style={styles.infoLabel}>{label}</Text><Text style={styles.infoValue}>{value}</Text></View>;
+const trimQuantity = (value: string) => value.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+
+function InventoryCell({ value, width, strong = false }: { value: string; width: number; strong?: boolean }) {
+  return <View style={[styles.inventoryCell, { width }]}><Text style={strong ? styles.inventoryStrong : styles.inventoryText}>{value}</Text></View>;
 }
 
 export function LocationDetailsScreen() {
   const { state, loading, error, refresh, token, businessId, locationId, setError } = useLocation();
   const [busy, setBusy] = useState(false);
   const [confirmDeactivate, setConfirmDeactivate] = useState(false);
+  const [overview, setOverview] = useState<LocationOverview | null>(null);
+  const [movements, setMovements] = useState<LocationMovement[]>([]);
+  const [nextPage, setNextPage] = useState<number | null>(null);
+  const [dataError, setDataError] = useState('');
+  const [dataLoading, setDataLoading] = useState(true);
+  const requestId = useRef(0);
+  const [moreBusy, setMoreBusy] = useState(false);
+  const [inventoryOpen, setInventoryOpen] = useState(true);
+  const [inventoryHelpOpen, setInventoryHelpOpen] = useState(false);
   const location = state?.location;
+  const loadOverview = useCallback(async () => {
+    if (!token || !businessId || !Number.isSafeInteger(locationId) || locationId < 1) return;
+    const currentRequest = ++requestId.current;
+    setDataLoading(true);
+    try {
+      const [overviewResult, movementResult] = await Promise.all([
+        api.locationOverview(token, businessId, locationId), api.locationRecentMovements(token, businessId, locationId, 1),
+      ]);
+      if (currentRequest !== requestId.current) return;
+      setOverview(overviewResult); setMovements(movementResult.movements); setNextPage(movementResult.next_page); setDataError('');
+    } catch (cause) { if (currentRequest === requestId.current) setDataError(cause instanceof Error ? cause.message : 'Could not load inventory.'); }
+    finally { if (currentRequest === requestId.current) setDataLoading(false); }
+  }, [token, businessId, locationId]);
+  useFocusEffect(useCallback(() => { void loadOverview(); return () => { requestId.current += 1; }; }, [loadOverview]));
+  async function viewMore() {
+    if (!token || !businessId || !nextPage || moreBusy) return;
+    setMoreBusy(true);
+    try { const result = await api.locationRecentMovements(token, businessId, locationId, nextPage);
+      setMovements((current) => [...current, ...result.movements.filter((item) => !current.some((existing) => existing.id === item.id))]);
+      setNextPage(result.next_page); setDataError(''); }
+    catch (cause) { setDataError(cause instanceof Error ? cause.message : 'Could not load more logs.'); }
+    finally { setMoreBusy(false); }
+  }
   async function change(action: 'default' | 'active') {
     if (!token || !businessId || !location) return;
     setBusy(true); setError('');
@@ -143,20 +206,47 @@ export function LocationDetailsScreen() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not update location.'); }
     finally { setBusy(false); }
   }
-  return <Page title={location?.name ?? 'Location Details'} subtitle="Shop & warehouse management">
+  return <Page title={location?.name ?? 'Storage unit'}>
     {loading ? <ActivityIndicator color={palette.primary} /> : error && !location ? <Message title="Location unavailable" detail={error} retry={() => void refresh()} /> : location && <>
-      <View style={styles.card}>
-        <Info label="Type" value={location.type === 'warehouse' ? 'Warehouse' : 'Shop'} />
-        <Info label="Address" value={location.address || 'No address added'} />
-        <Info label="Status" value={location.is_active ? 'Active' : 'Inactive'} />
-        <Info label="Default" value={location.is_default ? 'Yes' : 'No'} />
+      <View style={styles.locationIdentity}>
+        <View style={[styles.icon, location.type === 'warehouse' && { backgroundColor: palette.purpleSoft }]}><AppSymbol name={location.type === 'warehouse' ? 'stock' : 'home'} size={24} color={location.type === 'warehouse' ? palette.purple : palette.primary} /></View>
+        <Text style={styles.identityType}>{location.type === 'warehouse' ? 'Warehouse' : 'Shop'}</Text>
+        <View style={styles.identityStatus}><View style={[styles.statusDot, !location.is_active && styles.inactiveDot]} /><Text style={styles.identityStatusText}>{location.is_active ? 'Active' : 'Inactive'}</Text></View>
+        {location.is_default && <View style={styles.defaultMark}><AppSymbol name="default" size={17} color={palette.amber} /><Text style={styles.defaultText}>Default</Text></View>}
       </View>
-      <Text style={styles.section}>View stock</Text>
-      <View style={styles.detailActionGrid}>
-        <DetailAction label="Location stock" icon="products" color={palette.purple} background={palette.purpleSoft} onPress={() => router.push({ pathname: '/stock/[id]/location-stock', params: { id: String(locationId) } })} />
-        <DetailAction label="Movements" icon="movements" color={palette.blue} background={palette.blueSoft} onPress={() => router.push({ pathname: '/stock/[id]/movements', params: { id: String(locationId) } })} />
-      </View>
-      <Text style={styles.section}>Stock actions</Text>
+      {dataLoading && !overview ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.muted}>Loading inventory…</Text></View> :
+        overview && <><View style={styles.locationKpiGrid}>
+          <View style={styles.locationKpi}><View style={[styles.kpiIcon, { backgroundColor: palette.primarySoft }]}><AppSymbol name="price" size={21} color={palette.primaryDeep} /></View><Text style={styles.locationKpiValue}>{formatBdt(overview.summary.inventory_value)}</Text><Text style={styles.locationKpiLabel}>Inventory cost value</Text></View>
+          <View style={styles.locationKpi}><View style={[styles.kpiIcon, { backgroundColor: palette.blueSoft }]}><AppSymbol name="products" size={21} color={palette.blue} /></View><Text style={styles.locationKpiValue}>{overview.summary.sku_count}</Text><Text style={styles.locationKpiLabel}>SKUs</Text></View>
+          <View style={styles.locationKpi}><View style={[styles.kpiIcon, { backgroundColor: palette.amberSoft }]}><AppSymbol name="warning" size={21} color={palette.amber} /></View><Text style={styles.locationKpiValue}>{overview.summary.low_stock_count}</Text><Text style={styles.locationKpiLabel}>Low stock variants</Text></View>
+          <View style={styles.locationKpi}><View style={[styles.kpiIcon, { backgroundColor: palette.roseSoft }]}><AppSymbol name="batch" size={21} color={palette.rose} /></View><Text style={styles.locationKpiValue}>{overview.summary.expiring_soon_count}</Text><Text style={styles.locationKpiLabel}>Nearing expiry</Text></View>
+        </View>
+        <View style={styles.inventoryPanel}>
+          <View style={styles.inventoryHeading}>
+            <Pressable accessibilityRole="button" accessibilityLabel={`${location.type === 'warehouse' ? 'Warehouse' : 'Shop'} inventory`} accessibilityState={{ expanded: inventoryOpen }} onPress={() => setInventoryOpen(!inventoryOpen)} style={styles.inventoryToggle}>
+              <AppSymbol name="products" size={20} color={palette.primaryDeep} /><Text style={styles.inventoryTitle}>{location.type === 'warehouse' ? 'Warehouse' : 'Shop'} inventory</Text><Text style={styles.listCount}>{overview.inventory.length}</Text>
+              <AppSymbol name={inventoryOpen ? 'up' : 'down'} size={22} color={palette.secondary} />
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="About inventory columns" accessibilityState={{ expanded: inventoryHelpOpen }} onPress={() => setInventoryHelpOpen(!inventoryHelpOpen)} style={styles.inventoryHelpButton}><AppSymbol name="info" size={21} color={palette.secondary} /></Pressable>
+          </View>
+          {inventoryHelpOpen && <View style={styles.inventoryHelp}><Text style={styles.inventoryHelpText}>Swipe sideways for all columns. Stock value uses the current selling price; purchase cost uses remaining cost layers. “—” means unavailable.</Text></View>}
+          {inventoryOpen && (overview.inventory.length ? <>
+            <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator contentContainerStyle={styles.inventoryTable}>
+              <View><View style={styles.inventoryHeaderRow}>
+                <InventoryCell value="SKU" width={110} strong /><InventoryCell value="Product name" width={250} strong />
+                <InventoryCell value="Available qty" width={145} strong /><InventoryCell value="Returning stock" width={140} strong />
+                <InventoryCell value="Stock value" width={150} strong /><InventoryCell value="Purchase cost" width={150} strong />
+                <InventoryCell value="Shortage qty" width={130} strong />
+              </View>{overview.inventory.map((item) => <View key={item.variant_id} style={styles.inventoryRow}>
+                <InventoryCell value={item.sku} width={110} strong /><InventoryCell value={item.name} width={250} />
+                <InventoryCell value={`${trimQuantity(item.available_quantity)} ${item.unit}`} width={145} />
+                <InventoryCell value={item.returning_quantity ?? '—'} width={140} />
+                <InventoryCell value={item.stock_value === null ? '—' : formatBdt(item.stock_value)} width={150} />
+                <InventoryCell value={formatBdt(item.purchase_cost)} width={150} />
+                <InventoryCell value={item.shortage_quantity ?? '—'} width={130} />
+              </View>)}</View>
+            </ScrollView></> : <Text style={styles.emptyInventory}>No products stocked here yet.</Text>)}
+        </View></>}
       <View style={styles.detailActionGrid}>
         {(['transfer', 'adjustment', 'waste'] as const).map((action) =>
           <DetailAction key={action} icon={action} label={action === 'transfer' ? 'Transfer stock' : action === 'adjustment' ? 'Adjust stock' : 'Record waste'}
@@ -165,7 +255,6 @@ export function LocationDetailsScreen() {
             onPress={() => router.push({ pathname: `/stock/[id]/${action}`, params: { id: String(locationId) } })} />)}
       </View>
       {state.canManage && <>
-        <Text style={styles.section}>Manage location</Text>
         <View style={styles.detailActionGrid}>
           <DetailAction label="Edit location" icon="edit" color={palette.blue} background={palette.blueSoft} onPress={() => router.push({ pathname: '/stock/[id]/edit', params: { id: String(locationId) } })} />
           {!location.is_default && location.is_active && <DetailAction label={busy ? 'Updating…' : 'Set as Default'} icon="default" disabled={busy} onPress={() => void change('default')} />}
@@ -179,7 +268,18 @@ export function LocationDetailsScreen() {
           </View>
         </View>}
       </>}
-      {!!error && <Message title="Could not update location" detail={error} />}
+      {!!error && <Message title="Could not update storage unit" detail={error} />}
+      <View style={styles.logsPanel}><Text style={styles.logsTitle}>Recent stock logs</Text>
+        {movements.length ? movements.map((movement) => <View key={movement.id} style={styles.logRow}>
+          <View style={styles.logIcon}><AppSymbol name="movements" size={19} color={palette.blue} /></View>
+          <View style={styles.logCopy}><Text style={styles.logType}>{movement.type.replace(/_/g, ' ')}</Text>
+            <Text style={styles.logName}>{movement.name}{movement.variant_label ? ` · ${movement.variant_label}` : ''}</Text>
+            <Text style={styles.logDate}>{movement.sku} · {new Date(movement.created_at).toLocaleString()}</Text></View>
+          <Text style={styles.logQuantity}>{Number(movement.quantity_change) > 0 ? '+' : ''}{trimQuantity(movement.quantity_change)} {movement.unit}</Text>
+        </View>) : !dataLoading && !dataError && <Text style={styles.emptyInventory}>No stock logs yet.</Text>}
+        {nextPage && <Pressable accessibilityRole="button" disabled={moreBusy} onPress={() => void viewMore()} style={styles.moreLogs}><Text style={styles.moreLogsText}>{moreBusy ? 'Loading…' : 'View 10 more logs'}</Text><AppSymbol name="down" size={18} color={palette.primaryDeep} /></Pressable>}
+      </View>
+      {!!dataError && <Message title="Inventory unavailable" detail={dataError} retry={() => void loadOverview()} />}
     </>}
   </Page>;
 }
@@ -256,33 +356,88 @@ export function PendingStockScreen({ kind }: { kind: keyof typeof pendingCopy })
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background },
-  scroll: { flexGrow: 1, alignItems: 'center', paddingHorizontal: spacing.xl, paddingBottom: 36 },
+  pageHeader: { minHeight: 76, width: '100%', maxWidth: 640, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 12, padding: spacing.lg, backgroundColor: palette.surface },
+  headerTitle: { color: palette.ink, fontSize: 22, fontWeight: '700' },
+  scroll: { flexGrow: 1, alignItems: 'center', paddingHorizontal: spacing.lg, paddingBottom: 112 },
   content: { width: '100%', maxWidth: 560 },
-  back: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 48, marginTop: 8, marginBottom: 20 },
-  backText: { color: palette.primary, fontSize: 15, fontWeight: '700' },
-  eyebrow: { color: palette.primary, fontSize: 11, fontWeight: '700', letterSpacing: 1.7, marginBottom: 7 },
-  title: { color: palette.ink, fontSize: 28, fontWeight: '700' },
+  back: { width: 44, height: 44, justifyContent: 'center' },
   subtitle: { color: palette.secondary, fontSize: 14, marginTop: 5 },
-  body: { gap: 11, marginTop: 26 },
+  body: { gap: 12, marginTop: 20 },
+  loading: { alignItems: 'center', gap: 12, paddingVertical: 32 },
+  kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  kpiCard: { aspectRatio: 1, padding: 12, justifyContent: 'space-between', borderWidth: 1, borderColor: palette.border, borderRadius: radius.md, backgroundColor: palette.surface, ...elevation.card },
+  kpiCardCompact: { width: '48%' },
+  kpiCardWide: { width: '23%' },
+  kpiIcon: { width: 40, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  kpiBottom: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 4 },
+  kpiValue: { color: palette.ink, fontSize: 23, fontWeight: '700' },
+  kpiLabel: { flex: 1, color: palette.secondary, fontSize: 13, fontWeight: '600' },
+  sectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.md, marginBottom: 2 },
+  listTitle: { color: palette.ink, fontSize: typography.section, fontWeight: '700' },
+  listCount: { color: palette.secondary, fontSize: typography.caption, fontWeight: '700', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, backgroundColor: palette.border },
+  floatingWrap: { position: 'absolute', bottom: spacing.xl, alignSelf: 'center', width: '100%', maxWidth: 560, paddingHorizontal: spacing.lg, alignItems: 'flex-end' },
+  floatingAdd: { width: 56, height: 56 },
+  floatingFace: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.primary, ...elevation.hero },
   card: { backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border, borderRadius: radius.lg, padding: spacing.lg, gap: 8, ...elevation.card },
-  locationCard: { flexDirection: 'row', alignItems: 'center', minHeight: 88, gap: 14 },
-  icon: { width: 50, height: 50, borderRadius: 15, backgroundColor: palette.primarySoft, alignItems: 'center', justifyContent: 'center' },
-  cardTitle: { color: palette.ink, fontSize: 16, fontWeight: '700' },
+  locationPress: { width: '100%' },
+  locationCard: { flexDirection: 'row', alignItems: 'center', minHeight: 94, gap: 14 },
+  locationCopy: { flex: 1, alignItems: 'flex-start', gap: 4 },
+  icon: { width: 46, height: 46, borderRadius: 14, backgroundColor: palette.primarySoft, alignItems: 'center', justifyContent: 'center' },
+  cardTitle: { color: palette.ink, fontSize: 17, fontWeight: '700' },
   muted: { color: palette.secondary, fontSize: 13, lineHeight: 20 },
-  badge: { color: palette.primary, fontSize: 11, fontWeight: '700', marginTop: 3 },
+  badge: { borderRadius: 10, backgroundColor: palette.primarySoft, paddingHorizontal: 8, paddingVertical: 3 },
+  badgeText: { color: palette.primaryDeep, fontSize: 11, fontWeight: '700' },
+  inactiveBadge: { backgroundColor: palette.border },
+  inactiveBadgeText: { color: palette.secondary },
   action: { minHeight: 52, backgroundColor: palette.primary, borderRadius: radius.sm, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 15 },
   actionSecondary: { backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border },
   actionDisabled: { backgroundColor: '#DDE5E1' },
   actionText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
   actionTextSecondary: { color: palette.primary },
   disabledText: { color: palette.muted },
-  detailActionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  detailAction: { width: '48%', minHeight: 54, borderRadius: radius.sm, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 9, paddingVertical: 8 },
-  detailActionDanger: { borderColor: '#F1D5D1', backgroundColor: '#FFF8F7' },
+  locationIdentity: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 10, paddingVertical: 2 },
+  identityType: { color: palette.ink, fontSize: 16, fontWeight: '700', marginRight: 4 },
+  identityStatus: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 9, paddingVertical: 6, borderRadius: 12, backgroundColor: palette.primarySoft },
+  statusDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: palette.primary, shadowColor: palette.primary, shadowOpacity: 0.7, shadowRadius: 5, elevation: 3 },
+  inactiveDot: { backgroundColor: palette.muted, shadowOpacity: 0, elevation: 0 },
+  identityStatusText: { color: palette.primaryDeep, fontSize: 12, fontWeight: '700' },
+  defaultMark: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 9, paddingVertical: 6, borderRadius: 12, backgroundColor: palette.amberSoft },
+  defaultText: { color: palette.amber, fontSize: 12, fontWeight: '700' },
+  locationKpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  locationKpi: { width: '47%', flexGrow: 1, minHeight: 112, gap: 4, padding: 12, borderWidth: 1, borderColor: palette.border, borderRadius: radius.md, backgroundColor: palette.surface, ...elevation.card },
+  locationKpiValue: { color: palette.ink, fontSize: 21, fontWeight: '700' },
+  locationKpiLabel: { color: palette.secondary, fontSize: 12, fontWeight: '600' },
+  inventoryPanel: { overflow: 'hidden', backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border, borderRadius: radius.md, ...elevation.card },
+  inventoryHeading: { minHeight: 60, paddingLeft: 14, paddingRight: 6, flexDirection: 'row', alignItems: 'center' },
+  inventoryToggle: { flex: 1, minHeight: 60, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  inventoryTitle: { color: palette.ink, fontSize: 16, fontWeight: '700', flexShrink: 1 },
+  inventoryHelpButton: { width: 40, height: 44, alignItems: 'center', justifyContent: 'center' },
+  inventoryHelp: { marginHorizontal: 14, marginBottom: 12, padding: 12, borderRadius: radius.sm, backgroundColor: palette.blueSoft },
+  inventoryHelpText: { color: palette.secondary, fontSize: 12, lineHeight: 18 },
+  inventoryTable: { paddingBottom: 4 },
+  inventoryHeaderRow: { flexDirection: 'row', minHeight: 48, alignItems: 'center', backgroundColor: palette.primarySoft },
+  inventoryRow: { flexDirection: 'row', minHeight: 58, alignItems: 'center', borderTopWidth: 1, borderTopColor: palette.border },
+  inventoryCell: { paddingHorizontal: 10, paddingVertical: 8 },
+  inventoryStrong: { color: palette.ink, fontSize: 12, fontWeight: '700' },
+  inventoryText: { color: palette.ink, fontSize: 12, lineHeight: 18 },
+  emptyInventory: { color: palette.secondary, fontSize: 13, lineHeight: 20, padding: 16 },
+  logsPanel: { backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border, borderRadius: radius.md, paddingHorizontal: 14, ...elevation.card },
+  logsTitle: { color: palette.ink, fontSize: 17, fontWeight: '700', paddingVertical: 16 },
+  logRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: 12, borderTopWidth: 1, borderTopColor: palette.border },
+  logIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.blueSoft },
+  logCopy: { flex: 1, gap: 3 },
+  logType: { color: palette.ink, fontSize: 13, fontWeight: '700', textTransform: 'capitalize' },
+  logName: { color: palette.secondary, fontSize: 12 },
+  logDate: { color: palette.muted, fontSize: 11 },
+  logQuantity: { color: palette.primaryDeep, fontSize: 12, fontWeight: '700', textAlign: 'right', flexShrink: 1 },
+  moreLogs: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderTopWidth: 1, borderTopColor: palette.border },
+  moreLogsText: { color: palette.primaryDeep, fontSize: 13, fontWeight: '700' },
+  detailActionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  detailAction: { width: '22%' },
+  detailActionCell: { minHeight: 99, alignItems: 'center', justifyContent: 'center', gap: spacing.sm, paddingHorizontal: spacing.xs, borderWidth: 1, borderColor: palette.border, borderRadius: radius.md, backgroundColor: palette.surface, ...elevation.card },
   detailActionDisabled: { opacity: 0.55 },
-  detailActionIcon: { width: 32, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
-  detailActionText: { color: palette.ink, fontSize: 13, fontWeight: '700', flexShrink: 1, textAlign: 'center' },
-  detailActionDangerText: { color: palette.rose },
+  detailActionIcon: { width: 46, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  detailActionText: { color: palette.ink, fontSize: typography.action, fontWeight: '600', textAlign: 'center' },
   pressed: { opacity: 0.76 },
   section: { color: palette.ink, fontSize: 17, fontWeight: '700', marginTop: 17 },
   infoRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 14, minHeight: 36, alignItems: 'center' },

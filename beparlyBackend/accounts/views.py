@@ -1,5 +1,6 @@
 import hashlib
 import json
+from uuid import uuid4
 
 from django.contrib.auth import authenticate
 from django.contrib.auth.password_validation import validate_password
@@ -169,6 +170,14 @@ def businesses(request):
         with transaction.atomic():
             business = Business.objects.create(name=name)
             BusinessMember.objects.create(user=session.user, business=business, role=BusinessMember.OWNER)
+            from accounting.models import MoneyAccount
+            from accounting.services import amount, money_operation, setup_business
+            setup_business(business)
+            opening_cash = data.get('opening_cash', '')
+            if opening_cash not in ('', None):
+                cash = MoneyAccount.objects.get(business=business, is_default=True)
+                money_operation(business, session.user, uuid4(), 'opening_balance',
+                                amount(opening_cash), cash, allow_opening=True)
     except ValueError as exc:
         return error('invalid_input', str(exc))
     return JsonResponse({'business': {'id': business.id, 'name': business.name, 'role': BusinessMember.OWNER}}, status=201)
@@ -246,3 +255,28 @@ def employee_permissions(request, business_id, user_id):
                                       'phone': member.user.phone,
                                       'can_manage_locations': member.can_manage_locations,
                                       'can_post_stock': member.can_post_stock}})
+
+
+@csrf_exempt
+def inventory_settings(request, business_id):
+    if request.method not in ('GET', 'PATCH'):
+        return error('method_not_allowed', 'Use GET or PATCH.', 405)
+    session = current_session(request)
+    if not session:
+        return error('unauthorized', 'Please sign in.', 401)
+    member = current_member(session, business_id)
+    if not member:
+        return error('not_found', 'Business profile not found.', 404)
+    business = member.business
+    if request.method == 'PATCH':
+        if member.role != BusinessMember.OWNER:
+            return error('forbidden', 'Only the owner can change inventory settings.', 403)
+        try:
+            data = body(request)
+        except ValueError as exc:
+            return error('invalid_input', str(exc))
+        if set(data) != {'expiry_warning_days'} or type(data['expiry_warning_days']) is not int or not 0 <= data['expiry_warning_days'] <= 365:
+            return error('invalid_input', 'Choose an expiry warning from 0 to 365 days.')
+        business.expiry_warning_days = data['expiry_warning_days']
+        business.save(update_fields=['expiry_warning_days'])
+    return JsonResponse({'timezone': business.timezone, 'expiry_warning_days': business.expiry_warning_days})

@@ -38,6 +38,35 @@ The previous `db.sqlite3` file is no longer used by default. `DB_ENGINE=sqlite3`
 - `GET/POST businesses/<business_id>/locations/`: members can list; owners and authorized employees can create with `name`, `type` (`shop` or `warehouse`), and optional `address`
 - `GET/PATCH businesses/<business_id>/locations/<location_id>/`: members can view; owners and authorized employees can edit `name`, `type`, `address`, or `is_active`
 
-Location names are unique within a business, ignoring case. The default location cannot be deactivated. No hard-delete endpoint exists. Product balances, transfers, adjustments, expiry, and write-offs belong to later inventory work after Products, Units, and Batches are defined.
+Location names are unique within a business, ignoring case. The default location cannot be deactivated. No hard-delete endpoint exists.
+
+## Products and stock
+
+The separate `products` Django app owns products, nested categories, packaging units and batches. `stockkeeper` owns balances, receipt cost layers, append-only movements, receipts, waste and transfers. Product and stock commands require an `X-Command-ID` UUID so retries return the original result. Product and category access requires membership in the URL's business. Stock commands additionally require the owner role or `can_post_stock`.
+
+- `GET/POST businesses/<business_id>/categories/`; `PATCH .../categories/<uuid>/`
+- `GET/POST businesses/<business_id>/products/`; `GET/PATCH .../products/<uuid>/`
+- `POST/DELETE .../products/<uuid>/image/` using multipart field `image`
+- `GET/POST .../products/<uuid>/units/`; `PATCH .../units/<uuid>/`
+- `GET/POST .../products/<uuid>/batches/`
+- `POST .../products/<uuid>/convert-tracking/`; `GET .../products/<uuid>/fefo/`; `POST .../products/<uuid>/batch-selection/`
+- `POST businesses/<business_id>/stock/receipts/`, `/stock/waste/`, `/stock/transfers/`
+- `GET .../locations/<id>/stock/`, `/locations/<id>/movements/`
+- `GET/PATCH businesses/<business_id>/inventory-settings/` for the expiry warning threshold
+
+## Audit history
+
+The separate `audit` app records successful catalog, location, and stock writes with the business, actor, timestamp, affected record, and field changes. Events are append-only and posted in the same transaction as the operation. StockMovement remains the inventory quantity ledger. Command retries return the original result without another audit event.
+
+- `GET businesses/<business_id>/audit/?page=1`: newest events first, 30 per page
+- Optional `product_id`, `location_id`, or `entity_type` filters; membership in that business is required
+
+Migration `audit.0003` copies earlier stock movements into audit history with their original actor and time. Earlier catalog or location edits cannot be reconstructed reliably and are not represented as historical audit events.
+
+Product creation may include `opening_stock` with quantity, explicit unit cost, optional location ID, and batch identifier and expiry date where tracking requires them. It posts atomically with the product. Inventory cost comes from receipt layers, not the editable buying price. Expiry dates remain sellable through that date in the business timezone (default `Asia/Dhaka`). Expiry does not write off physically present stock.
+
+Development images use `MEDIA_ROOT` and Django's debug media URL. Production requires an S3-compatible private bucket, `PRODUCT_CDN_DOMAIN`, `PRODUCT_CDN_KEY_ID`, and `PRODUCT_CDN_PRIVATE_KEY_PATH` for signed CDN URLs. Configure the CDN origin to access the private bucket, and provide storage credentials through the server environment or workload identity. The database stores only storage keys. See [django-storages S3 and CloudFront settings](https://django-storages.readthedocs.io/en/stable/backends/amazon-S3.html).
+
+After installing requirements, review and apply migrations with `python manage.py migrate --plan` and `python manage.py migrate`. Run PostgreSQL tests with `python manage.py test accounts products stockkeeper audit`.
 
 Tokens are random, stored only as hashes, expire after 30 days, and are revoked by logout. Phone ownership is not verified in this first flow. Login throttling uses Django's default local cache; configure a shared cache before multi-worker deployment.

@@ -1,3 +1,3 @@
-import { PendingStockScreen } from '@/features/stock/stock-ui';
+import { StockActionScreen } from '@/features/stock/stock-flows';
 
-export default function Transfer() { return <PendingStockScreen kind="transfer" />; }
+export default function Transfer() { return <StockActionScreen kind="transfer" />; }

@@ -1,9 +1,11 @@
 import { defaultConfig } from '@tamagui/config/v6';
 import { createTamagui } from 'tamagui';
 import { appFontFamily, palette, radius, spacing } from './src/constants/design-system';
+import { animations } from './tamagui.animations';
 
 export const tamaguiConfig = createTamagui({
   ...defaultConfig,
+  animations,
   fonts: {
     ...defaultConfig.fonts,
     body: { ...defaultConfig.fonts.body, family: appFontFamily },

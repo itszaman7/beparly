@@ -48,8 +48,11 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'audit.apps.AuditConfig',
     'accounts',
     'stockkeeper.apps.StockkeeperConfig',
+    'products.apps.ProductsConfig',
+    'accounting.apps.AccountingConfig',
 ]
 
 MIDDLEWARE = [
@@ -141,6 +144,32 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+if os.environ.get('PRODUCT_STORAGE_BUCKET'):
+    cdn_domain = os.environ.get('PRODUCT_CDN_DOMAIN') or None
+    cdn_key_path = os.environ.get('PRODUCT_CDN_PRIVATE_KEY_PATH')
+    cdn_key = Path(cdn_key_path).read_text(encoding='utf-8') if cdn_key_path else None
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3.S3Storage',
+            'OPTIONS': {
+                'bucket_name': os.environ['PRODUCT_STORAGE_BUCKET'],
+                'region_name': os.environ.get('PRODUCT_STORAGE_REGION', 'ap-south-1'),
+                'endpoint_url': os.environ.get('PRODUCT_STORAGE_ENDPOINT') or None,
+                'custom_domain': cdn_domain,
+                'cloudfront_key_id': os.environ.get('PRODUCT_CDN_KEY_ID') or None,
+                'cloudfront_key': cdn_key,
+                'querystring_auth': True,
+                'object_parameters': {'CacheControl': 'max-age=86400'},
+            },
+        },
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+if not DEBUG and not all((os.environ.get('PRODUCT_STORAGE_BUCKET'), os.environ.get('PRODUCT_CDN_DOMAIN'),
+                          os.environ.get('PRODUCT_CDN_KEY_ID'), os.environ.get('PRODUCT_CDN_PRIVATE_KEY_PATH'))):
+    raise RuntimeError('Production product storage requires a bucket and signed CDN configuration.')
 
 
 # Email

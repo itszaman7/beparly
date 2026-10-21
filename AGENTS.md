@@ -134,6 +134,7 @@ backend/
     users/
     contacts/
     products/
+    audit/
     inventory/
     purchases/
     sales/
@@ -175,6 +176,7 @@ Model business parties as contacts with roles rather than creating unrelated `Cu
 1. **Business isolation:** Every tenant-owned record is scoped to a business. Verify authorization server-side on every request and object lookup.
 2. **Atomic posting:** Confirming a sale/purchase must commit its invoice state, stock effect, payment allocations, and relevant ledger effects as one consistent operation using Django transactions.
 3. **Auditability:** Do not silently mutate or delete posted financial/stock history. Use reversal/adjustment operations and maintain actor/time references.
+   The dedicated `audit` Django app records every successful product, category, packaging unit, batch, shop/warehouse location, and stock-changing write with business, actor (or System), time, affected record, and before/after changes where applicable. Write the audit event in the same database transaction as the change. Preserve append-only history; retries must not duplicate events. New CRUD endpoints in these modules must add audit recording and tests. Keep stock movements as the authoritative quantity ledger and use audit events for the human-readable change history.
 4. **No duplicate writes:** Every client-originated posted command has an idempotency key; retries return the original outcome.
 5. **Money precision:** Django `DecimalField` / Python `Decimal`, PostgreSQL `NUMERIC`; no binary floating-point for financial calculations.
 6. **Stock precision:** Use validated units, conversions and quantity precision. Transfers must move stock between locations without changing overall stock.

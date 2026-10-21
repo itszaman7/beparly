@@ -11,6 +11,7 @@ import { useAuth } from '@/features/auth/auth-context';
 export function BusinessCreateForm({ onCreated }: { onCreated?: () => void }) {
   const { createBusiness } = useAuth();
   const [name, setName] = useState('');
+  const [openingCash, setOpeningCash] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -22,8 +23,9 @@ export function BusinessCreateForm({ onCreated }: { onCreated?: () => void }) {
     setBusy(true);
     setError('');
     try {
-      await createBusiness(name.trim());
+      await createBusiness(name.trim(), openingCash.trim() || undefined);
       setName('');
+      setOpeningCash('');
       onCreated?.();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not create business.');
@@ -45,9 +47,19 @@ export function BusinessCreateForm({ onCreated }: { onCreated?: () => void }) {
         placeholderTextColor="#93A29C"
         maxLength={160}
         autoCapitalize="words"
-        returnKeyType="done"
-        onSubmitEditing={submit}
+        returnKeyType="next"
         accessibilityLabel="Business name"
+      />
+      <Text style={styles.label}>Opening cash (optional)</Text>
+      <Text style={styles.formHint}>Cash already in the business when you start. Add later money through a recorded activity.</Text>
+      <TextInput
+        style={styles.input}
+        value={openingCash}
+        onChangeText={setOpeningCash}
+        placeholder="৳ 0.00"
+        placeholderTextColor="#93A29C"
+        keyboardType="decimal-pad"
+        accessibilityLabel="Opening cash balance"
       />
       {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
       <PressScale onPress={submit} disabled={busy} accessibilityRole="button" accessibilityLabel="Create business profile">

@@ -1,3 +1,3 @@
-import { PendingStockScreen } from '@/features/stock/stock-ui';
+import { StockActionScreen } from '@/features/stock/stock-flows';
 
-export default function Waste() { return <PendingStockScreen kind="waste" />; }
+export default function Waste() { return <StockActionScreen kind="waste" />; }
