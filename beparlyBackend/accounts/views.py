@@ -80,7 +80,9 @@ def account_data(user):
     return {
         'user': {'id': user.id, 'name': user.first_name, 'phone': user.phone},
         'businesses': [
-            {'id': member.business_id, 'name': member.business.name, 'role': member.role}
+            {'id': member.business_id, 'name': member.business.name, 'phone': member.business.phone,
+             'address': member.business.address, 'logo_url': member.business.logo.url if member.business.logo else None,
+             'role': member.role}
             for member in BusinessMember.objects.select_related('business').filter(user=user).order_by('id')
         ],
     }
@@ -181,6 +183,32 @@ def businesses(request):
     except ValueError as exc:
         return error('invalid_input', str(exc))
     return JsonResponse({'business': {'id': business.id, 'name': business.name, 'role': BusinessMember.OWNER}}, status=201)
+
+
+@csrf_exempt
+def business_profile(request, business_id):
+    if request.method not in ('GET', 'PATCH'):
+        return error('method_not_allowed', 'Use GET or PATCH.', 405)
+    session = current_session(request)
+    member = current_member(session, business_id) if session else None
+    if not member:
+        return error('not_found', 'Business profile not found.', 404)
+    if request.method == 'PATCH':
+        if member.role != BusinessMember.OWNER:
+            return error('forbidden', 'Only the business owner can edit business settings.', 403)
+        try:
+            data = body(request)
+            for key, limit in (('phone', 20), ('address', 255)):
+                if key in data and (not isinstance(data[key], str) or len(data[key].strip()) > limit):
+                    raise ValueError(f'{key.title()} is too long.')
+            member.business.phone = str(data.get('phone', member.business.phone)).strip()
+            member.business.address = str(data.get('address', member.business.address)).strip()
+            member.business.save(update_fields=['phone', 'address'])
+        except ValueError as exc:
+            return error('invalid_input', str(exc))
+    business = member.business
+    return JsonResponse({'business': {'id': business.id, 'name': business.name, 'phone': business.phone,
+        'address': business.address, 'logo_url': business.logo.url if business.logo else None, 'role': member.role}})
 
 
 @csrf_exempt

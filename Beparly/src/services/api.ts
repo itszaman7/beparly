@@ -2,7 +2,7 @@ import { Platform } from 'react-native';
 
 export type Account = {
   user: { id: number; name: string; phone: string };
-  business: { id: number; name: string };
+  business: { id: number; name: string; phone?: string; address?: string; logo_url?: string | null };
   role: 'owner' | 'employee';
 };
 
@@ -26,11 +26,12 @@ export type Product = {
   retail_price: string | null; wholesale_price: string | null; image_url: string | null;
   minimum_stock: string; tracking_mode: 'simple' | 'batch' | 'expiry';
   is_active: boolean; created_at: string; updated_at: string;
+  variants?: Variant[];
   sellable_stock?: string | null; stock_by_unit?: { unit: string; quantity: string }[] | null; low_stock?: boolean; out_of_stock?: boolean;
 };
 export type Variant = { id: string; label: string; sku: string; barcode: string; base_unit: string;
   purchase_price: string | null; retail_price: string | null; wholesale_price: string | null;
-  minimum_stock: string; tracking_mode: Product['tracking_mode']; is_active: boolean;
+  minimum_stock: string; tracking_mode: Product['tracking_mode']; is_active: boolean; sellable_stock?: string; out_of_stock?: boolean;
   selections: Record<string, string> };
 export type VariantInput = { id: string; sku: string; barcode?: string; base_unit: string;
   purchase_price?: string | null; retail_price?: string | null; wholesale_price?: string | null;
@@ -62,8 +63,9 @@ export type ProductMovement = { id: string; type: string; quantity_change: strin
 export type AuditEvent = { id: string; entity_type: string; entity_id: string; subject: string; location_id: number | null; action: string; changes: Record<string, unknown>; actor: string; created_at: string };
 export type MoneyAccount = { id: string; name: string; kind: 'cash' | 'bank' | 'wallet' | 'other'; masked_reference: string; is_default: boolean; is_active: boolean; balance: string; created_at: string };
 export type MoneyTransaction = { id: string; kind: string; amount: string; account_id: string; destination_id: string | null; contact_id: string | null; note: string; event_date: string; created_at: string; reversed: boolean };
-export type Contact = { id: string; name: string; phone: string; is_customer: boolean; is_supplier: boolean; customer_advance: string; supplier_advance: string; to_collect: string; to_pay: string };
+export type Contact = { id: string; name: string; phone: string; customer_type?: 'regular' | 'wholesale'; address?: string; district?: string; area?: string; notes?: string; is_customer: boolean; is_supplier: boolean; customer_advance: string; supplier_advance: string; to_collect: string; to_pay: string };
 export type BusinessAsset = { id: string; name: string; cost: string; residual_value: string; useful_life_months: number; in_service_date: string; sold_on: string | null; depreciated: string; book_value: string };
+export type SaleRecord = { id: string; invoice_number: string; customer_id: string | null; customer_name: string; customer_phone?: string; customer_address?: Record<string, string>; location_id: number; mode: 'quick' | 'manual'; price_tier: 'retail' | 'wholesale'; status: string; payment_status: string; cancellation_reason?: string; subtotal: string; discount: string; total: string; paid: string; due: string; created_at: string; invoice_date?: string; billing_address?: Record<string, string>; delivery_address?: Record<string, string>; source?: string; notes?: string; payment_account_names?: string[]; lines?: { product_id: string; variant_id: string; name: string; variant: string; sku: string; unit: string; quantity: string; unit_price: string; line_total: string }[]; payments?: { id: string; amount: string; account_id: string; kind: string; created_at: string }[] };
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) {
@@ -134,6 +136,8 @@ export const api = {
   me: (token: string) => request<Omit<AuthResult, 'token'>>('auth/me/', 'GET', undefined, token),
   logout: (token: string) => request<{ ok: boolean }>('auth/logout/', 'POST', {}, token),
   businesses: (token: string) => request<{ user: Account['user']; businesses: BusinessProfile[] }>('businesses/', 'GET', undefined, token),
+  businessProfile: (token: string, businessId: number) => request<{ business: BusinessProfile }>(`businesses/${businessId}/profile/`, 'GET', undefined, token),
+  updateBusinessProfile: (token: string, businessId: number, data: { phone: string; address: string }) => request<{ business: BusinessProfile }>(`businesses/${businessId}/profile/`, 'PATCH', data, token),
   createBusiness: (token: string, name: string, openingCash?: string) => request<{ business: BusinessProfile }>('businesses/', 'POST', { name, ...(openingCash ? { opening_cash: openingCash } : {}) }, token),
   employees: (token: string, businessId: number) => request<{ employees: Employee[] }>(`businesses/${businessId}/employees/`, 'GET', undefined, token),
   createEmployee: (token: string, businessId: number, data: { username?: string; phone: string; password: string }) =>
@@ -229,10 +233,14 @@ export const api = {
   reverseMoneyTransaction: (token: string, businessId: number, id: string, reason: string, commandId: string) =>
     request<{ reversal_id: string }>(`businesses/${businessId}/money/transactions/${id}/reverse/`, 'POST', { reason }, token, commandId),
   expenseCategories: (token: string, businessId: number) =>
-    request<{ categories: { id: number; name: string }[] }>(`businesses/${businessId}/money/expense-categories/`, 'GET', undefined, token),
+    request<{ categories: { id: number; name: string; type?: string }[] }>(`businesses/${businessId}/money/expense-categories/`, 'GET', undefined, token),
+  incomeCategories: (token: string, businessId: number) =>
+    request<{ categories: { id: number; name: string; type?: string }[] }>(`businesses/${businessId}/money/income-categories/`, 'GET', undefined, token),
+  createFinancialCategory: (token: string, businessId: number, type: 'expense' | 'income', name: string) =>
+    request<{ category: { id: number; name: string; type: string } }>(`businesses/${businessId}/money/${type}-categories/`, 'POST', { name, type }, token),
   contacts: (token: string, businessId: number) =>
     request<{ contacts: Contact[] }>(`businesses/${businessId}/contacts/`, 'GET', undefined, token),
-  createContact: (token: string, businessId: number, data: { name: string; phone?: string; is_customer: boolean; is_supplier: boolean }) =>
+  createContact: (token: string, businessId: number, data: { name?: string; phone?: string; customer_type?: 'regular' | 'wholesale'; address?: string; district?: string; area?: string; notes?: string; is_customer: boolean; is_supplier: boolean }) =>
     request<{ contact: Contact }>(`businesses/${businessId}/contacts/`, 'POST', data, token),
   contact: (token: string, businessId: number, id: string) =>
     request<{ contact: Contact; statement: { date: string; description: string; kind: string; debit: string; credit: string }[] }>(`businesses/${businessId}/contacts/${id}/`, 'GET', undefined, token),
@@ -242,4 +250,21 @@ export const api = {
     request<{ asset: BusinessAsset }>(`businesses/${businessId}/assets/`, 'POST', data, token, commandId),
   sellAsset: (token: string, businessId: number, id: string, data: { proceeds: string; account_id: string }, commandId: string) =>
     request<{ asset: BusinessAsset }>(`businesses/${businessId}/assets/${id}/sell/`, 'POST', data, token, commandId),
+  sales: (token: string, businessId: number) =>
+    request<{ sales: SaleRecord[] }>(`businesses/${businessId}/sales/`, 'GET', undefined, token),
+  salesOptions: (token: string, businessId: number) =>
+    request<{ accounts: MoneyAccount[]; contacts: Contact[]; categories: { id: number; name: string }[] }>(`businesses/${businessId}/sales/options/`, 'GET', undefined, token),
+  createSalesIncomeCategory: (token: string, businessId: number, name: string) =>
+    request<{ category: { id: number; name: string } }>(`businesses/${businessId}/sales/options/`, 'POST', { name }, token),
+  createSalesCustomer: (token: string, businessId: number, data: { phone: string; name?: string; address?: string; district?: string; area?: string; notes?: string }) =>
+    request<{ customer: Contact; existing: boolean }>(`businesses/${businessId}/sales/customers/`, 'POST', data, token),
+  createSale: (token: string, businessId: number, data: { mode: 'quick' | 'manual'; price_tier: 'retail' | 'wholesale'; location_id: number; income_category_id?: number; customer_id?: string; paid: string; account_id?: string; discount: string; discount_type: 'amount' | 'percent'; billing_address?: Record<string, string>; delivery_address?: Record<string, string>; source?: string; notes?: string; invoice_date?: string; lines: { product_id: string; quantity: string; variant_id?: string }[] }, commandId: string) =>
+    request<{ sale: SaleRecord }>(`businesses/${businessId}/sales/`, 'POST', data, token, commandId),
+  sale: (token: string, businessId: number, saleId: string) =>
+    request<{ sale: SaleRecord }>(`businesses/${businessId}/sales/${saleId}/payments/`, 'GET', undefined, token),
+  collectSalePayment: (token: string, businessId: number, saleId: string, data: { amount: string; account_id: string }, commandId: string) =>
+    request<{ sale: SaleRecord }>(`businesses/${businessId}/sales/${saleId}/payments/`, 'POST', data, token, commandId),
+  cancelSale: (token: string, businessId: number, saleId: string, reason: string, commandId: string) =>
+    request<{ sale: SaleRecord }>(`businesses/${businessId}/sales/${saleId}/cancel/`, 'POST', { reason }, token, commandId),
+  documentUrl: (businessId: number, saleId: string, kind: 'invoice' | 'receipt') => `${apiBaseUrl()}/api/v1/businesses/${businessId}/sales/${saleId}/documents/${kind}/`,
 };

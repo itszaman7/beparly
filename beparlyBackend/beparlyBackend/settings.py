@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'stockkeeper.apps.StockkeeperConfig',
     'products.apps.ProductsConfig',
     'accounting.apps.AccountingConfig',
+    'sales.apps.SalesConfig',
 ]
 
 MIDDLEWARE = [

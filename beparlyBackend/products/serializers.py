@@ -1,6 +1,8 @@
 import uuid
 
 from django.core.files.storage import default_storage
+from django.db import models
+from django.db.models import Sum
 from rest_framework import serializers
 
 from .models import Category, Product, ProductVariant, ProductUnit, StockBatch
@@ -9,12 +11,25 @@ from .models import Category, Product, ProductVariant, ProductUnit, StockBatch
 class ProductVariantSerializer(serializers.ModelSerializer):
     id = serializers.UUIDField(required=False)
     selections = serializers.SerializerMethodField()
+    sellable_stock = serializers.SerializerMethodField()
+    out_of_stock = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductVariant
         fields = ('id', 'label', 'sku', 'barcode', 'base_unit', 'purchase_price', 'retail_price',
-                  'wholesale_price', 'minimum_stock', 'tracking_mode', 'is_active', 'selections',
+                  'wholesale_price', 'minimum_stock', 'tracking_mode', 'is_active', 'selections', 'sellable_stock', 'out_of_stock',
                   'created_at', 'updated_at')
+
+    def get_sellable_stock(self, obj):
+        from django.utils import timezone
+        today = timezone.localdate()
+        total = obj.balances.filter(quantity__gt=0).filter(
+            models.Q(batch__isnull=True) | models.Q(batch__expires_on__isnull=True) | models.Q(batch__expires_on__gte=today)
+        ).aggregate(total=Sum('quantity'))['total']
+        return str(total or 0)
+
+    def get_out_of_stock(self, obj):
+        return float(self.get_sellable_stock(obj)) <= 0
         read_only_fields = ('selections', 'created_at', 'updated_at')
         extra_kwargs = {'sku': {'required': False, 'allow_blank': True}}
 
@@ -142,10 +157,11 @@ class ProductListSerializer(serializers.ModelSerializer):
     out_of_stock = serializers.SerializerMethodField()
     variant_count = serializers.SerializerMethodField()
     stock_by_unit = serializers.SerializerMethodField()
+    variants = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
-        fields = ('id', 'name', 'product_type', 'variant_count', 'sku', 'barcode', 'category', 'retail_price', 'image_url', 'sellable_stock', 'stock_by_unit', 'low_stock', 'out_of_stock', 'is_active', 'updated_at')
+        fields = ('id', 'name', 'product_type', 'variant_count', 'sku', 'barcode', 'category', 'base_unit', 'retail_price', 'wholesale_price', 'image_url', 'sellable_stock', 'stock_by_unit', 'variants', 'low_stock', 'out_of_stock', 'is_active', 'updated_at')
 
     def get_variant_count(self, obj):
         return sum(1 for variant in obj.variants.all() if variant.is_active and not variant.is_default)
@@ -169,6 +185,11 @@ class ProductListSerializer(serializers.ModelSerializer):
                 unit = row.variant.base_unit
                 grouped[unit] = grouped.get(unit, 0) + row.quantity
         return [{'unit': unit, 'quantity': str(amount)} for unit, amount in sorted(grouped.items())]
+
+    def get_variants(self, obj):
+        if obj.product_type == 'simple':
+            return []
+        return ProductVariantSerializer(obj.variants.filter(is_active=True).exclude(is_default=True), many=True).data
 
     def get_low_stock(self, obj):
         return bool(obj.minimum_stock and obj.sellable_sum > 0 and obj.sellable_sum <= obj.minimum_stock)

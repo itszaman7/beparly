@@ -51,6 +51,9 @@ class User(AbstractUser):
 
 class Business(models.Model):
     name = models.CharField(max_length=160)
+    phone = models.CharField(max_length=20, blank=True)
+    address = models.CharField(max_length=255, blank=True)
+    logo = models.ImageField(upload_to='business_logos/', blank=True, null=True)
     timezone = models.CharField(max_length=64, default='Asia/Dhaka')
     expiry_warning_days = models.PositiveSmallIntegerField(default=30)
     created_at = models.DateTimeField(auto_now_add=True)

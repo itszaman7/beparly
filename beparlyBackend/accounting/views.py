@@ -9,10 +9,10 @@ from django.views.decorators.csrf import csrf_exempt
 from accounts.models import BusinessMember
 from accounts.views import body, current_member, current_session, error
 
-from .models import AssetDepreciation, BusinessAsset, Contact, ExpenseCategory, JournalLine, MoneyAccount, MoneyTransaction
+from .models import AssetDepreciation, BusinessAsset, Contact, ExpenseCategory, IncomeCategory, JournalLine, MoneyAccount, MoneyTransaction, normalize_customer_phone
 from .services import (AccountingError, amount, balance, command_uuid, contact_position,
                        create_money_account, depreciate, money_operation, purchase_asset,
-                       reverse, sell_asset, setup_business)
+                       create_financial_category, reverse, sell_asset, setup_business)
 from stockkeeper.services import business_today
 
 
@@ -96,9 +96,10 @@ def money_transactions(request, business_id):
         destination = MoneyAccount.objects.filter(business_id=business_id, pk=data.get('destination_id')).first() if data.get('destination_id') else None
         contact = Contact.objects.filter(business_id=business_id, pk=data.get('contact_id')).first() if data.get('contact_id') else None
         category = ExpenseCategory.objects.filter(business_id=business_id, pk=data.get('category_id')).first() if data.get('category_id') else None
+        income_category = IncomeCategory.objects.filter(business_id=business_id, pk=data.get('category_id')).first() if data.get('category_id') else None
         item = money_operation(member.business, current_session(request).user, command(request),
             data.get('kind'), data.get('amount'), account, destination=destination, contact=contact,
-            category=category, note=str(data.get('note', '')).strip()[:240], event_date=parse_date(data.get('event_date')))
+            category=category, income_category=income_category, note=str(data.get('note', '')).strip()[:240], event_date=parse_date(data.get('event_date')))
         return JsonResponse({'transaction': serialize_txn(item)}, status=201)
     except (ValueError, ValidationError, AccountingError) as exc:
         return error('invalid_input', str(exc))
@@ -152,9 +153,15 @@ def contacts(request, business_id):
     try:
         data = body(request)
         name = str(data.get('name', '')).strip()
-        if not name or len(name) > 160 or type(data.get('is_customer')) is not bool or type(data.get('is_supplier')) is not bool:
+        if len(name) > 160 or type(data.get('is_customer')) is not bool or type(data.get('is_supplier')) is not bool:
             raise AccountingError('Enter a name and choose customer, supplier, or both.')
-        item = Contact.objects.create(business=member.business, name=name, phone=str(data.get('phone', '')).strip()[:30],
+        phone = normalize_customer_phone(data.get('phone')) if data['is_customer'] and name != 'Walk-in Customer' else str(data.get('phone', '')).strip()[:20]
+        customer_type = data.get('customer_type', Contact.REGULAR)
+        if customer_type not in dict(Contact.CUSTOMER_TYPE_CHOICES):
+            raise AccountingError('Choose Regular or Wholesale customer.')
+        item = Contact.objects.create(business=member.business, name=name, phone=phone, customer_type=customer_type,
+            address=str(data.get('address', '')).strip()[:255], district=str(data.get('district', '')).strip()[:80],
+            area=str(data.get('area', '')).strip()[:100], notes=str(data.get('notes', '')).strip(), created_by=current_session(request).user,
             is_customer=data['is_customer'], is_supplier=data['is_supplier'])
         return JsonResponse({'contact': serialize_contact(item)}, status=201)
     except (ValueError, ValidationError, AccountingError) as exc:
@@ -163,6 +170,7 @@ def contacts(request, business_id):
 
 def serialize_contact(item):
     return {'id': str(item.pk), 'name': item.name, 'phone': item.phone,
+            'address': item.address, 'district': item.district, 'area': item.area, 'notes': item.notes, 'customer_type': item.customer_type,
             'is_customer': item.is_customer, 'is_supplier': item.is_supplier, **contact_position(item)}
 
 
@@ -181,14 +189,37 @@ def contact_detail(request, business_id, contact_id):
          'kind': line.account.code, 'debit': str(line.debit), 'credit': str(line.credit)} for line in lines]})
 
 
-def expense_categories(request, business_id):
-    if request.method != 'GET':
-        return error('method_not_allowed', 'Use GET.', 405)
+@csrf_exempt
+def financial_categories(request, business_id, category_type):
+    if request.method not in ('GET', 'POST'):
+        return error('method_not_allowed', 'Use GET or POST.', 405)
+    if category_type not in ('expense', 'income'):
+        return error('not_found', 'Category type not found.', 404)
     member, problem = owner(request, business_id)
     if problem:
         return problem
     setup_business(member.business)
-    return JsonResponse({'categories': [{'id': item.pk, 'name': item.name} for item in ExpenseCategory.objects.filter(business_id=business_id).order_by('name')]})
+    model = ExpenseCategory if category_type == 'expense' else IncomeCategory
+    if request.method == 'POST':
+        try:
+            data = body(request)
+            if data.get('type', category_type) != category_type:
+                raise AccountingError('Category type does not match this list.')
+            item = create_financial_category(member.business, current_session(request).user, data.get('name'), category_type)
+            return JsonResponse({'category': {'id': item.pk, 'name': item.name, 'type': category_type}}, status=201)
+        except (ValueError, ValidationError, AccountingError) as exc:
+            return error('invalid_input', str(exc))
+    return JsonResponse({'categories': [{'id': item.pk, 'name': item.name, 'type': category_type} for item in model.objects.filter(business_id=business_id).order_by('name')]})
+
+
+@csrf_exempt
+def expense_categories(request, business_id):
+    return financial_categories(request, business_id, 'expense')
+
+
+@csrf_exempt
+def income_categories(request, business_id):
+    return financial_categories(request, business_id, 'income')
 
 
 def serialize_asset(item):

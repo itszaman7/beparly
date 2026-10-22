@@ -67,6 +67,8 @@ def parse_location_data(data, creating=False):
         if not isinstance(address, str) or len(address.strip()) > 255:
             raise ValueError('Address must be up to 255 characters.')
         result['address'] = address.strip()
+    if creating and result.get('type') == StockLocation.SHOP and not result.get('address', '').strip():
+        raise ValueError('Add the shop billing address.')
     if 'is_active' in data:
         if not isinstance(data['is_active'], bool):
             raise ValueError('is_active must be true or false.')

@@ -1,4 +1,5 @@
 import uuid
+import re
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -41,19 +42,46 @@ class LedgerAccount(models.Model):
 
 
 class Contact(models.Model):
+    REGULAR = 'regular'
+    WHOLESALE = 'wholesale'
+    CUSTOMER_TYPE_CHOICES = [(REGULAR, 'Regular customer'), (WHOLESALE, 'Wholesale customer')]
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     business = models.ForeignKey('accounts.Business', on_delete=models.PROTECT)
-    name = models.CharField(max_length=160)
-    phone = models.CharField(max_length=30, blank=True)
+    name = models.CharField(max_length=160, blank=True)
+    phone = models.CharField(max_length=20, blank=True)
+    address = models.CharField(max_length=255, blank=True)
+    district = models.CharField(max_length=80, blank=True)
+    area = models.CharField(max_length=100, blank=True)
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey('accounts.User', null=True, blank=True, on_delete=models.PROTECT, related_name='created_contacts')
     is_customer = models.BooleanField(default=False)
+    customer_type = models.CharField(max_length=12, choices=CUSTOMER_TYPE_CHOICES, default=REGULAR)
     is_supplier = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['business', 'phone'], condition=Q(is_customer=True) & ~Q(phone=''), name='unique_customer_phone_per_business')]
+
     def clean(self):
         if not self.is_customer and not self.is_supplier:
             raise ValidationError('Choose customer, supplier, or both.')
+        if self.is_customer and self.name != 'Walk-in Customer':
+            if not self.phone:
+                raise ValidationError({'phone': 'Customer phone number is required.'})
+            self.phone = normalize_customer_phone(self.phone)
+
+
+def normalize_customer_phone(value):
+    digits = re.sub(r'[\s().-]', '', str(value or ''))
+    if digits.startswith('+880'):
+        digits = digits[1:]
+    if digits.startswith('880'):
+        digits = '0' + digits[3:]
+    if not re.fullmatch(r'01[3-9]\d{8}', digits):
+        raise ValidationError({'phone': 'Enter a valid Bangladeshi mobile number.'})
+    return '+880' + digits[1:]
 
     def save(self, *args, **kwargs):
         self.clean()
@@ -143,6 +171,7 @@ class MoneyTransaction(models.Model):
     account = models.ForeignKey(MoneyAccount, on_delete=models.PROTECT, related_name='transactions')
     destination = models.ForeignKey(MoneyAccount, null=True, blank=True, on_delete=models.PROTECT, related_name='incoming_transfers')
     contact = models.ForeignKey(Contact, null=True, blank=True, on_delete=models.PROTECT)
+    income_category = models.ForeignKey('IncomeCategory', null=True, blank=True, on_delete=models.PROTECT)
     note = models.CharField(max_length=240, blank=True)
     event_date = models.DateField()
     journal = models.OneToOneField(JournalEntry, on_delete=models.PROTECT)
@@ -157,6 +186,15 @@ class ExpenseCategory(models.Model):
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['business', 'name'], name='unique_expense_category')]
+
+
+class IncomeCategory(models.Model):
+    business = models.ForeignKey('accounts.Business', on_delete=models.PROTECT)
+    name = models.CharField(max_length=100)
+    ledger_account = models.ForeignKey(LedgerAccount, on_delete=models.PROTECT)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['business', 'name'], name='unique_income_category')]
 
 
 class Expense(models.Model):

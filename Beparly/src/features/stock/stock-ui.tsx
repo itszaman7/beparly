@@ -313,6 +313,7 @@ export function LocationFormScreen({ editing = false }: { editing?: boolean }) {
   async function save() {
     if (!token || !businessId || !canManage) return;
     if (!name.trim()) { setError('Enter a location name.'); return; }
+    if (type === 'shop' && !address.trim()) { setError('Add the shop billing address. Sales cannot be completed without it.'); return; }
     setBusy(true); setError('');
     try {
       const data = { name: name.trim(), type, address: address.trim() };
@@ -327,7 +328,7 @@ export function LocationFormScreen({ editing = false }: { editing?: boolean }) {
       <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="e.g. Main Warehouse" placeholderTextColor={palette.muted} maxLength={160} />
       <Text style={styles.label}>Type</Text>
       <View style={styles.typeRow}>{(['shop', 'warehouse'] as const).map((option) => <Pressable key={option} accessibilityRole="button" accessibilityState={{ selected: type === option }} onPress={() => setType(option)} style={[styles.typeButton, type === option && styles.typeSelected]}><Text style={styles.typeText}>{option === 'shop' ? 'Shop' : 'Warehouse'}</Text></Pressable>)}</View>
-      <Text style={styles.label}>Address (optional)</Text>
+      <Text style={styles.label}>Address {type === 'shop' ? '*' : '(optional)'}</Text>
       <TextInput style={styles.input} value={address} onChangeText={setAddress} placeholder="Area, city" placeholderTextColor={palette.muted} maxLength={255} />
       {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
       <Action label={busy ? 'Saving…' : 'Save location'} disabled={busy} onPress={() => void save()} />

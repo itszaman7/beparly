@@ -46,6 +46,7 @@ function Navigation() {
               <Stack.Screen name="stock" />
               <Stack.Screen name="products" />
               <Stack.Screen name="money" />
+              <Stack.Screen name="sales" />
               <Stack.Screen name="contacts" />
               <Stack.Screen name="assets" />
             </Stack.Protected>

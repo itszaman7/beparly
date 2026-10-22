@@ -8,7 +8,7 @@ from django.db.models import Sum
 from accounts.models import Business
 from stockkeeper.services import business_today
 
-from .models import (AssetDepreciation, BusinessAsset, Contact, Expense, ExpenseCategory,
+from .models import (AssetDepreciation, BusinessAsset, Contact, Expense, ExpenseCategory, IncomeCategory,
                      InventoryAccountingCutoff, JournalEntry, JournalLine, LedgerAccount,
                      MoneyAccount, MoneyTransaction)
 
@@ -71,9 +71,29 @@ def setup_business(business):
         defaults={'name': 'Cash in Shop', 'type': 'asset', 'system_managed': True})
     MoneyAccount.objects.get_or_create(business=business, ledger_account=ledger,
         defaults={'name': 'Cash in Shop', 'kind': 'cash', 'is_default': True})
-    operating = LedgerAccount.objects.get(business=business, code='OPERATING_EXPENSE')
-    for name in ('Rent', 'Salary', 'Electricity', 'Internet', 'Delivery', 'Transport', 'Maintenance', 'Other'):
-        ExpenseCategory.objects.get_or_create(business=business, name=name, defaults={'ledger_account': operating})
+
+
+@transaction.atomic
+def create_financial_category(business, actor, name, category_type):
+    Business.objects.select_for_update().get(pk=business.pk)
+    name = str(name or '').strip()
+    if not name or len(name) > 100:
+        raise AccountingError('Enter a category name up to 100 characters.')
+    if category_type not in ('expense', 'income'):
+        raise AccountingError('Choose expense or income category type.')
+    model = ExpenseCategory if category_type == 'expense' else IncomeCategory
+    if model.objects.filter(business=business, name__iexact=name).exists():
+        raise AccountingError('A category with this name already exists.')
+    identifier = uuid4()
+    code = f'{category_type.upper()}-{identifier.hex[:16]}'
+    account = LedgerAccount.objects.create(business=business, code=code, name=name,
+        type=category_type, system_managed=True)
+    category = model.objects.create(business=business, name=name, ledger_account=account)
+    from audit.services import record
+    record(business_id=business.pk, actor=actor, entity_type=f'{category_type}_category',
+           entity_id=category.pk, action='created', subject=name,
+           changes={'name': {'before': None, 'after': name}, 'ledger_account_id': {'before': None, 'after': account.pk}})
+    return category
 
 
 def ledger(business, code):
@@ -178,7 +198,6 @@ def reverse(entry, actor, command_id, reason):
 
 MONEY_RULES = {
     'owner_contribution': ('in', 'CAPITAL'),
-    'other_income': ('in', 'OTHER_INCOME'),
     'customer_advance': ('in', 'CUSTOMER_ADVANCE'),
     'owner_drawing': ('out', 'DRAWINGS'),
     'supplier_advance': ('out', 'SUPPLIER_ADVANCE'),
@@ -209,7 +228,7 @@ def create_money_account(business, name, kind, reference='', command_id=None):
 
 @transaction.atomic
 def money_operation(business, actor, command_id, kind, value, account, *, destination=None,
-                    contact=None, note='', event_date=None, category=None, allow_opening=False):
+                    contact=None, note='', event_date=None, category=None, income_category=None, allow_opening=False):
     if kind == 'opening_balance' and not allow_opening:
         raise AccountingError('Opening cash can only be set when creating a business.')
     Business.objects.select_for_update().get(pk=business.pk)
@@ -224,6 +243,8 @@ def money_operation(business, actor, command_id, kind, value, account, *, destin
             raise AccountingError('Retry this command with its original details.')
         if kind == 'expense' and (not category or previous.expense.category_id != category.pk):
             raise AccountingError('Retry this expense command with its original category.')
+        if kind == 'other_income' and (not income_category or previous.income_category_id != income_category.pk):
+            raise AccountingError('Retry this income command with its original category.')
         return previous
     if account.business_id != business.pk or not account.is_active:
         raise AccountingError('Choose an active money account.')
@@ -236,9 +257,15 @@ def money_operation(business, actor, command_id, kind, value, account, *, destin
             raise AccountingError('Choose a different active destination account.')
         lines = [dr(destination.ledger_account, value), cr(account.ledger_account, value)]
     elif kind == 'expense':
-        if not category or category.business_id != business.pk:
+        if (not category or category.business_id != business.pk or category.ledger_account.business_id != business.pk
+                or category.ledger_account.type != 'expense'):
             raise AccountingError('Choose an expense category.')
         lines = [dr(category.ledger_account, value), cr(account.ledger_account, value)]
+    elif kind == 'other_income':
+        if (not income_category or income_category.business_id != business.pk
+                or income_category.ledger_account.business_id != business.pk or income_category.ledger_account.type != 'income'):
+            raise AccountingError('Choose an income category.')
+        lines = [dr(account.ledger_account, value), cr(income_category.ledger_account, value)]
     elif kind == 'opening_balance':
         if MoneyTransaction.objects.filter(account=account, kind='opening_balance').exists():
             raise AccountingError('Opening balance has already been recorded for this account.')
@@ -263,7 +290,7 @@ def money_operation(business, actor, command_id, kind, value, account, *, destin
                  actor=actor, command_id=command_id, event_date=event_date)
     txn = MoneyTransaction.objects.create(id=txn_id, business=business, kind=kind, amount=value,
         account=account, destination=destination, contact=contact, note=note,
-        event_date=event_date, journal=entry)
+        event_date=event_date, journal=entry, income_category=income_category)
     if kind == 'expense':
         Expense.objects.create(business=business, category=category, money_transaction=txn)
     return txn

@@ -26,6 +26,7 @@ urlpatterns = [
     path('api/v1/', include('stockkeeper.urls')),
     path('api/v1/', include('products.urls')),
     path('api/v1/', include('accounting.urls')),
+    path('api/v1/', include('sales.urls')),
 ]
 
 if settings.DEBUG:

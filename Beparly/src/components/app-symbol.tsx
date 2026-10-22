@@ -41,6 +41,7 @@ export const symbols = {
   warning: { ios: 'exclamationmark.triangle', android: 'warning_amber', web: 'warning_amber' },
   info: { ios: 'info.circle', android: 'info', web: 'info' },
   plus: { ios: 'plus', android: 'add', web: 'add' },
+  minus: { ios: 'minus', android: 'remove', web: 'remove' },
 } as const satisfies Record<string, SymbolName>;
 
 export type AppSymbolName = keyof typeof symbols;

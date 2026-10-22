@@ -11,7 +11,8 @@ import { elevation, palette, radius, spacing, typography } from '@/constants/des
 import { useAuth } from '@/features/auth/auth-context';
 
 const actions = [
-  { label: 'New sale', icon: 'sale', color: palette.primary, background: palette.primarySoft },
+  { label: 'Sales', icon: 'receipt', color: palette.primary, background: palette.primarySoft },
+  { label: 'POS', icon: 'sale', color: palette.blue, background: palette.blueSoft },
   { label: 'Purchase', icon: 'purchase', color: palette.orange, background: palette.orangeSoft },
   { label: 'Products', icon: 'products', color: palette.blue, background: palette.blueSoft },
   { label: 'Stock', icon: 'stock', color: palette.purple, background: palette.purpleSoft },
@@ -24,6 +25,8 @@ const actions = [
 ] as const satisfies ReadonlyArray<{ label: string; icon: keyof typeof symbols; color: string; background: string }>;
 
 const actionRoutes: Partial<Record<(typeof actions)[number]['label'], string>> = {
+  Sales: '/sales',
+  POS: '/sales/new?mode=quick',
   Products: '/products',
   Stock: '/stock',
   Accounting: '/money',

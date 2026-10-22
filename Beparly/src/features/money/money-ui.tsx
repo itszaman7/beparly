@@ -40,8 +40,8 @@ function Card({ children }: { children: React.ReactNode }) {
   return <YStack backgroundColor="white" borderWidth={1} borderColor={border} borderRadius={18} padding={17} gap={10}>{children}</YStack>;
 }
 
-function Field({ label, value, onChangeText, placeholder, numeric = false }: { label: string; value: string; onChangeText: (value: string) => void; placeholder?: string; numeric?: boolean }) {
-  return <YStack gap={6}>
+function Field({ label, value, onChangeText, placeholder, numeric = false, flex }: { label: string; value: string; onChangeText: (value: string) => void; placeholder?: string; numeric?: boolean; flex?: number }) {
+  return <YStack flex={flex} gap={6}>
     <Text color={ink} fontSize={13} fontWeight="700">{label}</Text>
     <Input value={value} onChangeText={onChangeText} placeholder={placeholder} keyboardType={numeric ? 'decimal-pad' : 'default'}
       height={52} backgroundColor="white" borderColor={border} color={ink} style={{ borderRadius: 12 }} />
@@ -139,6 +139,7 @@ export function MoneyAccountForm() {
   const { token, businessId } = useBusiness();
   const [name, setName] = useState(''); const [kind, setKind] = useState<MoneyAccount['kind']>('bank');
   const [reference, setReference] = useState('');
+  const [showAccountInfo, setShowAccountInfo] = useState(false);
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   const [createCommand] = useState(id());
   async function save() {
@@ -150,9 +151,9 @@ export function MoneyAccountForm() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save account.'); }
     finally { setBusy(false); }
   }
-  return <Page title="Add money account"><Card><Text color={muted}>Cash, bank and wallets each have their own balance. Move existing money with Transfer.</Text></Card>
-      <Field label="Account name" value={name} onChangeText={setName} placeholder="e.g. BRAC Bank or bKash" />
-      <XStack flexWrap="wrap" gap={8}>{(['cash', 'bank', 'wallet', 'other'] as const).map((option) => <Choice key={option} label={option === 'wallet' ? 'Mobile wallet' : option} selected={kind === option} onPress={() => setKind(option)} />)}</XStack>
+  return <Page title="Add money account"><XStack alignItems="center" gap={6}><Text color={ink} fontSize={13} fontWeight="700">Account setup</Text><Pressable accessibilityRole="button" accessibilityLabel="Account setup information" onPress={() => setShowAccountInfo((open) => !open)}><AppSymbol name="info" size={18} color={green} /></Pressable></XStack>{showAccountInfo && <Card><Text color={muted}>Cash, bank and wallets each have their own balance. Move existing money with Transfer.</Text></Card>}
+      <Field label="Account name" value={name} onChangeText={setName} placeholder="Enter a name for this account" />
+      <Text color={ink} fontSize={13} fontWeight="700">Account type</Text><XStack flexWrap="wrap" gap={8}>{(['cash', 'bank', 'wallet', 'other'] as const).map((option) => <Choice key={option} label={option === 'wallet' ? 'Mobile wallet' : option === 'cash' ? 'Cash' : option === 'bank' ? 'Bank' : 'Other'} selected={kind === option} onPress={() => setKind(option)} />)}</XStack>
       <Field label="Masked reference (optional)" value={reference} onChangeText={setReference} placeholder="Last four digits" />
     <ErrorText message={error} /><Button backgroundColor={green} height={52} disabled={busy} onPress={() => void save()}><Text color="white" fontWeight="700">{busy ? 'Saving…' : 'Save account'}</Text></Button>
   </Page>;
@@ -196,6 +197,8 @@ export function MoneyForm() {
   const { token, businessId } = useBusiness();
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]); const [contacts, setContacts] = useState<Contact[]>([]);
   const [categories, setCategories] = useState<{ id: number; name: string }[]>([]);
+  const [incomeCategories, setIncomeCategories] = useState<{ id: number; name: string }[]>([]);
+  const [newCategory, setNewCategory] = useState('');
   const [kind, setKind] = useState<string>(reasons[mode][0][0]); const [amount, setAmount] = useState('');
   const [accountId, setAccountId] = useState(''); const [destinationId, setDestinationId] = useState('');
   const [contactId, setContactId] = useState(''); const [categoryId, setCategoryId] = useState<number | null>(null);
@@ -205,12 +208,21 @@ export function MoneyForm() {
   const [reviewing, setReviewing] = useState(false);
   useFocusEffect(useCallback(() => {
     if (!token || !businessId) return;
-    void Promise.all([api.moneyAccounts(token, businessId), api.contacts(token, businessId), api.expenseCategories(token, businessId)])
-      .then(([money, parties, expenses]) => { setAccounts(money.accounts.filter((item) => item.is_active)); setContacts(parties.contacts); setCategories(expenses.categories);
+    void Promise.all([api.moneyAccounts(token, businessId), api.contacts(token, businessId), api.expenseCategories(token, businessId), api.incomeCategories(token, businessId)])
+      .then(([money, parties, expenses, incomes]) => { setAccounts(money.accounts.filter((item) => item.is_active)); setContacts(parties.contacts); setCategories(expenses.categories); setIncomeCategories(incomes.categories);
         setAccountId((current) => current || money.accounts[0]?.id || ''); setCategoryId((current) => current ?? expenses.categories[0]?.id ?? null); })
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load form choices.'));
   }, [token, businessId]));
   function changed(update: () => void) { update(); setCommand(id()); setReviewing(false); }
+  async function addCategory(type: 'expense' | 'income') {
+    if (!token || !businessId || !newCategory.trim()) return;
+    try {
+      const { category } = await api.createFinancialCategory(token, businessId, type, newCategory.trim());
+      if (type === 'expense') { setCategories((items) => [...items, category]); setCategoryId(category.id); }
+      else { setIncomeCategories((items) => [...items, category]); setCategoryId(category.id); }
+      setNewCategory(''); setCommand(id()); setError('');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not create category.'); }
+  }
   async function submit() {
     if (!token || !businessId || busy) return;
     setBusy(true); setError('');
@@ -218,7 +230,8 @@ export function MoneyForm() {
       await api.postMoneyTransaction(token, businessId, { kind, amount, account_id: accountId,
         ...(kind === 'transfer' ? { destination_id: destinationId } : {}),
         ...(kind.includes('advance') ? { contact_id: contactId } : {}),
-        ...(kind === 'expense' && categoryId ? { category_id: categoryId, event_date: eventDate } : {}), note }, command);
+        ...((kind === 'expense' || kind === 'other_income') && categoryId ? { category_id: categoryId } : {}),
+        ...(kind === 'expense' ? { event_date: eventDate } : {}), note }, command);
       router.replace('/money' as Href);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save transaction.'); }
     finally { setBusy(false); }
@@ -226,11 +239,11 @@ export function MoneyForm() {
   return <Page title={mode === 'in' ? 'Money In' : mode === 'out' ? 'Money Out' : mode === 'transfer' ? 'Transfer money' : 'Expense'}>
     <Text color={muted} fontSize={13}>The amount is confirmed by the server before it changes your balance.</Text>
     <Field label="Amount (৳)" value={amount} onChangeText={(value) => changed(() => setAmount(value))} numeric />
-    <Text color={ink} fontWeight="700">Reason</Text><XStack flexWrap="wrap" gap={8}>{reasons[mode].map(([value, label]) => <Choice key={value} label={label} selected={kind === value} onPress={() => changed(() => setKind(value))} />)}</XStack>
+    <Text color={ink} fontWeight="700">Reason</Text><XStack flexWrap="wrap" gap={8}>{reasons[mode].map(([value, label]) => <Choice key={value} label={label} selected={kind === value} onPress={() => changed(() => { setKind(value); if (value === 'expense') setCategoryId(categories[0]?.id ?? null); if (value === 'other_income') setCategoryId(incomeCategories[0]?.id ?? null); })} />)}</XStack>
     <Text color={ink} fontWeight="700">{mode === 'in' ? 'Received into' : 'Paid from'}</Text><XStack flexWrap="wrap" gap={8}>{accounts.map((item) => <Choice key={item.id} label={item.name} selected={accountId === item.id} onPress={() => changed(() => setAccountId(item.id))} />)}</XStack>
     {kind === 'transfer' && <><Text color={ink} fontWeight="700">Transfer to</Text><XStack flexWrap="wrap" gap={8}>{accounts.filter((item) => item.id !== accountId).map((item) => <Choice key={item.id} label={item.name} selected={destinationId === item.id} onPress={() => changed(() => setDestinationId(item.id))} />)}</XStack></>}
     {kind.includes('advance') && <><Text color={ink} fontWeight="700">{kind.startsWith('customer') ? 'Customer' : 'Supplier'}</Text><XStack flexWrap="wrap" gap={8}>{contacts.filter((item) => kind.startsWith('customer') ? item.is_customer : item.is_supplier).map((item) => <Choice key={item.id} label={item.name} selected={contactId === item.id} onPress={() => changed(() => setContactId(item.id))} />)}</XStack><Button backgroundColor="#E5F8F4" onPress={() => router.push('/contacts' as Href)}><Text color={green}>+ Add contact</Text></Button></>}
-    {kind === 'expense' && <><Text color={ink} fontWeight="700">Category</Text><XStack flexWrap="wrap" gap={8}>{categories.map((item) => <Choice key={item.id} label={item.name} selected={categoryId === item.id} onPress={() => changed(() => setCategoryId(item.id))} />)}</XStack></>}
+    {(kind === 'expense' || kind === 'other_income') && <><Text color={ink} fontWeight="700">{kind === 'expense' ? 'Expense category' : 'Income category'}</Text>{(kind === 'expense' ? categories : incomeCategories).length === 0 && <Text color={muted}>Create a category before recording this {kind === 'expense' ? 'expense' : 'income'}.</Text>}<XStack flexWrap="wrap" gap={8}>{(kind === 'expense' ? categories : incomeCategories).map((item) => <Choice key={item.id} label={item.name} selected={categoryId === item.id} onPress={() => changed(() => setCategoryId(item.id))} />)}</XStack><XStack gap={8}><Field flex={1} label="New category" value={newCategory} onChangeText={setNewCategory} placeholder={kind === 'expense' ? 'e.g. Shop rent' : 'e.g. Delivery income'} /><Button alignSelf="flex-end" backgroundColor="#E5F8F4" onPress={() => void addCategory(kind === 'expense' ? 'expense' : 'income')}><Text color={green}>Add</Text></Button></XStack></>}
     {kind === 'expense' && <Field label="Expense date (YYYY-MM-DD)" value={eventDate} onChangeText={(value) => changed(() => setEventDate(value))} />}
     <Field label="Note (optional)" value={note} onChangeText={(value) => changed(() => setNote(value))} />
     {mode === 'transfer' && reviewing && <Card><Text color={ink} fontWeight="700">Review transfer</Text><Text color={ink}>{accounts.find((item) => item.id === accountId)?.name} → {accounts.find((item) => item.id === destinationId)?.name}</Text><Text color={ink}>{bdt(amount || '0')}</Text></Card>}

@@ -13,10 +13,10 @@ from products.models import Product, StockBatch
 from stockkeeper.models import CostLayer, StockBalance, StockLocation, StockMovement
 from stockkeeper.services import post_adjustment, post_transfer, post_waste, receive
 
-from .models import BusinessAsset, Contact, ExpenseCategory, InventoryAccountingCutoff, JournalEntry, JournalLine, MoneyAccount, MoneyTransaction
+from .models import BusinessAsset, Contact, ExpenseCategory, IncomeCategory, InventoryAccountingCutoff, JournalEntry, JournalLine, MoneyAccount, MoneyTransaction
 from .services import (AccountingError, balance, contact_position, depreciate, dr,
                        create_money_account, ensure_inventory_cutoff, ledger, money_operation, post, purchase_asset,
-                       reverse, sell_asset, setup_business)
+                       create_financial_category, reverse, sell_asset, setup_business)
 from .contracts import purchase_lines, sale_lines
 
 
@@ -27,6 +27,7 @@ class AccountingTests(TestCase):
         BusinessMember.objects.create(user=self.owner, business=self.business, role=BusinessMember.OWNER)
         setup_business(self.business)
         self.cash = MoneyAccount.objects.get(business=self.business, is_default=True)
+        self.assertEqual(ExpenseCategory.objects.filter(business=self.business).count(), 0)
 
     def test_setup_and_balanced_idempotent_posting(self):
         setup_business(self.business)
@@ -87,11 +88,11 @@ class AccountingTests(TestCase):
             money_operation(self.business, self.owner, uuid.uuid4(), 'opening_balance', 100, self.cash)
         money_operation(self.business, self.owner, uuid.uuid4(), 'opening_balance', 100, self.cash, allow_opening=True)
         money_operation(self.business, self.owner, uuid.uuid4(), 'transfer', 30, self.cash, destination=bank)
-        category = ExpenseCategory.objects.get(business=self.business, name='Electricity')
+        category = create_financial_category(self.business, self.owner, 'Electricity', 'expense')
         money_operation(self.business, self.owner, uuid.uuid4(), 'expense', 40, bank, category=category)
         self.assertEqual(balance(self.cash.ledger_account), 70)
         self.assertEqual(balance(bank.ledger_account), -10)
-        self.assertEqual(balance(ledger(self.business, 'OPERATING_EXPENSE')), 40)
+        self.assertEqual(balance(category.ledger_account), 40)
         with self.assertRaises(AccountingError):
             money_operation(self.business, self.owner, uuid.uuid4(), 'opening_balance', 20, self.cash, allow_opening=True)
 
@@ -117,12 +118,37 @@ class AccountingTests(TestCase):
     def test_future_sale_purchase_lines_balance_and_contact_tag(self):
         customer = Contact.objects.create(business=self.business, name='Buyer', is_customer=True)
         supplier = Contact.objects.create(business=self.business, name='Seller', is_supplier=True)
-        sale = sale_lines(self.business, customer, 70000, 30000, Decimal('60000'), self.cash)
+        income = create_financial_category(self.business, self.owner, 'Product sales', 'income')
+        sale = sale_lines(self.business, customer, 70000, 30000, Decimal('60000'), self.cash, income)
         purchase = purchase_lines(self.business, supplier, 20000, 5000, self.cash)
         self.assertEqual(sum((item[1] for item in sale), 0), sum((item[2] for item in sale), 0))
         self.assertEqual(sum((item[1] for item in purchase), 0), sum((item[2] for item in purchase), 0))
         self.assertEqual(next(item[1] for item in sale if item[0].code == 'AR'), 40000)
+        self.assertEqual(next(item[2] for item in sale if item[0].pk == income.ledger_account_id), 70000)
         self.assertEqual(next(item[2] for item in purchase if item[0].code == 'AP'), 15000)
+
+    def test_categories_are_business_scoped_and_post_to_distinct_accounts(self):
+        expense = create_financial_category(self.business, self.owner, 'Rent', 'expense')
+        income = create_financial_category(self.business, self.owner, 'Commission', 'income')
+        self.assertEqual(expense.ledger_account.type, 'expense')
+        self.assertEqual(income.ledger_account.type, 'income')
+        self.assertNotEqual(expense.ledger_account_id, ledger(self.business, 'OPERATING_EXPENSE').pk)
+        with self.assertRaises(AccountingError):
+            create_financial_category(self.business, self.owner, 'rent', 'expense')
+        other = Business.objects.create(name='Category isolation')
+        setup_business(other)
+        with self.assertRaises(AccountingError):
+            money_operation(self.business, self.owner, uuid.uuid4(), 'expense', 10, self.cash,
+                            category=create_financial_category(other, None, 'Rent', 'expense'))
+        expense_txn = money_operation(self.business, self.owner, uuid.uuid4(), 'expense', 10, self.cash, category=expense)
+        income_txn = money_operation(self.business, self.owner, uuid.uuid4(), 'other_income', 15, self.cash, income_category=income)
+        self.assertEqual(balance(expense.ledger_account), Decimal('10'))
+        self.assertEqual(balance(income.ledger_account), Decimal('15'))
+        self.assertEqual(income_txn.income_category_id, income.pk)
+        self.assertEqual(sum((line.debit for line in income_txn.journal.lines.all()), Decimal('0')),
+                         sum((line.credit for line in income_txn.journal.lines.all()), Decimal('0')))
+        with self.assertRaises(AccountingError):
+            money_operation(self.business, self.owner, uuid.uuid4(), 'other_income', 10, self.cash)
 
     def test_inventory_fifo_writeoff_and_expiry_without_automatic_loss(self):
         product = Product.objects.create(business=self.business, name='Milk', sku='MILK-A',
