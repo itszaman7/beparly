@@ -34,6 +34,7 @@ function newSession(result: AuthResult, preferredBusinessId?: number | null): No
       user: result.user,
       business: { id: business.id, name: business.name },
       role: business.role,
+      can_manage_purchases: business.can_manage_purchases,
     } : null,
   };
 }
@@ -68,8 +69,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    void retryRestore();
-    return () => { restoreGeneration.current += 1; };
+    const timeout = setTimeout(() => { void retryRestore(); }, 0);
+    return () => { clearTimeout(timeout); restoreGeneration.current += 1; };
   }, [retryRestore]);
 
   const acceptAuth = useCallback(async (result: AuthResult) => {
@@ -99,6 +100,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user: session.user,
         business: { id: business.id, name: business.name },
         role: business.role,
+        can_manage_purchases: business.can_manage_purchases,
       } });
       void sessionStorage.saveBusinessId(businessId);
     },
@@ -108,7 +110,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession((current) => current && {
         ...current,
         businesses: [...current.businesses, business],
-        account: { user: current.user, business: { id: business.id, name: business.name }, role: business.role },
+        account: { user: current.user, business: { id: business.id, name: business.name }, role: business.role,
+          can_manage_purchases: business.can_manage_purchases },
       });
       await sessionStorage.saveBusinessId(business.id);
     },

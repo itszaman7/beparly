@@ -50,6 +50,7 @@ class SaleLine(models.Model):
     batch = models.ForeignKey('products.StockBatch', null=True, blank=True, on_delete=models.PROTECT)
     product_name = models.CharField(max_length=180)
     variant_name = models.CharField(max_length=180, blank=True)
+    image_url_snapshot = models.CharField(max_length=500, blank=True)
     sku = models.CharField(max_length=64)
     unit_name = models.CharField(max_length=40)
     conversion_factor = models.DecimalField(max_digits=18, decimal_places=3)

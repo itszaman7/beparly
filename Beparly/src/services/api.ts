@@ -4,11 +4,17 @@ export type Account = {
   user: { id: number; name: string; phone: string };
   business: { id: number; name: string; phone?: string; address?: string; logo_url?: string | null };
   role: 'owner' | 'employee';
+  can_manage_purchases?: boolean;
 };
 
-export type BusinessProfile = Account['business'] & { role: Account['role'] };
+export type BusinessProfile = Account['business'] & { role: Account['role']; can_manage_purchases?: boolean };
 export type AuthResult = { token: string; user: Account['user']; businesses: BusinessProfile[] };
-export type Employee = { id: number; name: string; phone: string; can_manage_locations: boolean; can_post_stock: boolean };
+export type Employee = { id: number; name: string; phone: string; can_manage_locations: boolean; can_post_stock: boolean; can_manage_purchases: boolean };
+export type Supplier = { id: string; name: string; phone: string; address: string; area: string; district: string; notes: string; payment_terms: string; to_pay: string; supplier_advance: string; opening_payables?: { id: string; amount: string; paid: string; due: string }[] };
+export type PurchaseLineInput = { product_id: string; variant_id?: string; unit_id?: string; batch_id?: string; quantity: string; unit_cost: string };
+export type PurchaseInput = { supplier_id: string; location_id: number; notes?: string; lines: PurchaseLineInput[] };
+export type PurchaseRecord = { id: string; number: string; status: 'draft' | 'completed' | 'cancelled'; supplier_id: string; supplier_name: string; location_id: number; location_name: string; total: string; paid: string; due: string; notes: string; created_at: string; completed_at: string | null; cancellation_reason: string; lines?: (PurchaseLineInput & { id: number; product_name: string; variant_name: string; sku: string; unit_name: string; lot_code: string; base_quantity: string; line_total: string })[]; operations?: { id: string; kind: string; amount: string; created_at: string }[] };
+export type SupplierAction = { kind: 'payment' | 'payment_refund' | 'advance' | 'advance_refund' | 'apply_advance' | 'allocation_reversal'; amount: string; account_id?: string; purchase_id?: string; opening_id?: string };
 export type StockLocation = {
   id: number;
   business_id: number;
@@ -63,9 +69,10 @@ export type ProductMovement = { id: string; type: string; quantity_change: strin
 export type AuditEvent = { id: string; entity_type: string; entity_id: string; subject: string; location_id: number | null; action: string; changes: Record<string, unknown>; actor: string; created_at: string };
 export type MoneyAccount = { id: string; name: string; kind: 'cash' | 'bank' | 'wallet' | 'other'; masked_reference: string; is_default: boolean; is_active: boolean; balance: string; created_at: string };
 export type MoneyTransaction = { id: string; kind: string; amount: string; account_id: string; destination_id: string | null; contact_id: string | null; note: string; event_date: string; created_at: string; reversed: boolean };
+export type MoneyLedgerEntry = MoneyTransaction & { debit: string; credit: string; change: string; direction: 'in' | 'out' };
 export type Contact = { id: string; name: string; phone: string; customer_type?: 'regular' | 'wholesale'; address?: string; district?: string; area?: string; notes?: string; is_customer: boolean; is_supplier: boolean; customer_advance: string; supplier_advance: string; to_collect: string; to_pay: string };
 export type BusinessAsset = { id: string; name: string; cost: string; residual_value: string; useful_life_months: number; in_service_date: string; sold_on: string | null; depreciated: string; book_value: string };
-export type SaleRecord = { id: string; invoice_number: string; customer_id: string | null; customer_name: string; customer_phone?: string; customer_address?: Record<string, string>; location_id: number; mode: 'quick' | 'manual'; price_tier: 'retail' | 'wholesale'; status: string; payment_status: string; cancellation_reason?: string; subtotal: string; discount: string; total: string; paid: string; due: string; created_at: string; invoice_date?: string; billing_address?: Record<string, string>; delivery_address?: Record<string, string>; source?: string; notes?: string; payment_account_names?: string[]; lines?: { product_id: string; variant_id: string; name: string; variant: string; sku: string; unit: string; quantity: string; unit_price: string; line_total: string }[]; payments?: { id: string; amount: string; account_id: string; kind: string; created_at: string }[] };
+export type SaleRecord = { id: string; invoice_number: string; customer_id: string | null; customer_name: string; customer_phone?: string; customer_address?: Record<string, string>; location_id: number; mode: 'quick' | 'manual'; price_tier: 'retail' | 'wholesale'; status: string; payment_status: string; cancellation_reason?: string; subtotal: string; discount: string; total: string; paid: string; due: string; purchase_cost?: string; profit?: string; item_count?: number; item_quantity?: string; created_at: string; invoice_date?: string; billing_address?: Record<string, string>; delivery_address?: Record<string, string>; source?: string; notes?: string; payment_account_names?: string[]; lines?: { product_id: string; variant_id: string; name: string; variant: string; sku: string; unit: string; quantity: string; unit_price: string; inventory_cost?: string; image_url?: string; line_total: string }[]; payments?: { id: string; amount: string; account_id: string; account_name?: string; kind: string; created_at: string }[] };
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) {
@@ -82,6 +89,12 @@ function apiBaseUrl() {
     throw new ApiError('EXPO_PUBLIC_API_URL must use HTTPS outside development.', 0);
   }
   return baseUrl;
+}
+
+export function resolveAssetUrl(value: string | null | undefined) {
+  if (!value) return null;
+  if (/^(https?:|data:|blob:)/i.test(value)) return value;
+  return `${apiBaseUrl()}${value.startsWith('/') ? '' : '/'}${value}`;
 }
 
 async function request<T>(path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE', data?: object, token?: string, commandId?: string): Promise<T> {
@@ -146,6 +159,32 @@ export const api = {
     request<{ employee: Employee }>(`businesses/${businessId}/employees/${userId}/permissions/`, 'PATCH', { can_manage_locations: enabled }, token),
   setStockPermission: (token: string, businessId: number, userId: number, enabled: boolean) =>
     request<{ employee: Employee }>(`businesses/${businessId}/employees/${userId}/permissions/`, 'PATCH', { can_post_stock: enabled }, token),
+  setPurchasePermission: (token: string, businessId: number, userId: number, enabled: boolean) =>
+    request<{ employee: Employee }>(`businesses/${businessId}/employees/${userId}/permissions/`, 'PATCH', { can_manage_purchases: enabled }, token),
+  suppliers: (token: string, businessId: number, page = 1, search = '') =>
+    request<{ suppliers: Supplier[]; next_page: number | null }>(`businesses/${businessId}/suppliers/?page=${page}&search=${encodeURIComponent(search)}`, 'GET', undefined, token),
+  supplier: (token: string, businessId: number, id: string) =>
+    request<{ supplier: Supplier }>(`businesses/${businessId}/suppliers/${id}/`, 'GET', undefined, token),
+  createSupplier: (token: string, businessId: number, data: Partial<Supplier> & { name: string; opening_payable?: string }, commandId: string) =>
+    request<{ supplier: Supplier }>(`businesses/${businessId}/suppliers/`, 'POST', data, token, commandId),
+  updateSupplier: (token: string, businessId: number, id: string, data: Partial<Supplier>) =>
+    request<{ supplier: Supplier }>(`businesses/${businessId}/suppliers/${id}/`, 'PATCH', data, token),
+  supplierActivity: (token: string, businessId: number, id: string, page = 1) =>
+    request<{ activity: { id: number; description: string; account: string; debit: string; credit: string; created_at: string }[]; next_page: number | null }>(`businesses/${businessId}/suppliers/${id}/operations/?page=${page}`, 'GET', undefined, token),
+  supplierAction: (token: string, businessId: number, id: string, data: SupplierAction, commandId: string) =>
+    request<{ operation: { id: string; kind: string; amount: string } }>(`businesses/${businessId}/suppliers/${id}/operations/`, 'POST', data, token, commandId),
+  purchases: (token: string, businessId: number, page = 1, supplierId?: string) =>
+    request<{ purchases: PurchaseRecord[]; next_page: number | null }>(`businesses/${businessId}/purchases/?page=${page}${supplierId ? `&supplier_id=${supplierId}` : ''}`, 'GET', undefined, token),
+  purchase: (token: string, businessId: number, id: string) =>
+    request<{ purchase: PurchaseRecord }>(`businesses/${businessId}/purchases/${id}/`, 'GET', undefined, token),
+  createPurchase: (token: string, businessId: number, data: PurchaseInput, commandId: string) =>
+    request<{ purchase: PurchaseRecord }>(`businesses/${businessId}/purchases/`, 'POST', data, token, commandId),
+  updatePurchase: (token: string, businessId: number, id: string, data: PurchaseInput, commandId: string) =>
+    request<{ purchase: PurchaseRecord }>(`businesses/${businessId}/purchases/${id}/`, 'PATCH', data, token, commandId),
+  completePurchase: (token: string, businessId: number, id: string, data: { paid: string; account_id?: string }, commandId: string) =>
+    request<{ purchase: PurchaseRecord }>(`businesses/${businessId}/purchases/${id}/complete/`, 'POST', data, token, commandId),
+  cancelPurchase: (token: string, businessId: number, id: string, reason: string, commandId: string) =>
+    request<{ purchase: PurchaseRecord }>(`businesses/${businessId}/purchases/${id}/cancel/`, 'POST', { reason }, token, commandId),
   locations: (token: string, businessId: number) =>
     request<{ locations: StockLocation[]; can_manage_locations: boolean }>(`businesses/${businessId}/locations/`, 'GET', undefined, token),
   location: (token: string, businessId: number, locationId: number) =>
@@ -223,11 +262,15 @@ export const api = {
   fefo: (token: string, businessId: number, id: string, locationId: number) =>
     request<{ recommended_batch_ids: string[] }>(`businesses/${businessId}/products/${id}/fefo/?location_id=${locationId}`, 'GET', undefined, token),
   moneyAccounts: (token: string, businessId: number) =>
-    request<{ accounts: MoneyAccount[]; available_money: string }>(`businesses/${businessId}/money/accounts/`, 'GET', undefined, token),
+    request<{ accounts: MoneyAccount[]; available_money: string; ledger_accounts: { id: string; code?: string; name: string; type: string; system_managed?: boolean; balance: string }[]; income_accounts: { id: string; name: string; balance: string }[]; posted_revenue: string }>(`businesses/${businessId}/money/accounts/`, 'GET', undefined, token),
   createMoneyAccount: (token: string, businessId: number, data: { name: string; kind: MoneyAccount['kind']; masked_reference?: string }, commandId: string) =>
     request<{ account: MoneyAccount }>(`businesses/${businessId}/money/accounts/`, 'POST', data, token, commandId),
   moneyTransactions: (token: string, businessId: number) =>
     request<{ transactions: MoneyTransaction[] }>(`businesses/${businessId}/money/transactions/`, 'GET', undefined, token),
+  moneyAccountLedger: (token: string, businessId: number, accountId: string, startDate?: string, endDate?: string) => {
+    const query = new URLSearchParams(); if (startDate) query.set('start_date', startDate); if (endDate) query.set('end_date', endDate);
+    return request<{ account: MoneyAccount & { type?: string }; opening_balance: string; total_in: string; total_out: string; total_debit: string; total_credit: string; change: string; closing_balance: string; transactions: MoneyLedgerEntry[] }>(`businesses/${businessId}/money/accounts/${accountId}/ledger/${query.size ? `?${query}` : ''}`, 'GET', undefined, token);
+  },
   postMoneyTransaction: (token: string, businessId: number, data: { kind: string; amount: string; account_id: string; destination_id?: string; contact_id?: string; category_id?: number; note?: string; event_date?: string }, commandId: string) =>
     request<{ transaction: MoneyTransaction }>(`businesses/${businessId}/money/transactions/`, 'POST', data, token, commandId),
   reverseMoneyTransaction: (token: string, businessId: number, id: string, reason: string, commandId: string) =>

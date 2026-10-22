@@ -1,6 +1,6 @@
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, ScrollView, Pressable } from 'react-native';
+import { ActivityIndicator, Modal, ScrollView, Pressable, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Input, Text, XStack, YStack } from 'tamagui';
 
@@ -66,6 +66,7 @@ function useBusiness() {
 export function MoneyHome() {
   const { token, businessId, owner } = useBusiness();
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
+  const [ledgerAccounts, setLedgerAccounts] = useState<{ id: string; code?: string; name: string; type: string; system_managed?: boolean; balance: string }[]>([]);
   const [transactions, setTransactions] = useState<MoneyTransaction[]>([]);
   const [available, setAvailable] = useState('0');
   const [loading, setLoading] = useState(true);
@@ -78,7 +79,7 @@ export function MoneyHome() {
     setLoading(true); setError('');
     try {
       const [money, history] = await Promise.all([api.moneyAccounts(token, businessId), api.moneyTransactions(token, businessId)]);
-      setAccounts(money.accounts); setAvailable(money.available_money); setTransactions(history.transactions);
+      setAccounts(money.accounts); setLedgerAccounts(money.ledger_accounts); setAvailable(money.available_money); setTransactions(history.transactions);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load money.'); }
     finally { setLoading(false); }
   }, [token, businessId, owner]);
@@ -99,6 +100,8 @@ export function MoneyHome() {
     const outgoing = ['owner_drawing', 'supplier_advance', 'customer_advance_refund', 'asset_purchase'];
     return historyFilter === 'in' ? incoming.includes(item.kind) : outgoing.includes(item.kind);
   });
+  const visibleAccounts = accounts.slice(0, 5);
+  const visibleLedgerAccounts = ledgerAccounts.filter((account) => !account.system_managed && !accounts.some((money) => money.name === account.name) || account.code === 'SALES').slice(0, Math.max(0, 5 - visibleAccounts.length));
   return <Page title="Money">
     {!owner ? <Card><Text color={muted}>Only the business owner can manage money right now.</Text></Card> : loading ? <ActivityIndicator color={green} /> : <>
       <ErrorText message={error} />
@@ -121,16 +124,27 @@ export function MoneyHome() {
             <Text color={ink} fontSize={14} fontWeight="700">{action.label}</Text>
           </Pressable>)}
       </XStack>
-      <XStack justifyContent="space-between" alignItems="center"><Text color={ink} fontSize={18} fontWeight="700">My accounts</Text><Button borderWidth={1} borderColor={palette.primary} backgroundColor="white" onPress={() => router.push('/money/accounts' as Href)}><AppSymbol name="plus" size={16} color={green} /><Text color={green} fontWeight="700">Add</Text></Button></XStack>
-      {accounts.slice(0, 5).map((account) => <Card key={account.id}><XStack justifyContent="space-between"><Text color={ink} fontWeight="700">{account.name}</Text><Text color={Number(account.balance) < 0 ? '#A62925' : ink} fontWeight="700">{bdt(account.balance)}</Text></XStack><Text color={muted} fontSize={12}>{account.kind === 'wallet' ? 'Mobile wallet' : account.kind}{Number(account.balance) < 0 ? ' · Below zero' : ''}</Text></Card>)}
-      <Button height={48} borderWidth={1} borderColor={palette.primary} backgroundColor="white" onPress={() => router.push('/money/accounts-list' as Href)}><Text color={green} fontWeight="700">View all accounts</Text><AppSymbol name="chevron" size={18} color={green} /></Button>
+      <XStack justifyContent="space-between" alignItems="center"><Text color={ink} fontSize={18} fontWeight="700">Accounts</Text><Button borderWidth={1} borderColor={palette.primary} backgroundColor="white" onPress={() => router.push('/money/accounts' as Href)}><AppSymbol name="plus" size={16} color={green} /><Text color={green} fontWeight="700">Add money account</Text></Button></XStack>
+      {visibleAccounts.map((account) => <Pressable key={account.id} onPress={() => router.push(`/money/account/${account.id}` as Href)}><Card><XStack justifyContent="space-between"><Text color={ink} fontWeight="700">{account.name}</Text><Text color={Number(account.balance) < 0 ? '#A62925' : ink} fontWeight="700">{bdt(account.balance)}</Text></XStack><Text color={muted} fontSize={12}>{account.kind === 'wallet' ? 'Mobile wallet' : account.kind}{Number(account.balance) < 0 ? ' · Below zero' : ''}</Text></Card></Pressable>)}
+      {visibleLedgerAccounts.map((account) => <Pressable key={`ledger-${account.id}`} onPress={() => router.push(`/money/account/${account.id}` as Href)}><Card><XStack justifyContent="space-between"><Text color={ink} fontWeight="700">{account.name}</Text><Text color={ink} fontWeight="700">{bdt(account.balance)}</Text></XStack><Text color={muted} fontSize={12}>{account.type === 'income' ? 'Income' : account.type === 'expense' ? 'Expense' : account.type === 'asset' ? 'Asset' : account.type === 'liability' ? 'Liability' : 'Equity'} account</Text></Card></Pressable>)}
+      <Button height={48} borderWidth={1} borderColor={palette.primary} backgroundColor="white" onPress={() => router.push('/money/accounts-list' as Href)}><Text color={green} fontWeight="700">View all money accounts</Text><AppSymbol name="chevron" size={18} color={green} /></Button>
       <Text color={ink} fontSize={18} fontWeight="700" marginTop={8}>Recent transactions</Text>
       <XStack flexWrap="wrap" gap={7}>{(['all', 'in', 'out', 'transfer', 'expense'] as const).map((value) => <Choice key={value} label={value === 'all' ? 'All' : value === 'expense' ? 'Expenses' : value === 'transfer' ? 'Transfers' : value === 'in' ? 'Money In' : 'Money Out'} selected={historyFilter === value} onPress={() => setHistoryFilter(value)} />)}</XStack>
-      {visibleTransactions.length ? visibleTransactions.map((item) => <Card key={item.id}><XStack justifyContent="space-between"><YStack flex={1}><Text color={ink} fontWeight="700">{item.kind.replaceAll('_', ' ')}</Text><Text color={muted} fontSize={12}>{item.event_date}{item.reversed ? ' · Reversed' : ''}</Text></YStack><Text color={ink} fontWeight="700">{bdt(item.amount)}</Text></XStack>
+      {visibleTransactions.length ? visibleTransactions.slice(0, 5).map((item) => <Card key={item.id}><XStack justifyContent="space-between"><YStack flex={1}><Text color={ink} fontWeight="700">{item.kind.replaceAll('_', ' ')}</Text><Text color={muted} fontSize={12}>{item.event_date}{item.reversed ? ' · Reversed' : ''}</Text></YStack><Text color={ink} fontWeight="700">{bdt(item.amount)}</Text></XStack>
         {!item.reversed && !item.kind.startsWith('asset_') && !item.kind.endsWith('_reversal') && <Button backgroundColor="#FFF5E1" onPress={() => { setReverseId(item.id); setReverseReason(''); setReverseCommand(id()); }}><Text color="#8B5E15">Correct this transaction</Text></Button>}
-        {reverseId === item.id && <><Field label="Why is this being reversed?" value={reverseReason} onChangeText={(value) => { setReverseReason(value); setReverseCommand(id()); }} />
-          <XStack gap={8}><Button flex={1} backgroundColor="#E5F8F4" onPress={() => setReverseId('')}><Text color={green}>Cancel</Text></Button><Button flex={1} backgroundColor="#A62925" disabled={reversing} onPress={() => void submitReversal()}><Text color="white">{reversing ? 'Saving…' : 'Confirm reversal'}</Text></Button></XStack></>}
       </Card>) : <Card><Text color={muted}>No money movements yet.</Text></Card>}
+      <Modal visible={Boolean(reverseId)} transparent animationType="fade" onRequestClose={() => setReverseId('')}>
+        <Pressable style={{ flex: 1, justifyContent: 'center', padding: 20, backgroundColor: 'rgba(15, 25, 22, 0.48)' }} onPress={() => setReverseId('')}>
+          <Pressable onPress={(event) => event.stopPropagation()} style={{ width: '100%', maxWidth: 480, alignSelf: 'center' }}>
+            <YStack backgroundColor="white" borderRadius={20} padding={20} gap={14}>
+              <View style={{ width: 46, height: 46, borderRadius: 15, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFF1F0' }}><AppSymbol name="waste" size={23} color="#A62925" /></View>
+              <YStack gap={5}><Text color={ink} fontSize={20} fontWeight="800">Reverse this transaction?</Text><Text color={muted} fontSize={13} lineHeight={19}>This will create an equal opposite entry and correct the balance. It cannot be silently undone.</Text></YStack>
+              <Field label="Reason for correction" value={reverseReason} onChangeText={(value) => { setReverseReason(value); setReverseCommand(id()); }} placeholder="e.g. Recorded against the wrong account" />
+              <XStack gap={9}><Button flex={1} height={48} backgroundColor="#F6F8F7" onPress={() => setReverseId('')}><Text color={ink} fontWeight="700">Keep transaction</Text></Button><Button flex={1} height={48} backgroundColor="#A62925" disabled={reversing || !reverseReason.trim()} onPress={() => void submitReversal()}><Text color="white" fontWeight="700">{reversing ? 'Reversing…' : 'Yes, reverse'}</Text></Button></XStack>
+            </YStack>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </>}
   </Page>;
 }
@@ -162,24 +176,26 @@ export function MoneyAccountForm() {
 export function MoneyAccountsList() {
   const { token, businessId, owner } = useBusiness();
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
+  const [ledgerAccounts, setLedgerAccounts] = useState<{ id: string; code?: string; name: string; type: string; system_managed?: boolean; balance: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   useFocusEffect(useCallback(() => {
     if (!token || !businessId || !owner) { setLoading(false); return; }
     setLoading(true);
-    void api.moneyAccounts(token, businessId).then((result) => { setAccounts(result.accounts); setError(''); })
+    void api.moneyAccounts(token, businessId).then((result) => { setAccounts(result.accounts); setLedgerAccounts(result.ledger_accounts); setError(''); })
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load accounts.'))
       .finally(() => setLoading(false));
   }, [token, businessId, owner]));
-  return <Page title="My accounts">
+  return <Page title="All accounts">
     {!owner ? <Card><Text color={muted}>Only the business owner can view money accounts.</Text></Card> : <>
       <Button height={50} backgroundColor={green} onPress={() => router.push('/money/accounts' as Href)}><AppSymbol name="plus" size={18} color="white" /><Text color="white" fontWeight="700">Add account</Text></Button>
       <ErrorText message={error} />
       {loading ? <ActivityIndicator color={green} /> : accounts.map((account) =>
-        <Card key={account.id}><XStack justifyContent="space-between" alignItems="center" gap={12}>
+        <Pressable key={account.id} onPress={() => router.push(`/money/account/${account.id}` as Href)}><Card><XStack justifyContent="space-between" alignItems="center" gap={12}>
           <YStack flex={1} gap={4}><Text color={ink} fontSize={16} fontWeight="700">{account.name}</Text><Text color={muted} fontSize={12}>{account.kind === 'wallet' ? 'Mobile wallet' : account.kind}{account.is_default ? ' · Default' : ''}{account.masked_reference ? ` · ${account.masked_reference}` : ''}</Text></YStack>
           <Text color={Number(account.balance) < 0 ? '#A62925' : ink} fontWeight="700">{bdt(account.balance)}</Text>
-        </XStack></Card>)}
+        </XStack></Card></Pressable>)}
+      {ledgerAccounts.filter((item) => (!item.system_managed && !accounts.some((account) => account.name === item.name)) || item.code === 'SALES').map((account) => <Pressable key={`ledger-${account.id}`} onPress={() => router.push(`/money/account/${account.id}` as Href)}><Card><XStack justifyContent="space-between" alignItems="center" gap={12}><YStack flex={1} gap={4}><Text color={ink} fontSize={16} fontWeight="700">{account.name}</Text><Text color={muted} fontSize={12}>{account.code === 'SALES' ? 'Revenue account' : account.type === 'income' ? 'Income category' : account.type === 'expense' ? 'Expense category' : `${account.type} account`}</Text></YStack><Text color={ink} fontWeight="700">{bdt(account.balance)}</Text></XStack></Card></Pressable>)}
     </>}
   </Page>;
 }

@@ -105,7 +105,11 @@ export function ManualStockScreen() {
     finally { setBusy(false); }
   }
   return <Page title="Adjust Stock"><ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
-    <Text style={styles.muted}>Use this for a counted stock correction, not a supplier purchase.</Text>
+    {increase && <><Text style={styles.name}>How is stock coming in?</Text>
+      <Pressable style={[styles.card, styles.selected]}><Text>Add Stock Manually</Text></Pressable>
+      {(session?.account?.role === 'owner' || session?.account?.can_manage_purchases) &&
+        <Pressable style={styles.card} onPress={() => router.push(`/purchases/new?locationId=${locationId || ''}`)}><Text>Purchase from Supplier</Text></Pressable>}
+      <Text style={styles.muted}>Manual stock changes use the existing adjustment flow.</Text></>}
     <View style={{ flexDirection: 'row', gap: 8 }}><Pressable onPress={() => { setIncrease(true); setFinancialReason('count_gain'); }} style={[styles.card, increase && styles.selected]}><Text>Add stock</Text></Pressable><Pressable onPress={() => { setIncrease(false); setFinancialReason('shortage'); }} style={[styles.card, !increase && styles.selected]}><Text>Reduce stock</Text></Pressable></View>
     <Text style={styles.name}>Why did this change? *</Text>
     {(increase ? ([['count_gain', 'Inventory count gain'], ['owner_contribution', 'Owner added stock']] as const) : ([['shortage', 'Shortage or loss'], ...(session?.account?.role === 'owner' ? [['opening_correction', 'Correct opening stock'] as const] : [])] as const)).map(([value, label]) =>

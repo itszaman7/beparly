@@ -159,7 +159,16 @@ function InventoryCell({ value, width, strong = false }: { value: string; width:
   return <View style={[styles.inventoryCell, { width }]}><Text style={strong ? styles.inventoryStrong : styles.inventoryText}>{value}</Text></View>;
 }
 
+function InventoryCard({ item }: { item: LocationOverview['inventory'][number] }) {
+  return <View style={styles.compactCard}><View style={styles.compactCardHeading}><View style={styles.compactProduct}><Text style={styles.compactCardName} numberOfLines={2}>{item.name}</Text><Text style={styles.compactSku}>{item.sku || 'No SKU'}</Text></View><Text style={styles.compactQuantity}>{trimQuantity(item.available_quantity)} {item.unit}</Text></View><View style={styles.compactDetails}><Detail label="Returning" value={item.returning_quantity ?? '—'} /><Detail label="Stock value" value={item.stock_value === null ? '—' : formatBdt(item.stock_value)} /><Detail label="Purchase cost" value={formatBdt(item.purchase_cost)} /><Detail label="Shortage" value={item.shortage_quantity ?? '—'} /></View></View>;
+}
+
+function Detail({ label, value }: { label: string; value: string }) { return <View style={styles.compactDetail}><Text style={styles.compactDetailLabel}>{label}</Text><Text style={styles.compactDetailValue}>{value}</Text></View>; }
+
 export function LocationDetailsScreen() {
+  const { session } = useAuth();
+  const { width: viewportWidth } = useWindowDimensions();
+  const compactTable = viewportWidth < 600;
   const { state, loading, error, refresh, token, businessId, locationId, setError } = useLocation();
   const [busy, setBusy] = useState(false);
   const [confirmDeactivate, setConfirmDeactivate] = useState(false);
@@ -229,25 +238,15 @@ export function LocationDetailsScreen() {
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="About inventory columns" accessibilityState={{ expanded: inventoryHelpOpen }} onPress={() => setInventoryHelpOpen(!inventoryHelpOpen)} style={styles.inventoryHelpButton}><AppSymbol name="info" size={21} color={palette.secondary} /></Pressable>
           </View>
-          {inventoryHelpOpen && <View style={styles.inventoryHelp}><Text style={styles.inventoryHelpText}>Swipe sideways for all columns. Stock value uses the current selling price; purchase cost uses remaining cost layers. “—” means unavailable.</Text></View>}
+          {inventoryHelpOpen && <View style={styles.inventoryHelp}><Text style={styles.inventoryHelpText}>{compactTable ? 'Mobile view presents every stock field in a compact card. “—” means unavailable.' : 'Swipe sideways for all columns. Stock value uses the current selling price; purchase cost uses remaining cost layers. “—” means unavailable.'}</Text></View>}
           {inventoryOpen && (overview.inventory.length ? <>
-            <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator contentContainerStyle={styles.inventoryTable}>
-              <View><View style={styles.inventoryHeaderRow}>
-                <InventoryCell value="SKU" width={110} strong /><InventoryCell value="Product name" width={250} strong />
-                <InventoryCell value="Available qty" width={145} strong /><InventoryCell value="Returning stock" width={140} strong />
-                <InventoryCell value="Stock value" width={150} strong /><InventoryCell value="Purchase cost" width={150} strong />
-                <InventoryCell value="Shortage qty" width={130} strong />
-              </View>{overview.inventory.map((item) => <View key={item.variant_id} style={styles.inventoryRow}>
-                <InventoryCell value={item.sku} width={110} strong /><InventoryCell value={item.name} width={250} />
-                <InventoryCell value={`${trimQuantity(item.available_quantity)} ${item.unit}`} width={145} />
-                <InventoryCell value={item.returning_quantity ?? '—'} width={140} />
-                <InventoryCell value={item.stock_value === null ? '—' : formatBdt(item.stock_value)} width={150} />
-                <InventoryCell value={formatBdt(item.purchase_cost)} width={150} />
-                <InventoryCell value={item.shortage_quantity ?? '—'} width={130} />
-              </View>)}</View>
-            </ScrollView></> : <Text style={styles.emptyInventory}>No products stocked here yet.</Text>)}
+            {compactTable ? <View style={styles.compactCards}>{overview.inventory.map((item) => <InventoryCard key={item.variant_id} item={item} />)}</View> : <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator style={styles.inventoryScroll} contentContainerStyle={styles.inventoryTable}><View style={styles.inventoryTableContent}><View style={styles.inventoryHeaderRow}><InventoryCell value="SKU" width={110} strong /><InventoryCell value="Product name" width={250} strong /><InventoryCell value="Available qty" width={145} strong /><InventoryCell value="Returning stock" width={140} strong /><InventoryCell value="Stock value" width={150} strong /><InventoryCell value="Purchase cost" width={150} strong /><InventoryCell value="Shortage qty" width={130} strong /></View>{overview.inventory.map((item) => <View key={item.variant_id} style={styles.inventoryRow}><InventoryCell value={item.sku} width={110} strong /><InventoryCell value={item.name} width={250} /><InventoryCell value={`${trimQuantity(item.available_quantity)} ${item.unit}`} width={145} /><InventoryCell value={item.returning_quantity ?? '—'} width={140} /><InventoryCell value={item.stock_value === null ? '—' : formatBdt(item.stock_value)} width={150} /><InventoryCell value={formatBdt(item.purchase_cost)} width={150} /><InventoryCell value={item.shortage_quantity ?? '—'} width={130} /></View>)}</View></ScrollView>}
+          </> : <Text style={styles.emptyInventory}>No products stocked here yet.</Text>)}
         </View></>}
       <View style={styles.detailActionGrid}>
+        {(session?.account?.role === 'owner' || session?.account?.can_manage_purchases) &&
+          <DetailAction label="Purchase from Supplier" icon="purchase" color={palette.orange} background={palette.orangeSoft}
+            onPress={() => router.push(`/purchases/new?locationId=${locationId}` as Href)} />}
         {(['transfer', 'adjustment', 'waste'] as const).map((action) =>
           <DetailAction key={action} icon={action} label={action === 'transfer' ? 'Transfer stock' : action === 'adjustment' ? 'Adjust stock' : 'Record waste'}
             color={action === 'transfer' ? palette.orange : action === 'adjustment' ? palette.amber : palette.rose}
@@ -366,12 +365,12 @@ const styles = StyleSheet.create({
   body: { gap: 12, marginTop: 20 },
   loading: { alignItems: 'center', gap: 12, paddingVertical: 32 },
   kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  kpiCard: { aspectRatio: 1, padding: 12, justifyContent: 'space-between', borderWidth: 1, borderColor: palette.border, borderRadius: radius.md, backgroundColor: palette.surface, ...elevation.card },
+  kpiCard: { minHeight: 78, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: palette.border, borderRadius: radius.md, backgroundColor: palette.surface, ...elevation.card },
   kpiCardCompact: { width: '48%' },
   kpiCardWide: { width: '23%' },
   kpiIcon: { width: 40, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
-  kpiBottom: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 4 },
-  kpiValue: { color: palette.ink, fontSize: 23, fontWeight: '700' },
+  kpiBottom: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 4 },
+  kpiValue: { color: palette.ink, fontSize: 21, fontWeight: '700' },
   kpiLabel: { flex: 1, color: palette.secondary, fontSize: 13, fontWeight: '600' },
   sectionHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing.md, marginBottom: 2 },
   listTitle: { color: palette.ink, fontSize: typography.section, fontWeight: '700' },
@@ -415,7 +414,10 @@ const styles = StyleSheet.create({
   inventoryHelpButton: { width: 40, height: 44, alignItems: 'center', justifyContent: 'center' },
   inventoryHelp: { marginHorizontal: 14, marginBottom: 12, padding: 12, borderRadius: radius.sm, backgroundColor: palette.blueSoft },
   inventoryHelpText: { color: palette.secondary, fontSize: 12, lineHeight: 18 },
-  inventoryTable: { paddingBottom: 4 },
+  inventoryScroll: { width: '100%', flexGrow: 0 },
+  inventoryTable: { paddingBottom: 4 }, inventoryTableContent: { minWidth: 1075 },
+  compactInventoryTable: { width: '100%' }, compactInventoryHeader: { minHeight: 42, flexDirection: 'row', alignItems: 'center', backgroundColor: palette.primarySoft, paddingHorizontal: 10, gap: 8 }, compactInventoryRow: { minHeight: 62, flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: palette.border, paddingHorizontal: 10, gap: 8 }, compactProductColumn: { flex: 1, minWidth: 0, textAlign: 'left' }, compactNumberColumn: { width: 92, textAlign: 'right' }, compactSku: { color: palette.muted, fontSize: 10, marginTop: 2 },
+  compactCards: { gap: 8, padding: 10 }, compactCard: { padding: 12, gap: 10, borderRadius: 12, backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border }, compactCardHeading: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }, compactProduct: { flex: 1, minWidth: 0 }, compactCardName: { color: palette.ink, fontSize: 13, lineHeight: 18, fontWeight: '700' }, compactQuantity: { color: palette.primaryDeep, fontSize: 13, fontWeight: '800', textAlign: 'right' }, compactDetails: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingTop: 9, borderTopWidth: 1, borderTopColor: palette.border }, compactDetail: { width: '48%', gap: 2 }, compactDetailLabel: { color: palette.muted, fontSize: 10 }, compactDetailValue: { color: palette.ink, fontSize: 12, fontWeight: '700' },
   inventoryHeaderRow: { flexDirection: 'row', minHeight: 48, alignItems: 'center', backgroundColor: palette.primarySoft },
   inventoryRow: { flexDirection: 'row', minHeight: 58, alignItems: 'center', borderTopWidth: 1, borderTopColor: palette.border },
   inventoryCell: { paddingHorizontal: 10, paddingVertical: 8 },

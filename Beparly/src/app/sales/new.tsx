@@ -7,7 +7,7 @@ import { AppSymbol } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
 import { palette, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
-import { api, Category, Contact, MoneyAccount, Product, StockLocation, Variant } from '@/services/api';
+import { api, Category, Contact, MoneyAccount, Product, resolveAssetUrl, StockLocation, Variant } from '@/services/api';
 
 type SaleStep = 'catalog' | 'confirm';
 type CatalogItem = { key: string; product: Product; variant?: Variant };
@@ -181,7 +181,7 @@ export default function NewSale() {
             return <View key={item.key} style={[styles.productCard, quantity > 0 && styles.productSelected]}>
               <Pressable disabled={outOfStock} onPress={() => changeQuantity(item.key, 1)} accessibilityRole="button" accessibilityLabel={outOfStock ? `${product.name} out of stock` : `Add ${product.name} to sale`}>
                 <View style={styles.productImageWrap}>
-                  {product.image_url ? <Image source={{ uri: product.image_url }} style={styles.productImage} resizeMode="cover" /> : <AppSymbol name="products" size={34} color={palette.primaryDeep} />}
+                  {resolveAssetUrl(product.image_url) ? <Image source={{ uri: resolveAssetUrl(product.image_url) ?? undefined }} style={styles.productImage} resizeMode="cover" /> : <AppSymbol name="products" size={34} color={palette.primaryDeep} />}
                   {quantity > 0 ? <View style={styles.selectedMark}><AppSymbol name="activate" size={16} color="white" /></View> : null}
                   {outOfStock ? <View style={styles.outOfStockBadge}><Text style={styles.outOfStockText}>Out of stock</Text></View> : null}
                 </View>
@@ -226,7 +226,7 @@ export default function NewSale() {
             const quantity = cart[item.key];
             const price = Number(mode === 'quick' || tier === 'retail' ? (variant?.retail_price ?? product.retail_price) : (variant?.wholesale_price ?? product.wholesale_price)) || 0;
             return <View key={item.key} style={styles.billRow}>
-              <View style={styles.billCopy}><Text style={styles.billName}>{product.name}{variant?.label ? ` · ${variant.label}` : ''}</Text><Text style={styles.billMeta}>{quantity} × ৳{price.toFixed(2)}</Text></View>
+              <View style={{ width: 44, height: 44, borderRadius: 10, overflow: 'hidden', backgroundColor: palette.primarySoft, alignItems: 'center', justifyContent: 'center' }}>{resolveAssetUrl(product.image_url) ? <Image source={{ uri: resolveAssetUrl(product.image_url) ?? undefined }} style={{ width: '100%', height: '100%' }} resizeMode="cover" /> : <AppSymbol name="products" size={20} color={palette.primaryDeep} />}</View><View style={styles.billCopy}><Text style={styles.billName}>{product.name}{variant?.label ? ` · ${variant.label}` : ''}</Text><Text style={styles.billMeta}>{quantity} × ৳{price.toFixed(2)}</Text></View>
               <Text style={styles.billAmount}>৳{(quantity * price).toFixed(2)}</Text>
               <Stepper quantity={quantity} onMinus={() => changeQuantity(item.key, -1)} onPlus={() => changeQuantity(item.key, 1)} compact />
             </View>;

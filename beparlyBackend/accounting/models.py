@@ -53,6 +53,7 @@ class Contact(models.Model):
     district = models.CharField(max_length=80, blank=True)
     area = models.CharField(max_length=100, blank=True)
     notes = models.TextField(blank=True)
+    payment_terms = models.CharField(max_length=240, blank=True)
     created_by = models.ForeignKey('accounts.User', null=True, blank=True, on_delete=models.PROTECT, related_name='created_contacts')
     is_customer = models.BooleanField(default=False)
     customer_type = models.CharField(max_length=12, choices=CUSTOMER_TYPE_CHOICES, default=REGULAR)

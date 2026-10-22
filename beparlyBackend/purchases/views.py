@@ -1,0 +1,214 @@
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError
+from django.http import JsonResponse
+from django.views.decorators.csrf import csrf_exempt
+
+from accounting.models import Contact, JournalLine, MoneyAccount
+from accounting.services import AccountingError, command_uuid, contact_position
+from accounts.models import BusinessMember
+from accounts.views import body, current_member, current_session, error
+from stockkeeper.services import StockError
+
+from .models import OpeningPayable, Purchase, SupplierOperation
+from .services import (PurchaseError, cancel_purchase, complete_purchase, create_supplier, purchase_data,
+                       save_draft, supplier_data, supplier_operation, update_supplier)
+
+
+def access(request, business_id):
+    session = current_session(request)
+    if not session:
+        return None, None, error('unauthorized', 'Please sign in.', 401)
+    member = current_member(session, business_id)
+    if not member:
+        return None, None, error('not_found', 'Business not found.', 404)
+    if member.role != BusinessMember.OWNER and not member.can_manage_purchases:
+        return None, None, error('forbidden', 'You cannot manage purchases.', 403)
+    return member, session, None
+
+
+def invalid(exc):
+    return error('invalid_input', str(exc))
+
+
+def page_number(request):
+    try:
+        value = int(request.GET.get('page', '1'))
+    except ValueError:
+        raise PurchaseError('Choose a valid page.') from None
+    if not 1 <= value <= 100000:
+        raise PurchaseError('Choose a valid page.')
+    return value
+
+
+def page(rows, number, size=25):
+    start = (number - 1) * size
+    items = list(rows[start:start + size + 1])
+    return items[:size], number + 1 if len(items) > size else None
+
+
+@csrf_exempt
+def suppliers(request, business_id):
+    if request.method not in ('GET', 'POST'):
+        return error('method_not_allowed', 'Use GET or POST.', 405)
+    member, session, problem = access(request, business_id)
+    if problem:
+        return problem
+    try:
+        if request.method == 'GET':
+            rows = Contact.objects.filter(business=member.business, is_supplier=True, is_active=True).order_by('name', 'id')
+            search = request.GET.get('search', '').strip()
+            if search:
+                rows = rows.filter(name__icontains=search) if not search.isdigit() else rows.filter(phone__icontains=search)
+            items, next_page = page(rows, page_number(request))
+            return JsonResponse({'suppliers': [supplier_data(item) for item in items], 'next_page': next_page})
+        supplier = create_supplier(member.business, session.user, body(request), command_uuid(request.headers.get('X-Command-ID')))
+        return JsonResponse({'supplier': supplier_data(supplier)}, status=201)
+    except (ValueError, StockError, AccountingError, ValidationError) as exc:
+        return invalid(exc)
+    except IntegrityError:
+        return error('conflict', 'Supplier command conflicted. Retry with the original command ID.', 409)
+
+
+@csrf_exempt
+def supplier_detail(request, business_id, supplier_id):
+    if request.method not in ('GET', 'PATCH'):
+        return error('method_not_allowed', 'Use GET or PATCH.', 405)
+    member, session, problem = access(request, business_id)
+    if problem:
+        return problem
+    supplier = Contact.objects.filter(business=member.business, pk=supplier_id, is_supplier=True).first()
+    if not supplier:
+        return error('not_found', 'Supplier not found.', 404)
+    try:
+        if request.method == 'PATCH':
+            update_supplier(supplier, session.user, body(request))
+        result = supplier_data(supplier)
+        if request.method == 'GET':
+            openings = OpeningPayable.objects.filter(business=member.business, supplier=supplier).order_by('created_at')
+            result['opening_payables'] = [{'id': str(item.pk), 'amount': str(item.amount),
+                'paid': str(item.paid), 'due': str(item.amount - item.paid)} for item in openings]
+        return JsonResponse({'supplier': result})
+    except (ValueError, ValidationError) as exc:
+        return invalid(exc)
+
+
+@csrf_exempt
+def supplier_operations(request, business_id, supplier_id):
+    if request.method not in ('GET', 'POST'):
+        return error('method_not_allowed', 'Use GET or POST.', 405)
+    member, session, problem = access(request, business_id)
+    if problem:
+        return problem
+    supplier = Contact.objects.filter(business=member.business, pk=supplier_id, is_supplier=True).first()
+    if not supplier:
+        return error('not_found', 'Supplier not found.', 404)
+    try:
+        if request.method == 'GET':
+            rows = JournalLine.objects.filter(entry__business=member.business, contact=supplier,
+                account__code__in=['AP', 'SUPPLIER_ADVANCE']).select_related('entry', 'account').order_by('-entry__created_at', '-pk')
+            items, next_page = page(rows, page_number(request))
+            return JsonResponse({'activity': [{'id': item.pk, 'entry_id': str(item.entry_id),
+                'account': item.account.code, 'description': item.entry.description,
+                'debit': str(item.debit), 'credit': str(item.credit),
+                'created_at': item.entry.created_at.isoformat()} for item in items],
+                'next_page': next_page, 'position': contact_position(supplier)})
+        data = body(request)
+        kind = data.get('kind')
+        purchase = Purchase.objects.filter(business=member.business, supplier=supplier, pk=data.get('purchase_id')).first() if data.get('purchase_id') else None
+        opening = OpeningPayable.objects.filter(business=member.business, supplier=supplier, pk=data.get('opening_id')).first() if data.get('opening_id') else None
+        if data.get('purchase_id') and not purchase or data.get('opening_id') and not opening:
+            raise PurchaseError('Selected payable is unavailable.')
+        account = MoneyAccount.objects.filter(business=member.business, pk=data.get('account_id')).first() if data.get('account_id') else None
+        operation = supplier_operation(member.business, supplier, session.user,
+            command_uuid(request.headers.get('X-Command-ID')), kind, data.get('amount'),
+            purchase=purchase, opening=opening, account=account)
+        return JsonResponse({'operation': {'id': str(operation.pk), 'kind': operation.kind,
+            'amount': str(operation.amount)}, 'position': contact_position(supplier)}, status=201)
+    except (ValueError, StockError, AccountingError, ValidationError) as exc:
+        return invalid(exc)
+    except IntegrityError:
+        return error('conflict', 'Supplier action conflicted. Retry with the original command ID.', 409)
+
+
+@csrf_exempt
+def purchases(request, business_id):
+    if request.method not in ('GET', 'POST'):
+        return error('method_not_allowed', 'Use GET or POST.', 405)
+    member, session, problem = access(request, business_id)
+    if problem:
+        return problem
+    try:
+        if request.method == 'GET':
+            rows = Purchase.objects.filter(business=member.business).select_related('supplier', 'location').order_by('-created_at', '-id')
+            if request.GET.get('supplier_id'):
+                rows = rows.filter(supplier_id=request.GET['supplier_id'])
+            items, next_page = page(rows, page_number(request))
+            return JsonResponse({'purchases': [purchase_data(item) for item in items], 'next_page': next_page})
+        purchase = save_draft(member.business, session.user,
+            command_uuid(request.headers.get('X-Command-ID')), body(request))
+        return JsonResponse({'purchase': purchase_data(purchase, True)}, status=201)
+    except (ValueError, StockError, AccountingError, ValidationError) as exc:
+        return invalid(exc)
+    except IntegrityError:
+        return error('conflict', 'Purchase command conflicted. Retry with the original command ID.', 409)
+
+
+@csrf_exempt
+def purchase_detail(request, business_id, purchase_id):
+    if request.method not in ('GET', 'PATCH'):
+        return error('method_not_allowed', 'Use GET or PATCH.', 405)
+    member, session, problem = access(request, business_id)
+    if problem:
+        return problem
+    purchase = Purchase.objects.filter(business=member.business, pk=purchase_id).select_related('supplier', 'location').first()
+    if not purchase:
+        return error('not_found', 'Purchase not found.', 404)
+    try:
+        if request.method == 'PATCH':
+            purchase = save_draft(member.business, session.user,
+                command_uuid(request.headers.get('X-Command-ID')), body(request), purchase)
+        return JsonResponse({'purchase': purchase_data(purchase, True)})
+    except (ValueError, StockError, AccountingError, ValidationError) as exc:
+        return invalid(exc)
+
+
+@csrf_exempt
+def purchase_complete(request, business_id, purchase_id):
+    if request.method != 'POST':
+        return error('method_not_allowed', 'Use POST.', 405)
+    member, session, problem = access(request, business_id)
+    if problem:
+        return problem
+    purchase = Purchase.objects.filter(business=member.business, pk=purchase_id).first()
+    if not purchase:
+        return error('not_found', 'Purchase not found.', 404)
+    try:
+        data = body(request)
+        account = MoneyAccount.objects.filter(business=member.business, pk=data.get('account_id'), is_active=True).first() if data.get('account_id') else None
+        purchase = complete_purchase(purchase, session.user,
+            command_uuid(request.headers.get('X-Command-ID')), data.get('paid', '0'), account)
+        return JsonResponse({'purchase': purchase_data(purchase, True)})
+    except (ValueError, StockError, AccountingError, ValidationError) as exc:
+        return invalid(exc)
+    except IntegrityError:
+        return error('conflict', 'Purchase completion conflicted. Retry with the original command ID.', 409)
+
+
+@csrf_exempt
+def purchase_cancel(request, business_id, purchase_id):
+    if request.method != 'POST':
+        return error('method_not_allowed', 'Use POST.', 405)
+    member, session, problem = access(request, business_id)
+    if problem:
+        return problem
+    purchase = Purchase.objects.filter(business=member.business, pk=purchase_id).first()
+    if not purchase:
+        return error('not_found', 'Purchase not found.', 404)
+    try:
+        purchase = cancel_purchase(purchase, session.user,
+            command_uuid(request.headers.get('X-Command-ID')), body(request).get('reason'))
+        return JsonResponse({'purchase': purchase_data(purchase, True)})
+    except (ValueError, StockError, AccountingError, ValidationError) as exc:
+        return invalid(exc)
+    except IntegrityError:
+        return error('conflict', 'Cancellation command conflicted. Retry with the original command ID.', 409)

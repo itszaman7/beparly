@@ -2,9 +2,10 @@ from decimal import Decimal, ROUND_HALF_UP
 from uuid import uuid4
 
 from django.db import transaction
+from django.core.files.storage import default_storage
 from django.utils.dateparse import parse_date
 
-from accounting.models import Contact, IncomeCategory, MoneyAccount, MoneyTransaction
+from accounting.models import Contact, IncomeCategory, JournalEntry, MoneyAccount, MoneyTransaction
 from accounting.services import AccountingError, amount, cr, dr, ledger, post, create_financial_category
 from accounts.models import Business
 from audit.services import record
@@ -127,7 +128,9 @@ def create_sale(business, actor, command_id, data):
             line_cost, portions = consume(product, variant, location, base, batch)
             cost += line_cost
             SaleLine.objects.create(sale=sale, product=product, variant=variant, batch=batch,
-                product_name=product.name, variant_name=variant.label, sku=variant.sku, unit_name=unit_name,
+                product_name=product.name, variant_name=variant.label,
+                image_url_snapshot=default_storage.url(product.image_key) if product.image_key else '',
+                sku=variant.sku, unit_name=unit_name,
                 conversion_factor=factor, quantity=quantity, base_quantity=base, unit_price=price,
                 line_total=line_total, inventory_cost=line_cost,
                 cost_layers=[{'quantity': str(portion_qty), 'unit_cost': str(unit_cost)} for portion_qty, unit_cost in portions])
@@ -239,6 +242,9 @@ def cancel_sale(sale, actor, command_id, reason):
 
 
 def serialize_sale(sale, include_lines=False):
+    lines = list(sale.lines.all())
+    purchase_cost = sum((line.inventory_cost for line in lines), Decimal('0'))
+    active_total = Decimal('0') if sale.status == 'cancelled' else sale.total
     result = {'id': str(sale.pk), 'invoice_number': sale.invoice_number, 'customer_id': str(sale.customer_id) if sale.customer_id else None,
         'customer_name': sale.customer_name_snapshot or (sale.customer.name if sale.customer_id else 'Walk-in Customer'),
         'customer_phone': sale.customer_phone_snapshot, 'customer_address': sale.customer_address_snapshot,
@@ -246,14 +252,16 @@ def serialize_sale(sale, include_lines=False):
         'mode': sale.mode, 'price_tier': sale.price_tier, 'status': sale.status, 'payment_status': sale.payment_status,
         'cancellation_reason': sale.cancellation_reason,
         'subtotal': str(sale.subtotal), 'discount': str(sale.discount), 'total': str(sale.total), 'paid': str(sale.paid),
+        'purchase_cost': str(purchase_cost), 'profit': str(active_total - purchase_cost),
+        'item_count': len(lines), 'item_quantity': str(sum((line.quantity for line in lines), Decimal('0'))),
         'due': str(Decimal('0') if sale.status == 'cancelled' else sale.total-sale.paid), 'created_at': sale.created_at.isoformat(),
         'invoice_date': sale.invoice_date.isoformat(), 'billing_address': sale.billing_address,
         'delivery_address': sale.delivery_address, 'source': sale.source, 'notes': sale.notes,
         'payment_account_names': [payment.account.name for payment in sale.payments.all() if payment.kind == 'receipt']}
     if include_lines:
         result['lines'] = [{'product_id': str(line.product_id), 'variant_id': str(line.variant_id), 'name': line.product_name,
-            'variant': line.variant_name, 'sku': line.sku, 'unit': line.unit_name, 'quantity': str(line.quantity),
-            'unit_price': str(line.unit_price), 'line_total': str(line.line_total)} for line in sale.lines.all()]
+            'variant': line.variant_name, 'image_url': line.image_url_snapshot, 'sku': line.sku, 'unit': line.unit_name, 'quantity': str(line.quantity),
+            'unit_price': str(line.unit_price), 'inventory_cost': str(line.inventory_cost), 'line_total': str(line.line_total)} for line in lines]
         result['payments'] = [{'id': str(payment.pk), 'amount': str(payment.amount), 'account_id': str(payment.account_id),
-            'kind': payment.kind, 'created_at': payment.created_at.isoformat()} for payment in sale.payments.all()]
+            'account_name': payment.account.name, 'kind': payment.kind, 'created_at': payment.created_at.isoformat()} for payment in sale.payments.all()]
     return result

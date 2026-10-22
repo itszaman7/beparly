@@ -22,10 +22,11 @@ const actions = [
   { label: 'Reports', icon: 'reports', color: palette.blue, background: palette.blueSoft },
   { label: 'Accounting', icon: 'money', color: palette.primary, background: palette.primarySoft },
   { label: 'Expense', icon: 'expense', color: palette.orange, background: palette.orangeSoft },
-] as const satisfies ReadonlyArray<{ label: string; icon: keyof typeof symbols; color: string; background: string }>;
+] as const satisfies readonly { label: string; icon: keyof typeof symbols; color: string; background: string }[];
 
 const actionRoutes: Partial<Record<(typeof actions)[number]['label'], string>> = {
   Sales: '/sales',
+  Purchase: '/purchases',
   POS: '/sales/new?mode=quick',
   Products: '/products',
   Stock: '/stock',
@@ -38,7 +39,7 @@ const overview = [
   { label: 'Supplier due', value: '৳3,200', detail: 'To pay', icon: 'purchase', color: palette.orange, background: palette.orangeSoft },
   { label: 'Low stock', value: '—', detail: 'Available with Products', icon: 'stock', color: palette.amber, background: palette.amberSoft },
   { label: 'Expenses', value: '৳1,450', detail: 'Today', icon: 'reports', color: palette.purple, background: palette.purpleSoft },
-] as const satisfies ReadonlyArray<{ label: string; value: string; detail: string; icon: keyof typeof symbols; color: string; background: string }>;
+] as const satisfies readonly { label: string; value: string; detail: string; icon: keyof typeof symbols; color: string; background: string }[];
 
 export default function HomeScreen() {
   const { session } = useAuth();
@@ -47,7 +48,9 @@ export default function HomeScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
 
   useEffect(() => {
-    if (businessPicker === '1') setPickerOpen(true);
+    if (businessPicker !== '1') return;
+    const timeout = setTimeout(() => setPickerOpen(true), 0);
+    return () => clearTimeout(timeout);
   }, [businessPicker]);
 
   useEffect(() => {
@@ -93,7 +96,7 @@ export default function HomeScreen() {
                 <View style={styles.salesTop}>
                   <View style={styles.salesTitleRow}>
                     <View style={styles.salesIcon}><AppSymbol name="arrow" size={18} color={palette.primary} /></View>
-                    <Text style={styles.salesLabel}>Today's sales</Text>
+                    <Text style={styles.salesLabel}>Today&apos;s sales</Text>
                   </View>
                   <View style={styles.samplePill}><Text style={styles.sampleText}>SAMPLE DATA</Text></View>
                 </View>
@@ -111,7 +114,7 @@ export default function HomeScreen() {
             <View>
               <Entrance delay={130}><SectionTitle title="Quick actions" /></Entrance>
               <View style={styles.actionGrid}>
-                {actions.filter((action) => account.role === 'owner' || (action.label !== 'Accounting' && action.label !== 'Expense')).map((action, index) => (
+                {actions.filter((action) => account.role === 'owner' || ((action.label !== 'Accounting' && action.label !== 'Expense') && (action.label !== 'Purchase' || account.can_manage_purchases))).map((action, index) => (
                   <Entrance key={action.label} delay={160 + index * 45} style={styles.actionSlot}>
                     <PressScale
                       onPress={() => {

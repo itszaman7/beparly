@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
+from django.db.models import Sum
 from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -9,7 +10,7 @@ from django.views.decorators.csrf import csrf_exempt
 from accounts.models import BusinessMember
 from accounts.views import body, current_member, current_session, error
 
-from .models import AssetDepreciation, BusinessAsset, Contact, ExpenseCategory, IncomeCategory, JournalLine, MoneyAccount, MoneyTransaction, normalize_customer_phone
+from .models import AssetDepreciation, BusinessAsset, Contact, ExpenseCategory, IncomeCategory, JournalEntry, JournalLine, LedgerAccount, MoneyAccount, MoneyTransaction, normalize_customer_phone
 from .services import (AccountingError, amount, balance, command_uuid, contact_position,
                        create_money_account, depreciate, money_operation, purchase_asset,
                        create_financial_category, reverse, sell_asset, setup_business)
@@ -56,6 +57,22 @@ def serialize_txn(item):
             'reversed': hasattr(item.journal, 'reversal')}
 
 
+def serialize_income_account(item):
+    totals = JournalLine.objects.filter(account=item).aggregate(debit=Sum('debit'), credit=Sum('credit'))
+    value = (totals['credit'] or Decimal('0')) - (totals['debit'] or Decimal('0'))
+    return {'id': item.code, 'name': item.name, 'balance': str(value)}
+
+
+def serialize_ledger_account(item):
+    totals = JournalLine.objects.filter(account=item).aggregate(debit=Sum('debit'), credit=Sum('credit'))
+    if item.type in ('liability', 'equity', 'income'):
+        value = (totals['credit'] or Decimal('0')) - (totals['debit'] or Decimal('0'))
+    else:
+        value = (totals['debit'] or Decimal('0')) - (totals['credit'] or Decimal('0'))
+    return {'id': item.code, 'code': item.code, 'name': item.name, 'type': item.type,
+            'system_managed': item.system_managed, 'balance': str(value)}
+
+
 @csrf_exempt
 def money_accounts(request, business_id):
     if request.method not in ('GET', 'POST'):
@@ -67,7 +84,12 @@ def money_accounts(request, business_id):
     if request.method == 'GET':
         accounts = MoneyAccount.objects.filter(business_id=business_id).select_related('ledger_account').order_by('-created_at', '-id')
         rows = [serialize_account(item) for item in accounts]
-        return JsonResponse({'accounts': rows, 'available_money': str(sum((Decimal(row['balance']) for row in rows), Decimal('0')))})
+        income_accounts = LedgerAccount.objects.filter(business_id=business_id, type='income', is_active=True).order_by('name', 'code')
+        income_rows = [serialize_income_account(item) for item in income_accounts]
+        ledger_accounts = LedgerAccount.objects.filter(business_id=business_id, is_active=True).order_by('type', 'name', 'code')
+        return JsonResponse({'accounts': rows, 'available_money': str(sum((Decimal(row['balance']) for row in rows), Decimal('0'))),
+            'ledger_accounts': [serialize_ledger_account(item) for item in ledger_accounts],
+            'income_accounts': income_rows, 'posted_revenue': str(sum((Decimal(row['balance']) for row in income_rows), Decimal('0')))})
     try:
         data = body(request)
         item = create_money_account(member.business, str(data.get('name', '')).strip(), data.get('kind'),
@@ -105,6 +127,63 @@ def money_transactions(request, business_id):
         return error('invalid_input', str(exc))
     except IntegrityError:
         return error('conflict', 'This command conflicts with a posted transaction.', 409)
+
+
+@csrf_exempt
+def money_account_ledger(request, business_id, account_id):
+    if request.method != 'GET':
+        return error('method_not_allowed', 'Use GET.', 405)
+    member, problem = owner(request, business_id)
+    if problem:
+        return problem
+    money_account = MoneyAccount.objects.filter(business=member.business, pk=account_id, is_active=True).select_related('ledger_account').first()
+    ledger_account = money_account.ledger_account if money_account else LedgerAccount.objects.filter(
+        business=member.business, code=account_id, is_active=True).first()
+    if not ledger_account:
+        return error('not_found', 'Money account not found.', 404)
+    try:
+        start = parse_date(request.GET.get('start_date'))
+        end = parse_date(request.GET.get('end_date'))
+        if start and end and start > end:
+            raise AccountingError('Start date cannot be after end date.')
+    except AccountingError as exc:
+        return error('invalid_input', str(exc))
+    normal_credit = ledger_account.type in ('liability', 'equity', 'income')
+    all_entries = JournalEntry.objects.filter(business=member.business, lines__account=ledger_account).distinct().order_by('event_date', 'created_at')
+    before = all_entries.filter(event_date__lt=start) if start else JournalEntry.objects.none()
+    opening_lines = JournalLine.objects.filter(account=ledger_account, entry__in=before).aggregate(debit=Sum('debit'), credit=Sum('credit'))
+    opening = ((opening_lines['credit'] or Decimal('0')) - (opening_lines['debit'] or Decimal('0'))) if normal_credit else ((opening_lines['debit'] or Decimal('0')) - (opening_lines['credit'] or Decimal('0')))
+    filtered = all_entries
+    if start:
+        filtered = filtered.filter(event_date__gte=start)
+    if end:
+        filtered = filtered.filter(event_date__lte=end)
+    entries = []
+    total_in = Decimal('0')
+    total_out = Decimal('0')
+    total_debit = Decimal('0')
+    total_credit = Decimal('0')
+    for item in filtered[:500]:
+        line = item.lines.filter(account=ledger_account).aggregate(debit=Sum('debit'), credit=Sum('credit'))
+        total_debit += line['debit'] or Decimal('0')
+        total_credit += line['credit'] or Decimal('0')
+        change = ((line['credit'] or Decimal('0')) - (line['debit'] or Decimal('0'))) if normal_credit else ((line['debit'] or Decimal('0')) - (line['credit'] or Decimal('0')))
+        if change >= 0:
+            total_in += change
+        else:
+            total_out += -change
+        entries.append({'id': str(item.pk), 'kind': item.source_type, 'amount': str(abs(change)),
+            'account_id': account_id, 'destination_id': None, 'contact_id': None, 'note': item.description,
+            'event_date': item.event_date.isoformat(), 'created_at': item.created_at.isoformat(),
+            'reversed': bool(item.reverses_id), 'debit': str(line['debit'] or Decimal('0')),
+            'credit': str(line['credit'] or Decimal('0')), 'change': str(change),
+            'direction': 'in' if change >= 0 else 'out'})
+    closing = opening + total_in - total_out
+    account_data = serialize_account(money_account) if money_account else serialize_ledger_account(ledger_account)
+    return JsonResponse({'account': account_data, 'opening_balance': str(opening),
+        'total_in': str(total_in), 'total_out': str(total_out), 'total_debit': str(total_debit),
+        'total_credit': str(total_credit), 'change': str(total_in - total_out),
+        'closing_balance': str(closing), 'transactions': entries})
 
 
 @csrf_exempt

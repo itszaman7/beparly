@@ -99,7 +99,7 @@ def validate_batch(variant, batch):
 
 
 @transaction.atomic
-def receive(product, location, quantity, unit_cost, actor, reference_id, movement_type='opening', reason='', batch=None, unit_id=None, variant=None, financial_reason=None):
+def receive(product, location, quantity, unit_cost, actor, reference_id, movement_type='opening', reason='', batch=None, unit_id=None, variant=None, financial_reason=None, post_inventory_journal=True):
     if product.business_id != location.business_id:
         raise StockError('Product and location must belong to the same business.')
     variant = variant or resolve_variant(product)
@@ -122,7 +122,8 @@ def receive(product, location, quantity, unit_cost, actor, reference_id, movemen
                                         conversion_factor=factor, actor=actor,
                                         reference_id=reference_id, reason=reason)
     audit_movement(movement)
-    financial_stock_movement(movement, financial_reason or ('opening' if movement_type == 'opening' else 'count_gain'))
+    if post_inventory_journal:
+        financial_stock_movement(movement, financial_reason or ('opening' if movement_type == 'opening' else 'count_gain'))
     return movement
 
 

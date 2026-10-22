@@ -82,7 +82,7 @@ def account_data(user):
         'businesses': [
             {'id': member.business_id, 'name': member.business.name, 'phone': member.business.phone,
              'address': member.business.address, 'logo_url': member.business.logo.url if member.business.logo else None,
-             'role': member.role}
+             'role': member.role, 'can_manage_purchases': member.role == BusinessMember.OWNER or member.can_manage_purchases}
             for member in BusinessMember.objects.select_related('business').filter(user=user).order_by('id')
         ],
     }
@@ -208,7 +208,8 @@ def business_profile(request, business_id):
             return error('invalid_input', str(exc))
     business = member.business
     return JsonResponse({'business': {'id': business.id, 'name': business.name, 'phone': business.phone,
-        'address': business.address, 'logo_url': business.logo.url if business.logo else None, 'role': member.role}})
+        'address': business.address, 'logo_url': business.logo.url if business.logo else None, 'role': member.role,
+        'can_manage_purchases': member.role == BusinessMember.OWNER or member.can_manage_purchases}})
 
 
 @csrf_exempt
@@ -229,7 +230,8 @@ def employees(request, business_id):
         ).order_by('user__first_name', 'id')
         return JsonResponse({'employees': [
             {'id': item.user_id, 'name': item.user.first_name, 'phone': item.user.phone,
-             'can_manage_locations': item.can_manage_locations, 'can_post_stock': item.can_post_stock}
+             'can_manage_locations': item.can_manage_locations, 'can_post_stock': item.can_post_stock,
+             'can_manage_purchases': item.can_manage_purchases}
             for item in members
         ]})
     try:
@@ -249,7 +251,8 @@ def employees(request, business_id):
     except IntegrityError:
         return error('phone_in_use', 'An account with this phone number already exists.', 409)
     return JsonResponse({'employee': {'id': user.id, 'name': user.first_name, 'phone': user.phone,
-                                      'can_manage_locations': True, 'can_post_stock': True}}, status=201)
+                                      'can_manage_locations': True, 'can_post_stock': True,
+                                      'can_manage_purchases': False}}, status=201)
 
 
 @csrf_exempt
@@ -273,7 +276,7 @@ def employee_permissions(request, business_id, user_id):
         data = body(request)
     except ValueError as exc:
         return error('invalid_input', str(exc))
-    allowed = {'can_manage_locations', 'can_post_stock'}
+    allowed = {'can_manage_locations', 'can_post_stock', 'can_manage_purchases'}
     if not data or not set(data) <= allowed or any(not isinstance(value, bool) for value in data.values()):
         return error('invalid_input', 'Send can_manage_locations and/or can_post_stock as true or false.')
     for key, value in data.items():
@@ -282,7 +285,8 @@ def employee_permissions(request, business_id, user_id):
     return JsonResponse({'employee': {'id': member.user_id, 'name': member.user.first_name,
                                       'phone': member.user.phone,
                                       'can_manage_locations': member.can_manage_locations,
-                                      'can_post_stock': member.can_post_stock}})
+                                      'can_post_stock': member.can_post_stock,
+                                      'can_manage_purchases': member.can_manage_purchases}})
 
 
 @csrf_exempt

@@ -4,6 +4,7 @@
   "main": "expo-router/entry",
   "dependencies": {
     "@expo/ui": "~58.0.20",
+    "@react-native-community/datetimepicker": "^9.2.2",
     "@tamagui/config": "^3.0.18",
     "expo": "~58.0.14",
     "expo-constants": "~58.0.12",

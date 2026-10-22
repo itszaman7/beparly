@@ -25,23 +25,25 @@ export default function AccountScreen() {
 
   useEffect(() => {
     let active = true;
-    setEmployees([]);
-    if (!session?.account || session.account.role !== 'owner') {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    void api.employees(session.token, session.account.business.id)
-      .then((result) => {
-        if (!active) return;
-        setEmployees(result.employees);
-        setError('');
-      })
-      .catch((cause) => {
-        if (active) setError(cause instanceof Error ? cause.message : 'Could not load employees.');
-      })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+    const timeout = setTimeout(() => {
+      setEmployees([]);
+      if (!session?.account || session.account.role !== 'owner') {
+        setLoading(false);
+        return;
+      }
+      setLoading(true);
+      void api.employees(session.token, session.account.business.id)
+        .then((result) => {
+          if (!active) return;
+          setEmployees(result.employees);
+          setError('');
+        })
+        .catch((cause) => {
+          if (active) setError(cause instanceof Error ? cause.message : 'Could not load employees.');
+        })
+        .finally(() => { if (active) setLoading(false); });
+    }, 0);
+    return () => { active = false; clearTimeout(timeout); };
   }, [session]);
 
   if (!session) return null;
@@ -116,6 +118,18 @@ export default function AccountScreen() {
     } finally {
       setSavingPermissionFor(null);
     }
+  }
+
+  async function setPurchasePermission(employee: Employee, enabled: boolean) {
+    if (!account) return;
+    setSavingPermissionFor(employee.id);
+    setError('');
+    try {
+      const result = await api.setPurchasePermission(token, account.business.id, employee.id, enabled);
+      setEmployees(current => current.map(item => item.id === employee.id ? result.employee : item));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not update purchase access.');
+    } finally { setSavingPermissionFor(null); }
   }
 
   const accountLabel = account.user.name || (account.role === 'owner' ? 'Owner' : 'Employee');
@@ -216,6 +230,17 @@ export default function AccountScreen() {
                       trackColor={{ false: '#DCE5DF', true: '#8FD7C8' }}
                       thumbColor={employee.can_post_stock ? green : '#FFFFFF'}
                     />
+                  </XStack>
+                  <XStack alignItems="center" justifyContent="space-between" paddingTop={10} borderTopWidth={1} borderTopColor="#EEF1EE">
+                    <YStack flex={1} paddingRight={10}>
+                      <Text color={ink} fontSize={13} fontWeight="600">Can manage purchases</Text>
+                      <Text color={muted} fontSize={12}>Suppliers, purchases and supplier payments</Text>
+                    </YStack>
+                    <Switch accessibilityLabel={`Allow ${employee.name || employee.phone} to manage purchases`}
+                      value={employee.can_manage_purchases} disabled={savingPermissionFor !== null}
+                      onValueChange={value => void setPurchasePermission(employee, value)}
+                      trackColor={{ false: '#DCE5DF', true: '#8FD7C8' }}
+                      thumbColor={employee.can_manage_purchases ? green : '#FFFFFF'} />
                   </XStack>
                 </YStack>
               ))}

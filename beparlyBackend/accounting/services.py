@@ -87,7 +87,7 @@ def create_financial_category(business, actor, name, category_type):
     identifier = uuid4()
     code = f'{category_type.upper()}-{identifier.hex[:16]}'
     account = LedgerAccount.objects.create(business=business, code=code, name=name,
-        type=category_type, system_managed=True)
+        type=category_type, system_managed=False)
     category = model.objects.create(business=business, name=name, ledger_account=account)
     from audit.services import record
     record(business_id=business.pk, actor=actor, entity_type=f'{category_type}_category',

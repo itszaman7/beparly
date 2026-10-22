@@ -72,6 +72,7 @@ class BusinessMember(models.Model):
     role = models.CharField(max_length=12, choices=ROLE_CHOICES)
     can_manage_locations = models.BooleanField(default=True)
     can_post_stock = models.BooleanField(default=True)
+    can_manage_purchases = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

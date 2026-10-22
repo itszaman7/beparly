@@ -1,6 +1,7 @@
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider, useSegments } from 'expo-router';
 import { useFonts } from 'expo-font';
 import { ActivityIndicator, Pressable, View } from 'react-native';
+import { useEffect } from 'react';
 import { TamaguiProvider } from 'tamagui';
 import { Toast } from 'tamagui/toast';
 
@@ -19,12 +20,19 @@ export function SuspenseFallback() {
 
 function Navigation() {
   const { session, restoring, restoreError, retryRestore } = useAuth();
+  const segments = useSegments();
   const [fontsLoaded, fontError] = useFonts({
     BeparlyRobotoRegular: require('../../assets/fonts/Roboto-Regular.ttf'),
     BeparlyRobotoMedium: require('../../assets/fonts/Roboto-Medium.ttf'),
     BeparlyRobotoBold: require('../../assets/fonts/Roboto-Bold.ttf'),
   });
   const colorScheme = useColorScheme();
+  useEffect(() => {
+    if (restoring || restoreError) return;
+    const authRoute = segments[0] === 'sign-in' || segments[0] === 'register';
+    if (!session && !authRoute) void router.replace('/sign-in');
+    if (session && authRoute) void router.replace('/');
+  }, [restoreError, restoring, session, segments]);
   if ((!fontsLoaded && !fontError) || restoring) return <SuspenseFallback />;
   if (restoreError) return (
     <View style={{ flex: 1, backgroundColor: '#F6F8F7', alignItems: 'center', justifyContent: 'center', padding: 28 }}>
@@ -41,19 +49,18 @@ function Navigation() {
         <Toast.Viewport offset={64}><Toast.List /></Toast.Viewport>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Protected guard={!!session} redirectTo="/sign-in">
-              <Stack.Screen name="(tabs)" />
-              <Stack.Screen name="stock" />
-              <Stack.Screen name="products" />
-              <Stack.Screen name="money" />
-              <Stack.Screen name="sales" />
-              <Stack.Screen name="contacts" />
-              <Stack.Screen name="assets" />
-            </Stack.Protected>
-            <Stack.Protected guard={!session} redirectTo="/">
-              <Stack.Screen name="sign-in" />
-              <Stack.Screen name="register" />
-            </Stack.Protected>
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="stock" />
+            <Stack.Screen name="products" />
+            <Stack.Screen name="money" />
+            <Stack.Screen name="sales" />
+            <Stack.Screen name="suppliers" />
+            <Stack.Screen name="purchases" />
+            <Stack.Screen name="contacts" />
+            <Stack.Screen name="assets" />
+            <Stack.Screen name="business-settings" />
+            <Stack.Screen name="sign-in" />
+            <Stack.Screen name="register" />
           </Stack>
         </ThemeProvider>
       </Toast>
