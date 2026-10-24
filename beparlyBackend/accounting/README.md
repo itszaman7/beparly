@@ -1,6 +1,6 @@
 # Accounting foundation
 
-The UI records money, contacts, expenses and business assets. Only `accounting.services.post` creates finalized journal entries. Each entry has a unique business/source identity, optional client command UUID, at least two lines, and exactly equal debit and credit totals. Journal balances are authoritative; money accounts do not store running totals.
+The UI records money, contacts and expenses. Only `accounting.services.post` creates finalized journal entries. Each entry has a unique business/source identity, optional client command UUID, at least two lines, and exactly equal debit and credit totals. Journal balances are authoritative; money accounts do not store running totals.
 
 ## Account policy
 
@@ -18,9 +18,13 @@ Do not apply the migrations to the live database before rehearsing on a populate
 
 Manual opening stock posts to Opening Equity. Manual receipts and positive adjustments use owner contribution or inventory count gain. Negative adjustments and manually posted waste use actual FIFO cost against Inventory Loss. A correction of opening stock is owner-only, links to its original opening movement, and is allowed only while that stock has no later movements. Transfers keep overall inventory value unchanged. Reaching an expiry date does not create a loss.
 
-## Business assets and future documents
+## Retired business asset workflow and future documents
 
-Asset purchase and sale currently settle immediately through a money account. Depreciation is straight-line from the month after the in-service date; run `python manage.py post_depreciation` after each month closes. The command is idempotent. An asset sale posts any due prior months before computing gain or loss. No Celery worker is needed.
+The asset purchase, sale and depreciation screens and API routes have been retired. Users record ordinary spending through Expenses and miscellaneous receipts through Other income. Historical asset journals and tables remain for audit integrity; no migration deletes or rewrites them. If a deployment previously enabled an asset depreciation scheduler, disable it during rollout. Existing asset balances need a separate accounting review before they can be reclassified or closed; recording an expense or other income does not alter those historical asset journals.
+
+## Money In classification
+
+The Money In form asks for a business reason and a receiving money account. It never asks the shopkeeper to select journal accounts. `setup_business` provisions a separate Miscellaneous income category for manual receipts. Other income credits that category (or another non-Sales income category chosen in settings); product sales use a Sales income category. Owner contributions and customer advances use their existing control accounts. Customer dues are collected against the sale through its payment workflow, and supplier refunds use the supplier workflow with advance or payment validation. The Money In command ID remains stable on retry.
 
 `accounting.contracts` provides line builders for future Sales and Purchases. Those modules must validate and post their source document, stock movement, payment/allocation and journal in one transaction using a unique source ID. No invoice, bill, payment allocation, tax calculation or freight UI is implemented here. A future Purchase form can accept optional directly attributable extra cost and include it in inventory cost.
 

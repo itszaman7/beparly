@@ -37,6 +37,7 @@ export const symbols = {
   price: { ios: 'tag.fill', android: 'sell', web: 'sell' },
   package: { ios: 'shippingbox', android: 'package_2', web: 'package_2' },
   batch: { ios: 'square.stack', android: 'layers', web: 'layers' },
+  barcode: { ios: 'barcode.viewfinder', android: 'barcode_scanner', web: 'qr_code_scanner' },
   location: { ios: 'mappin', android: 'location_on', web: 'location_on' },
   warning: { ios: 'exclamationmark.triangle', android: 'warning_amber', web: 'warning_amber' },
   info: { ios: 'info.circle', android: 'info', web: 'info' },

@@ -11,6 +11,4 @@ urlpatterns = [
     path('businesses/<int:business_id>/money/income-categories/', views.income_categories),
     path('businesses/<int:business_id>/contacts/', views.contacts),
     path('businesses/<int:business_id>/contacts/<uuid:contact_id>/', views.contact_detail),
-    path('businesses/<int:business_id>/assets/', views.assets),
-    path('businesses/<int:business_id>/assets/<uuid:asset_id>/sell/', views.asset_sale),
 ]

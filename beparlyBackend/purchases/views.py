@@ -1,12 +1,19 @@
+import uuid
+from io import BytesIO
+
+from PIL import Image, UnidentifiedImageError
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from accounting.models import Contact, JournalLine, MoneyAccount
-from accounting.services import AccountingError, command_uuid, contact_position
+from accounting.services import AccountingError, balance, command_uuid, contact_position
 from accounts.models import BusinessMember
 from accounts.views import body, current_member, current_session, error
+from audit.services import record
 from stockkeeper.services import StockError
 
 from .models import OpeningPayable, Purchase, SupplierOperation
@@ -44,6 +51,20 @@ def page(rows, number, size=25):
     start = (number - 1) * size
     items = list(rows[start:start + size + 1])
     return items[:size], number + 1 if len(items) > size else None
+
+
+def payment_accounts(request, business_id):
+    if request.method != 'GET':
+        return error('method_not_allowed', 'Use GET.', 405)
+    member, _, problem = access(request, business_id)
+    if problem:
+        return problem
+    rows = MoneyAccount.objects.filter(business=member.business, is_active=True,
+                                       ledger_account__is_active=True).select_related('ledger_account').order_by('-is_default', 'name', 'id')
+    return JsonResponse({'accounts': [{'id': str(item.pk), 'name': item.name, 'kind': item.kind,
+        'masked_reference': item.masked_reference, 'is_default': item.is_default, 'is_active': True,
+        'balance': str(balance(item.ledger_account))}
+        for item in rows]})
 
 
 @csrf_exempt
@@ -90,6 +111,57 @@ def supplier_detail(request, business_id, supplier_id):
         return JsonResponse({'supplier': result})
     except (ValueError, ValidationError) as exc:
         return invalid(exc)
+
+
+@csrf_exempt
+def supplier_image(request, business_id, supplier_id):
+    if request.method not in ('POST', 'DELETE'):
+        return error('method_not_allowed', 'Use POST or DELETE.', 405)
+    member, session, problem = access(request, business_id)
+    if problem:
+        return problem
+    supplier = Contact.objects.filter(business=member.business, pk=supplier_id, is_supplier=True).first()
+    if not supplier:
+        return error('not_found', 'Supplier not found.', 404)
+    key = None
+    if request.method == 'POST':
+        upload = request.FILES.get('image')
+        if not upload or upload.size > 5 * 1024 * 1024:
+            return error('invalid_image', 'Choose an image smaller than 5 MB.')
+        try:
+            image = Image.open(upload)
+            image.verify()
+            upload.seek(0)
+            image = Image.open(upload)
+            if image.format not in ('JPEG', 'PNG', 'WEBP') or image.width * image.height > 25_000_000:
+                return error('invalid_image', 'Choose a JPG, PNG or WebP image.')
+            image.thumbnail((800, 800))
+            if image.mode not in ('RGB', 'RGBA'):
+                image = image.convert('RGB')
+            output = BytesIO()
+            image.save(output, format='WEBP', quality=82)
+        except (UnidentifiedImageError, OSError, ValueError):
+            return error('invalid_image', 'The selected file is not a valid image.')
+        key = default_storage.save(
+            f'suppliers/{business_id}/{supplier_id}/{uuid.uuid4().hex}.webp', ContentFile(output.getvalue()))
+    try:
+        with transaction.atomic():
+            supplier = Contact.objects.select_for_update().get(pk=supplier.pk)
+            old = supplier.image_key
+            if key or old:
+                supplier.image_key = key or ''
+                supplier.save(update_fields=['image_key', 'updated_at'])
+                record(business_id=business_id, actor=session.user, entity_type='supplier',
+                       entity_id=supplier.pk, subject=supplier.name,
+                       action='image_replaced' if old and key else 'image_added' if key else 'image_removed',
+                       changes={'image': {'before': bool(old), 'after': bool(key)}})
+                if old:
+                    transaction.on_commit(lambda: default_storage.delete(old))
+    except Exception:
+        if key:
+            default_storage.delete(key)
+        raise
+    return JsonResponse({'supplier': supplier_data(supplier)})
 
 
 @csrf_exempt

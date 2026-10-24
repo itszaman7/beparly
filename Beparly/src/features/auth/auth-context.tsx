@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 import { Account, api, ApiError, AuthResult, BusinessProfile } from '@/services/api';
 import { sessionStorage } from './session-storage';
+import { setCurrencySymbolVisible } from '@/features/products/product-rules';
 
 type AuthState = {
   token: string;
@@ -15,6 +16,7 @@ type AuthContextValue = {
   restoring: boolean;
   restoreError: string | null;
   retryRestore: () => Promise<void>;
+  refreshBusinesses: () => Promise<void>;
   signIn: (phone: string, password: string) => Promise<void>;
   register: (data: { username?: string; phone: string; password: string }) => Promise<void>;
   selectBusiness: (businessId: number) => void;
@@ -32,7 +34,7 @@ function newSession(result: AuthResult, preferredBusinessId?: number | null): No
     businesses: result.businesses,
     account: business ? {
       user: result.user,
-      business: { id: business.id, name: business.name },
+      business: { id: business.id, name: business.name, show_currency_symbol: business.show_currency_symbol ?? true },
       role: business.role,
       can_manage_purchases: business.can_manage_purchases,
     } : null,
@@ -43,6 +45,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<AuthState>(null);
   const [restoring, setRestoring] = useState(true);
   const [restoreError, setRestoreError] = useState<string | null>(null);
+  setCurrencySymbolVisible(session?.account?.business.show_currency_symbol ?? true);
   const restoreGeneration = useRef(0);
 
   const retryRestore = useCallback(async () => {
@@ -87,6 +90,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     restoring,
     restoreError,
     retryRestore,
+    async refreshBusinesses() {
+      if (!session) return;
+      const result = await api.me(session.token);
+      setSession((current) => current?.token === session.token
+        ? newSession({ ...result, token: current.token }, current.account?.business.id)
+        : current);
+    },
     async signIn(phone, password) {
       await acceptAuth(await api.login({ phone, password }));
     },
@@ -98,7 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!session || !business) return;
       setSession({ ...session, account: {
         user: session.user,
-        business: { id: business.id, name: business.name },
+        business: { id: business.id, name: business.name, show_currency_symbol: business.show_currency_symbol ?? true },
         role: business.role,
         can_manage_purchases: business.can_manage_purchases,
       } });
@@ -110,7 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession((current) => current && {
         ...current,
         businesses: [...current.businesses, business],
-        account: { user: current.user, business: { id: business.id, name: business.name }, role: business.role,
+        account: { user: current.user, business: { id: business.id, name: business.name, show_currency_symbol: business.show_currency_symbol ?? true }, role: business.role,
           can_manage_purchases: business.can_manage_purchases },
       });
       await sessionStorage.saveBusinessId(business.id);

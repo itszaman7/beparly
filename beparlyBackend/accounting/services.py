@@ -26,6 +26,7 @@ SYSTEM_ACCOUNTS = {
     'CUSTOMER_ADVANCE': ('Customer Advances', 'liability'),
     'SUPPLIER_ADVANCE': ('Supplier Advances', 'asset'),
     'SALES': ('Sales Revenue', 'income'),
+    'DELIVERY_INCOME': ('Delivery Income', 'income'),
     'COGS': ('Cost of Goods Sold', 'expense'),
     'OTHER_INCOME': ('Other Income', 'income'),
     'OPERATING_EXPENSE': ('Operating Expenses', 'expense'),
@@ -71,6 +72,17 @@ def setup_business(business):
         defaults={'name': 'Cash in Shop', 'type': 'asset', 'system_managed': True})
     MoneyAccount.objects.get_or_create(business=business, ledger_account=ledger,
         defaults={'name': 'Cash in Shop', 'kind': 'cash', 'is_default': True})
+    if not IncomeCategory.objects.filter(business=business, name__iexact='Miscellaneous income').exists():
+        miscellaneous, _ = LedgerAccount.objects.get_or_create(business=business, code='MISC_INCOME',
+            defaults={'name': 'Miscellaneous income', 'type': 'income', 'system_managed': True})
+        category, created = IncomeCategory.objects.get_or_create(business=business, ledger_account=miscellaneous,
+            defaults={'name': 'Miscellaneous income'})
+        if created:
+            from audit.services import record
+            record(business_id=business.pk, actor=None, entity_type='income_category', entity_id=category.pk,
+                   action='created', subject=category.name,
+                   changes={'name': {'before': None, 'after': category.name},
+                            'ledger_account_id': {'before': None, 'after': miscellaneous.pk}})
 
 
 @transaction.atomic
@@ -101,6 +113,24 @@ def ledger(business, code):
     if not account:
         raise AccountingError('Required financial account is unavailable.')
     return account
+
+
+@transaction.atomic
+def ensure_party_accounts(contact):
+    """Create stable per-contact control ledgers without removing legacy controls."""
+    contact = Contact.objects.select_for_update().get(pk=contact.pk)
+    if contact.is_customer and not contact.receivable_account_id:
+        account, _ = LedgerAccount.objects.get_or_create(business=contact.business,
+            code=f'AR-{contact.pk.hex[:32]}', defaults={'name': f'Accounts Receivable — {contact.name}',
+            'type': 'asset', 'system_managed': True})
+        contact.receivable_account = account
+    if contact.is_supplier and not contact.payable_account_id:
+        account, _ = LedgerAccount.objects.get_or_create(business=contact.business,
+            code=f'AP-{contact.pk.hex[:32]}', defaults={'name': f'Accounts Payable — {contact.name}',
+            'type': 'liability', 'system_managed': True})
+        contact.payable_account = account
+    contact.save(update_fields=['receivable_account', 'payable_account'])
+    return contact
 
 
 def balance(account):
@@ -263,7 +293,8 @@ def money_operation(business, actor, command_id, kind, value, account, *, destin
         lines = [dr(category.ledger_account, value), cr(account.ledger_account, value)]
     elif kind == 'other_income':
         if (not income_category or income_category.business_id != business.pk
-                or income_category.ledger_account.business_id != business.pk or income_category.ledger_account.type != 'income'):
+                or income_category.ledger_account.business_id != business.pk or income_category.ledger_account.type != 'income'
+                or income_category.name.casefold() == 'sales'):
             raise AccountingError('Choose an income category.')
         lines = [dr(account.ledger_account, value), cr(income_category.ledger_account, value)]
     elif kind == 'opening_balance':
@@ -274,9 +305,9 @@ def money_operation(business, actor, command_id, kind, value, account, *, destin
         lines = [dr(account.ledger_account, value), cr(ledger(business, 'OPENING'), value)]
     elif kind in MONEY_RULES:
         direction, code = MONEY_RULES[kind]
-        if kind.startswith('customer_advance') and (not contact or contact.business_id != business.pk or not contact.is_customer):
+        if kind.startswith('customer_advance') and (not contact or contact.business_id != business.pk or not contact.is_customer or not contact.is_active):
             raise AccountingError('Choose a customer for this advance.')
-        if kind.startswith('supplier_advance') and (not contact or contact.business_id != business.pk or not contact.is_supplier):
+        if kind.startswith('supplier_advance') and (not contact or contact.business_id != business.pk or not contact.is_supplier or not contact.is_active):
             raise AccountingError('Choose a supplier for this advance.')
         if kind.endswith('_refund') and Decimal(contact_position(contact)[kind.removesuffix('_refund')]) < value:
             raise AccountingError('Refund exceeds the remaining advance.')
@@ -298,10 +329,14 @@ def money_operation(business, actor, command_id, kind, value, account, *, destin
 
 def contact_position(contact):
     result = {}
-    for label, code, sign in [('customer_advance', 'CUSTOMER_ADVANCE', -1),
-                               ('supplier_advance', 'SUPPLIER_ADVANCE', 1),
-                               ('to_collect', 'AR', 1), ('to_pay', 'AP', -1)]:
-        sums = JournalLine.objects.filter(contact=contact, account__code=code).aggregate(d=Sum('debit'), c=Sum('credit'))
+    for label, code, sign, field in [('customer_advance', 'CUSTOMER_ADVANCE', -1, None),
+                               ('supplier_advance', 'SUPPLIER_ADVANCE', 1, None),
+                               ('to_collect', 'AR', 1, 'receivable_account'), ('to_pay', 'AP', -1, 'payable_account')]:
+        account = getattr(contact, f'{field}_id', None) if field else None
+        if field and not account:
+            account = Contact.objects.filter(pk=contact.pk).values_list(f'{field}_id', flat=True).first()
+        query = JournalLine.objects.filter(contact=contact, account_id=account) if account else JournalLine.objects.filter(contact=contact, account__code=code)
+        sums = query.aggregate(d=Sum('debit'), c=Sum('credit'))
         result[label] = str(((sums['d'] or 0) - (sums['c'] or 0)) * sign)
     return result
 

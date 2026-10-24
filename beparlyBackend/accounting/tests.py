@@ -9,6 +9,7 @@ from django.db import close_old_connections, connection
 from django.test import TestCase, TransactionTestCase
 
 from accounts.models import Business, BusinessMember, User
+from audit.models import AuditEvent
 from products.models import Product, StockBatch
 from stockkeeper.models import CostLayer, StockBalance, StockLocation, StockMovement
 from stockkeeper.services import post_adjustment, post_transfer, post_waste, receive
@@ -32,9 +33,13 @@ class AccountingTests(TestCase):
     def test_setup_and_balanced_idempotent_posting(self):
         setup_business(self.business)
         self.assertEqual(MoneyAccount.objects.filter(business=self.business).count(), 1)
+        self.assertEqual(IncomeCategory.objects.filter(business=self.business, name='Miscellaneous income').count(), 1)
+        self.assertEqual(AuditEvent.objects.filter(business=self.business, entity_type='income_category',
+            subject='Miscellaneous income').count(), 1)
         command = uuid.uuid4()
         txn = money_operation(self.business, self.owner, command, 'owner_contribution', '120.00', self.cash)
         self.assertEqual(balance(self.cash.ledger_account), Decimal('120'))
+        self.assertEqual(txn.journal.lines.get(account=ledger(self.business, 'CAPITAL')).credit, Decimal('120'))
         self.assertEqual(money_operation(self.business, self.owner, command, 'owner_contribution', '120.00', self.cash).pk, txn.pk)
         self.assertEqual(JournalEntry.objects.filter(business=self.business, source_type='money').count(), 1)
         self.assertEqual(sum((line.debit for line in txn.journal.lines.all()), Decimal('0')),
@@ -66,7 +71,8 @@ class AccountingTests(TestCase):
     def test_contact_advances_and_transfer(self):
         customer = Contact.objects.create(business=self.business, name='Karim', is_customer=True)
         supplier = Contact.objects.create(business=self.business, name='Karim Supplier', is_supplier=True)
-        money_operation(self.business, self.owner, uuid.uuid4(), 'customer_advance', 50, self.cash, contact=customer)
+        advance = money_operation(self.business, self.owner, uuid.uuid4(), 'customer_advance', 50, self.cash, contact=customer)
+        self.assertEqual(advance.journal.lines.get(account=ledger(self.business, 'CUSTOMER_ADVANCE')).credit, Decimal('50'))
         money_operation(self.business, self.owner, uuid.uuid4(), 'supplier_advance', 30, self.cash, contact=supplier)
         self.assertEqual(Decimal(contact_position(customer)['customer_advance']), 50)
         self.assertEqual(Decimal(contact_position(supplier)['supplier_advance']), 30)
@@ -115,6 +121,16 @@ class AccountingTests(TestCase):
             depreciate(asset, period)
         self.assertEqual(sum((row.amount for row in asset.depreciations.all()), Decimal('0')), Decimal('1.50'))
 
+    def test_retired_asset_routes_do_not_accept_new_transactions(self):
+        asset = purchase_asset(self.business, self.owner, uuid.uuid4(), 'Old shelf', 120, 0, 12,
+            date(2025, 1, 1), self.cash)
+        base = f'/api/v1/businesses/{self.business.pk}/assets/'
+        self.assertEqual(self.client.get(base).status_code, 404)
+        self.assertEqual(self.client.post(base, '{}', content_type='application/json').status_code, 404)
+        self.assertEqual(self.client.post(f'{base}{asset.pk}/sell/', '{}', content_type='application/json').status_code, 404)
+        self.assertTrue(BusinessAsset.objects.filter(pk=asset.pk).exists())
+        self.assertEqual(JournalEntry.objects.filter(pk=asset.purchase_journal_id).count(), 1)
+
     def test_future_sale_purchase_lines_balance_and_contact_tag(self):
         customer = Contact.objects.create(business=self.business, name='Buyer', is_customer=True)
         supplier = Contact.objects.create(business=self.business, name='Seller', is_supplier=True)
@@ -143,12 +159,38 @@ class AccountingTests(TestCase):
         expense_txn = money_operation(self.business, self.owner, uuid.uuid4(), 'expense', 10, self.cash, category=expense)
         income_txn = money_operation(self.business, self.owner, uuid.uuid4(), 'other_income', 15, self.cash, income_category=income)
         self.assertEqual(balance(expense.ledger_account), Decimal('10'))
-        self.assertEqual(balance(income.ledger_account), Decimal('15'))
+        self.assertEqual(income_txn.journal.lines.get(account=self.cash.ledger_account).debit, Decimal('15'))
+        self.assertEqual(income_txn.journal.lines.get(account=income.ledger_account).credit, Decimal('15'))
         self.assertEqual(income_txn.income_category_id, income.pk)
         self.assertEqual(sum((line.debit for line in income_txn.journal.lines.all()), Decimal('0')),
                          sum((line.credit for line in income_txn.journal.lines.all()), Decimal('0')))
         with self.assertRaises(AccountingError):
             money_operation(self.business, self.owner, uuid.uuid4(), 'other_income', 10, self.cash)
+        sales_category = create_financial_category(self.business, self.owner, 'Sales', 'income')
+        with self.assertRaises(AccountingError):
+            money_operation(self.business, self.owner, uuid.uuid4(), 'other_income', 10, self.cash,
+                            income_category=sales_category)
+
+    def test_money_in_api_uses_miscellaneous_income_and_retries_once(self):
+        token = self.client.post('/api/v1/auth/login/', json.dumps({'phone': self.owner.phone,
+            'password': 'OwnerPass#83'}), content_type='application/json').json()['token']
+        category = IncomeCategory.objects.get(business=self.business, name='Miscellaneous income')
+        path = f'/api/v1/businesses/{self.business.pk}/money/transactions/'
+        payload = {'kind': 'other_income', 'amount': '25.00', 'account_id': str(self.cash.pk),
+                   'category_id': category.pk, 'note': 'Delivery charge'}
+        command = str(uuid.uuid4())
+        def submit(data, key):
+            return self.client.post(path, json.dumps(data), content_type='application/json',
+                HTTP_AUTHORIZATION=f'Bearer {token}', HTTP_X_COMMAND_ID=key)
+        first = submit(payload, command)
+        self.assertEqual(first.status_code, 201, first.content)
+        self.assertEqual(submit(payload, command).json()['transaction']['id'], first.json()['transaction']['id'])
+        txn = MoneyTransaction.objects.get(pk=first.json()['transaction']['id'])
+        self.assertEqual(txn.journal.lines.get(account=self.cash.ledger_account).debit, Decimal('25'))
+        self.assertEqual(txn.journal.lines.get(account=category.ledger_account).credit, Decimal('25'))
+        self.assertEqual(JournalEntry.objects.filter(business=self.business, command_id=command).count(), 1)
+        sales_category = create_financial_category(self.business, self.owner, 'Sales', 'income')
+        self.assertEqual(submit({**payload, 'category_id': sales_category.pk}, str(uuid.uuid4())).status_code, 400)
 
     def test_inventory_fifo_writeoff_and_expiry_without_automatic_loss(self):
         product = Product.objects.create(business=self.business, name='Milk', sku='MILK-A',

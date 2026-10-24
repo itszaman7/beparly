@@ -8,8 +8,9 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 
 
-def _money(value):
-    return f'BDT {Decimal(value):,.2f}'
+def _money(value, show_currency_symbol=True):
+    amount = f'{Decimal(value):,.2f}'
+    return f'BDT {amount}' if show_currency_symbol else amount
 
 
 def render_sale_document(sale, kind):
@@ -18,6 +19,10 @@ def render_sale_document(sale, kind):
     height = 220 * mm if thermal else A4[1]
     output = BytesIO()
     pdf = canvas.Canvas(output, pagesize=(width, height))
+    returned = sum((row.amount for row in sale.returns.all()), Decimal('0'))
+    net_total = sale.total - returned
+    show_currency_symbol = sale.business.show_currency_symbol
+    money = lambda value: _money(value, show_currency_symbol)
     left = 7 * mm if thermal else 18 * mm
     right = width - left
     y = height - (8 * mm if thermal else 20 * mm)
@@ -65,6 +70,8 @@ def render_sale_document(sale, kind):
     address = sale.customer_address_snapshot or {}
     if not thermal and any(address.values()):
         line('Address: ' + ', '.join(str(value) for value in address.values() if value), 9, False, 5)
+    if sale.delivery_address.get('text'):
+        line('Deliver to: ' + sale.delivery_address['text'][:90], 8, False, 5)
     rule()
     if not thermal:
         pdf.setFont('Helvetica-Bold', 8)
@@ -79,25 +86,30 @@ def render_sale_document(sale, kind):
             name += f' [{item.sku}]'
         if thermal:
             line(name[:32], 8, True, 4)
-            line(f'{item.quantity:g} x {_money(item.unit_price)} = {_money(item.line_total)}', 8, False, 5)
+            line(f'{item.quantity:g} x {money(item.unit_price)} = {money(item.line_total)}', 8, False, 5)
         else:
             pdf.setFont('Helvetica', 8)
             pdf.drawString(left, y, name[:38])
             pdf.drawRightString(right - 46 * mm, y, f'{item.quantity:g}')
-            pdf.drawRightString(right - 22 * mm, y, _money(item.unit_price))
-            pdf.drawRightString(right, y, _money(item.line_total))
+            pdf.drawRightString(right - 22 * mm, y, money(item.unit_price))
+            pdf.drawRightString(right, y, money(item.line_total))
             y -= 6 * mm
     rule()
-    line(f'Subtotal: {_money(sale.subtotal)}', 9, False, 5, 'right')
+    line(f'Subtotal: {money(sale.subtotal)}', 9, False, 5, 'right')
     if sale.discount:
-        line(f'Discount: -{_money(sale.discount)}', 9, False, 5, 'right')
-    line(f'TOTAL: {_money(sale.total)}', 11, True, 7, 'right')
-    line(f'Paid: {_money(sale.paid)}', 9, False, 5, 'right')
-    line(f'Due: {_money(sale.total - sale.paid)}', 10, True, 7, 'right')
+        line(f'Discount: -{money(sale.discount)}', 9, False, 5, 'right')
+    if sale.delivery_fee:
+        line(f'Delivery: {money(sale.delivery_fee)}', 9, False, 5, 'right')
+    if returned:
+        line(f'Original total: {money(sale.total)}', 9, False, 5, 'right')
+        line(f'Returned items: -{money(returned)}', 9, False, 5, 'right')
+    line(f'{"CURRENT TOTAL" if returned else "TOTAL"}: {money(net_total)}', 11, True, 7, 'right')
+    line(f'Paid: {money(sale.paid)}', 9, False, 5, 'right')
+    line(f'Due: {money(net_total - sale.paid)}', 10, True, 7, 'right')
     accounts = ', '.join(payment.account.name for payment in sale.payments.all() if payment.kind == 'receipt')
     if accounts:
         line(f'Payment: {accounts}', 8, False, 5)
-    if sale.price_tier == 'wholesale' and sale.total > sale.paid:
+    if sale.price_tier == 'wholesale' and net_total > sale.paid:
         line('Credit sale — payment due from customer.', 9, True, 6)
     if sale.notes and not thermal:
         line('Notes: ' + sale.notes[:160], 8, False, 7)

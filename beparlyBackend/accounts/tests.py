@@ -59,6 +59,29 @@ class AccountApiTests(TestCase):
         self.assertEqual([(item['id'], item['role']) for item in profiles], [(retail, 'owner'), (wholesale, 'owner')])
         self.assertEqual(User.objects.get().first_name, 'Selim')
 
+    def test_currency_symbol_setting_is_business_wide_and_owner_only(self):
+        from .models import AuthSession
+
+        owner_token = self.register()
+        business_id = self.create_business(owner_token, 'Currency Shop')
+        profile = self.client.get(f'/api/v1/businesses/{business_id}/profile/', HTTP_AUTHORIZATION=f'Bearer {owner_token}')
+        self.assertTrue(profile.json()['business']['show_currency_symbol'])
+        changed = self.client.patch(f'/api/v1/businesses/{business_id}/profile/',
+                                    data=json.dumps({'show_currency_symbol': False}),
+                                    content_type='application/json', HTTP_AUTHORIZATION=f'Bearer {owner_token}')
+        self.assertEqual(changed.status_code, 200, changed.content)
+        self.assertFalse(changed.json()['business']['show_currency_symbol'])
+
+        employee = User.objects.create_user('01812345678', password='EmployeePass#89')
+        BusinessMember.objects.create(user=employee, business_id=business_id, role=BusinessMember.EMPLOYEE)
+        employee_token = AuthSession.issue(employee)
+        employee_profile = self.client.get(f'/api/v1/businesses/{business_id}/profile/', HTTP_AUTHORIZATION=f'Bearer {employee_token}')
+        self.assertFalse(employee_profile.json()['business']['show_currency_symbol'])
+        rejected = self.client.patch(f'/api/v1/businesses/{business_id}/profile/',
+                                     data=json.dumps({'show_currency_symbol': True}),
+                                     content_type='application/json', HTTP_AUTHORIZATION=f'Bearer {employee_token}')
+        self.assertEqual(rejected.status_code, 403)
+
     def test_opening_cash_is_posted_only_during_business_creation(self):
         from decimal import Decimal
         from accounting.models import JournalEntry, MoneyAccount
@@ -93,7 +116,10 @@ class AccountApiTests(TestCase):
         self.assertEqual(self.client.get(f'/api/v1/businesses/{retail}/employees/', HTTP_AUTHORIZATION=f'Bearer {other_owner}').status_code, 404)
         self.assertEqual(self.client.get(f'/api/v1/businesses/{other_business}/employees/', HTTP_AUTHORIZATION=f'Bearer {owner}').status_code, 404)
         employee_login = self.post_json('/api/v1/auth/login/', {'phone': '01912345678', 'password': 'EmployeePass#89'})
-        self.assertEqual(employee_login.json()['businesses'], [{'id': retail, 'name': 'Retail Shop', 'role': 'employee'}])
+        employee_business = employee_login.json()['businesses'][0]
+        self.assertEqual((employee_business['id'], employee_business['name'], employee_business['role']),
+                         (retail, 'Retail Shop', 'employee'))
+        self.assertTrue(employee_business['show_currency_symbol'])
         employee_token = employee_login.json()['token']
         self.assertEqual(self.client.get(f'/api/v1/businesses/{retail}/employees/', HTTP_AUTHORIZATION=f'Bearer {employee_token}').status_code, 403)
         self.assertEqual(self.post_json(f'/api/v1/businesses/{retail}/employees/', {

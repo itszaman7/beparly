@@ -11,7 +11,7 @@ from accounts.views import body, current_member, current_session, error
 from stockkeeper.services import StockError
 
 from .models import Sale
-from .services import SaleError, cancel_sale, collect_sale, create_sale, serialize_sale
+from .services import SaleError, cancel_sale, collect_sale, create_sale, return_sale, serialize_sale
 from accounting.services import AccountingError, command_uuid
 
 
@@ -35,7 +35,8 @@ def sales(request, business_id):
     if problem:
         return problem
     if request.method == 'GET':
-        rows = Sale.objects.filter(business=member.business).select_related('customer', 'location').prefetch_related('lines', 'payments').order_by('-created_at')[:100]
+        rows = Sale.objects.filter(business=member.business).select_related('customer', 'location').prefetch_related(
+            'lines', 'payments__account', 'returns__lines', 'returns__refund_account').order_by('-created_at')[:100]
         return JsonResponse({'sales': [serialize_sale(row, include_lines=True) for row in rows]})
     try:
         command_id = command_uuid(request.headers.get('X-Command-ID'))
@@ -56,7 +57,7 @@ def sales_options(request, business_id):
         return problem
     if request.method == 'GET':
         accounts = MoneyAccount.objects.filter(business=member.business, is_active=True).select_related('ledger_account').order_by('-is_default', 'name')
-        contacts = Contact.objects.filter(business=member.business, is_customer=True, is_active=True).order_by('name')
+        contacts = Contact.objects.filter(business=member.business, is_customer=True, is_active=True).order_by('name') if request.GET.get('include_contacts') != 'false' else []
         categories = IncomeCategory.objects.filter(business=member.business).order_by('name')
         return JsonResponse({'accounts': [{'id': str(item.pk), 'name': item.name, 'kind': item.kind,
             'masked_reference': item.masked_reference, 'is_default': item.is_default, 'is_active': item.is_active,
@@ -74,11 +75,25 @@ def sales_options(request, business_id):
 
 @csrf_exempt
 def sales_customers(request, business_id):
-    if request.method != 'POST':
-        return error('method_not_allowed', 'Use POST.', 405)
+    if request.method not in ('GET', 'POST'):
+        return error('method_not_allowed', 'Use GET or POST.', 405)
     member, session, problem = member_for(request, business_id)
     if problem:
         return problem
+    if request.method == 'GET':
+        from django.db.models import Q
+        query = Contact.objects.filter(business=member.business, is_customer=True, is_active=True)
+        search = request.GET.get('search', '').strip()[:100]
+        if search:
+            query = query.filter(Q(name__icontains=search) | Q(phone__icontains=search))
+        try:
+            page = max(1, int(request.GET.get('page', '1')))
+        except ValueError:
+            page = 1
+        rows = list(query.order_by('name', 'pk')[(page - 1) * 25:page * 25 + 1])
+        return JsonResponse({'customers': [{'id': str(item.pk), 'name': item.name, 'phone': item.phone,
+            'address': item.address, 'area': item.area, 'district': item.district} for item in rows[:25]],
+            'next_page': page + 1 if len(rows) > 25 else None})
     try:
         data = body(request)
         phone = normalize_customer_phone(data.get('phone'))
@@ -101,7 +116,8 @@ def sale_detail(request, business_id, sale_id):
     member, session, problem = member_for(request, business_id)
     if problem:
         return problem
-    sale = Sale.objects.filter(business=member.business, pk=sale_id).select_related('customer').first()
+    sale = Sale.objects.filter(business=member.business, pk=sale_id).select_related('customer').prefetch_related(
+        'lines', 'payments__account', 'returns__lines', 'returns__refund_account').first()
     if not sale:
         return error('not_found', 'Sale not found.', 404)
     if request.method == 'GET':
@@ -142,6 +158,29 @@ def sale_cancel(request, business_id, sale_id):
         return error('invalid_input', str(exc))
     except IntegrityError:
         return error('conflict', 'This sale was already cancelled.', 409)
+
+
+@csrf_exempt
+def sale_returns(request, business_id, sale_id):
+    if request.method != 'POST':
+        return error('method_not_allowed', 'Use POST.', 405)
+    member, session, problem = member_for(request, business_id)
+    if problem:
+        return problem
+    sale = Sale.objects.filter(business=member.business, pk=sale_id).first()
+    if not sale:
+        return error('not_found', 'Sale not found.', 404)
+    try:
+        data = body(request)
+        if set(data) - {'reason', 'lines', 'refund_account_id'}:
+            raise SaleError('Send a reason, returned items, and a refund account when needed.')
+        sale_return = return_sale(sale, session.user, command_uuid(request.headers.get('X-Command-ID')), data)
+        sale.refresh_from_db()
+        return JsonResponse({'sale': serialize_sale(sale, include_lines=True), 'return_id': str(sale_return.pk)}, status=201)
+    except (ValueError, ValidationError, AccountingError, StockError) as exc:
+        return error('invalid_input', str(exc))
+    except IntegrityError:
+        return error('conflict', 'This return conflicts with a posted transaction. Retry with the original command ID.', 409)
 
 
 def sale_document(request, business_id, sale_id, kind):

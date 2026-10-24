@@ -3,10 +3,11 @@ from uuid import uuid4
 
 from django.db import transaction
 from django.db.models import Sum
+from django.core.files.storage import default_storage
 from django.utils import timezone
 
 from accounting.models import Contact, JournalEntry, JournalLine, MoneyAccount, MoneyTransaction
-from accounting.services import AccountingError, amount, contact_position, cr, dr, ledger, post, reverse, setup_business
+from accounting.services import AccountingError, amount, contact_position, cr, dr, ledger, post, reverse, setup_business, ensure_party_accounts
 from accounts.models import Business
 from audit.services import record
 from products.models import Product, ProductUnit, StockBatch
@@ -25,6 +26,7 @@ def supplier_data(supplier):
     return {'id': str(supplier.pk), 'name': supplier.name, 'phone': supplier.phone,
             'address': supplier.address, 'area': supplier.area, 'district': supplier.district,
             'notes': supplier.notes, 'payment_terms': supplier.payment_terms,
+            'image_url': default_storage.url(supplier.image_key) if supplier.image_key else None,
             'is_customer': supplier.is_customer, 'is_supplier': supplier.is_supplier,
             **contact_position(supplier)}
 
@@ -41,10 +43,13 @@ def purchase_data(purchase, details=False):
     if details:
         result['lines'] = [{'id': line.pk, 'product_id': str(line.product_id), 'variant_id': str(line.variant_id),
             'batch_id': str(line.batch_id) if line.batch_id else None, 'unit_id': str(line.unit_id) if line.unit_id else None,
-            'product_name': line.product_name or line.product.name, 'variant_name': line.variant_name,
-            'sku': line.sku, 'unit_name': line.unit_name, 'lot_code': line.lot_code,
+            'product_name': line.product_name or line.product.name, 'variant_name': line.variant_name or line.variant.label,
+            'sku': line.sku or line.variant.sku, 'base_unit': line.variant.base_unit,
+            'image_url': default_storage.url(line.product.image_key) if line.product.image_key else None,
+            'tracking_mode': line.variant.tracking_mode, 'unit_name': line.unit_name or (line.unit.name if line.unit else line.variant.base_unit),
+            'lot_code': line.lot_code or (line.batch.lot_code if line.batch else ''),
             'quantity': str(line.quantity), 'base_quantity': str(line.base_quantity),
-            'unit_cost': str(line.unit_cost), 'line_total': str(line.line_total)} for line in purchase.lines.select_related('product')]
+            'unit_cost': str(line.unit_cost), 'line_total': str(line.line_total)} for line in purchase.lines.select_related('product', 'variant', 'unit', 'batch')]
         result['operations'] = [{'id': str(op.pk), 'kind': op.kind, 'amount': str(op.amount),
             'created_at': op.created_at.isoformat()} for op in purchase.operations.order_by('created_at')]
     return result
@@ -80,7 +85,7 @@ def create_supplier(business, actor, data, command_id):
     supplier = Contact.objects.create(business=business, name=name.strip(), is_supplier=True, created_by=actor, **fields)
     if opening:
         entry = post(business, 'supplier_opening', supplier.pk, f'Opening payable: {supplier.name}',
-            [dr(ledger(business, 'OPENING'), opening), cr(ledger(business, 'AP'), opening, supplier)], actor=actor)
+            [dr(ledger(business, 'OPENING'), opening), cr(ensure_party_accounts(supplier).payable_account, opening, supplier)], actor=actor)
         OpeningPayable.objects.create(business=business, supplier=supplier, amount=opening,
             command_id=command_id, journal=entry)
     record(business_id=business.pk, actor=actor, entity_type='supplier', entity_id=supplier.pk,
@@ -112,8 +117,8 @@ def update_supplier(supplier, actor, data):
 
 
 def prepare_lines(business, raw_lines):
-    if not isinstance(raw_lines, list) or not 1 <= len(raw_lines) <= 100:
-        raise PurchaseError('Add one to 100 product lines.')
+    if not isinstance(raw_lines, list) or not 1 <= len(raw_lines) <= 1000:
+        raise PurchaseError('Add one to 1,000 product lines.')
     prepared = []
     total = Decimal('0')
     for item in raw_lines:
@@ -218,7 +223,7 @@ def complete_purchase(purchase, actor, command_id, paid=0, account=None):
     sequence, _ = PurchaseSequence.objects.select_for_update().get_or_create(business=business)
     sequence.value += 1
     sequence.save(update_fields=['value'])
-    purchase.number = f'P-{sequence.value:06d}'
+    purchase.number = f'P-{sequence.value:03d}'
     purchase.supplier_name = supplier.name
     purchase.supplier_phone = supplier.phone
     purchase.supplier_address = supplier.address
@@ -247,7 +252,7 @@ def complete_purchase(purchase, actor, command_id, paid=0, account=None):
     if total != purchase.total:
         raise PurchaseError('Inventory value and supplier payable do not reconcile.')
     post(business, 'purchase', purchase.pk, f'Purchase {purchase.number}',
-        [dr(ledger(business, 'INVENTORY'), total), cr(ledger(business, 'AP'), total, supplier)], actor=actor)
+        [dr(ledger(business, 'INVENTORY'), total), cr(ensure_party_accounts(supplier).payable_account, total, supplier)], actor=actor)
     purchase.status, purchase.completed_at, purchase.completion_command_id = 'completed', timezone.now(), command_id
     purchase.save(update_fields=['status', 'completed_at', 'completion_command_id', 'number',
         'supplier_name', 'supplier_phone', 'supplier_address', 'location_name'])
@@ -276,6 +281,7 @@ def supplier_operation(business, supplier, actor, command_id, kind, value, *, pu
         return prior
     if supplier.business_id != business.pk or not supplier.is_supplier:
         raise PurchaseError('Choose a supplier in this business.')
+    supplier = ensure_party_accounts(supplier)
     value = amount(value)
     if kind not in ('payment', 'advance', 'advance_refund', 'apply_advance', 'allocation_reversal', 'payment_refund'):
         raise PurchaseError('Choose a valid supplier action.')
@@ -306,17 +312,17 @@ def supplier_operation(business, supplier, actor, command_id, kind, value, *, pu
         raise PurchaseError('Choose an active money account.')
     setup_business(business)
     if kind == 'payment':
-        lines = [dr(ledger(business, 'AP'), value, supplier), cr(account.ledger_account, value)]
+        lines = [dr(supplier.payable_account, value, supplier), cr(account.ledger_account, value)]
     elif kind == 'payment_refund':
-        lines = [dr(account.ledger_account, value), cr(ledger(business, 'AP'), value, supplier)]
+        lines = [dr(account.ledger_account, value), cr(supplier.payable_account, value, supplier)]
     elif kind == 'advance':
         lines = [dr(ledger(business, 'SUPPLIER_ADVANCE'), value, supplier), cr(account.ledger_account, value)]
     elif kind == 'advance_refund':
         lines = [dr(account.ledger_account, value), cr(ledger(business, 'SUPPLIER_ADVANCE'), value, supplier)]
     elif kind == 'allocation_reversal':
-        lines = [dr(ledger(business, 'SUPPLIER_ADVANCE'), value, supplier), cr(ledger(business, 'AP'), value, supplier)]
+        lines = [dr(ledger(business, 'SUPPLIER_ADVANCE'), value, supplier), cr(supplier.payable_account, value, supplier)]
     else:
-        lines = [dr(ledger(business, 'AP'), value, supplier), cr(ledger(business, 'SUPPLIER_ADVANCE'), value, supplier)]
+        lines = [dr(supplier.payable_account, value, supplier), cr(ledger(business, 'SUPPLIER_ADVANCE'), value, supplier)]
     op_id = uuid4()
     journal = post(business, 'supplier_operation', op_id, f'{kind}: {supplier.name}', lines,
         actor=actor, command_id=command_id)

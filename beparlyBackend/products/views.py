@@ -6,7 +6,7 @@ from datetime import timedelta
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import IntegrityError, transaction
-from django.db.models import DecimalField, Exists, F, OuterRef, Q, Sum, Value
+from django.db.models import Case, DecimalField, Exists, F, IntegerField, OuterRef, Q, Sum, Value, Subquery, ExpressionWrapper, When
 from django.db.models.functions import Coalesce
 from django.http import JsonResponse
 from PIL import Image, UnidentifiedImageError
@@ -30,6 +30,52 @@ PRODUCT_FIELDS = ('name', 'product_type', 'specifications', 'description', 'sku'
 CATEGORY_FIELDS = ('name', 'parent_id', 'is_active')
 PACKAGE_FIELDS = ('name', 'factor', 'selling_price', 'barcode', 'is_active')
 BATCH_FIELDS = ('lot_code', 'manufactured_on', 'expires_on')
+
+
+class PurchaseCatalogView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request, business_id):
+        _, problem = access(request, business_id)
+        if problem:
+            return problem
+        try:
+            page = int(request.query_params.get('page', '1'))
+            if not 1 <= page <= 100000:
+                raise ValueError
+        except ValueError:
+            return error('invalid_input', 'Choose a valid page.')
+        search = request.query_params.get('search', '').strip()[:100]
+        from purchases.models import PurchaseLine
+        from stockkeeper.models import StockBalance
+        prior = PurchaseLine.objects.filter(variant_id=OuterRef('pk'), purchase__status='completed').order_by('-purchase__completed_at', '-pk')
+        prior = prior.annotate(base_cost=ExpressionWrapper(F('unit_cost') / F('conversion_factor'), output_field=DecimalField(max_digits=18, decimal_places=4)))
+        stock = StockBalance.objects.filter(variant_id=OuterRef('pk')).values('variant_id').annotate(total=Sum('quantity')).values('total')
+        rows = ProductVariant.objects.filter(business_id=business_id, is_active=True, product__is_active=True).select_related('product')
+        if search:
+            package_match = ProductUnit.objects.filter(variant_id=OuterRef('pk'), barcode=search, is_active=True)
+            rows = rows.annotate(package_barcode_match=Exists(package_match)).filter(
+                               Q(product__name__icontains=search) | Q(label__icontains=search) |
+                               Q(sku__icontains=search) | Q(barcode__icontains=search) |
+                               Q(product__specifications__icontains=search) | Q(package_barcode_match=True))
+        rows = rows.annotate(last_cost=Subquery(prior.values('base_cost')[:1]), stock_quantity=Subquery(stock[:1]))
+        if search:
+            rows = rows.annotate(exact_match=Case(When(Q(barcode=search) | Q(sku=search) | Q(package_barcode_match=True), then=Value(0)),
+                                                 default=Value(1), output_field=IntegerField())).order_by('exact_match', 'product__name', 'label', 'pk')
+        else:
+            rows = rows.order_by('product__name', 'label', 'pk')
+        found = list(rows[(page - 1) * 30:page * 30 + 1])
+        return JsonResponse({'items': [{
+            'product_id': str(row.product_id), 'variant_id': str(row.pk), 'name': row.product.name,
+            'variant_label': row.label, 'sku': row.sku, 'barcode': row.barcode,
+            'package_barcode_match': bool(row.package_barcode_match) if search else False,
+            'base_unit': row.base_unit, 'tracking_mode': row.tracking_mode,
+            'image_url': default_storage.url(row.product.image_key) if row.product.image_key else None,
+            'stock': str(row.stock_quantity or 0),
+            'last_purchase_cost': str(row.last_cost) if row.last_cost is not None else None,
+            'default_purchase_cost': str(row.purchase_price) if row.purchase_price is not None else None,
+        } for row in found[:30]], 'next_page': page + 1 if len(found) > 30 else None})
 
 
 class OpeningSerializer(serializers.Serializer):

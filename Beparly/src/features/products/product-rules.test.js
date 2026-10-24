@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { validDecimal, formatBdt } = require('./product-rules');
+const { validDecimal, formatBdt, setCurrencySymbolVisible } = require('./product-rules');
 
 test('prices distinguish unset and zero and reject invalid precision', () => {
   assert.equal(validDecimal('', 2, true), true);
@@ -23,5 +23,13 @@ test('BDT formatting uses string arithmetic and preserves zero', () => {
   assert.equal(formatBdt('123456789012345.67'), '৳123,456,789,012,345.67');
   assert.equal(formatBdt('-1234.50'), '৳-1,234.50');
   assert.equal(formatBdt('0E-7'), '৳0.00');
+});
+
+test('currency symbol preference changes display without changing the amount', () => {
+  setCurrencySymbolVisible(false);
+  assert.equal(formatBdt('1234.50'), '1,234.50');
+  assert.equal(formatBdt('0.00'), '0.00');
+  setCurrencySymbolVisible(true);
+  assert.equal(formatBdt('1234.50'), '৳1,234.50');
 });
 

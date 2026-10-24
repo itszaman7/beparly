@@ -19,6 +19,9 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         fields = ('id', 'label', 'sku', 'barcode', 'base_unit', 'purchase_price', 'retail_price',
                   'wholesale_price', 'minimum_stock', 'tracking_mode', 'is_active', 'selections', 'sellable_stock', 'out_of_stock',
                   'created_at', 'updated_at')
+        read_only_fields = ('selections', 'created_at', 'updated_at')
+        extra_kwargs = {'sku': {'required': False, 'allow_blank': True},
+                        'barcode': {'required': False, 'allow_blank': True}}
 
     def get_sellable_stock(self, obj):
         from django.utils import timezone
@@ -30,8 +33,6 @@ class ProductVariantSerializer(serializers.ModelSerializer):
 
     def get_out_of_stock(self, obj):
         return float(self.get_sellable_stock(obj)) <= 0
-        read_only_fields = ('selections', 'created_at', 'updated_at')
-        extra_kwargs = {'sku': {'required': False, 'allow_blank': True}}
 
     def get_selections(self, obj):
         return {row.attribute.name: row.value.value for row in obj.selections.select_related('attribute', 'value')}

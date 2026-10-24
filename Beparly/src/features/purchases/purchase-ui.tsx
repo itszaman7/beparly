@@ -1,20 +1,22 @@
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol, type AppSymbolName } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
 import { useAuth } from '@/features/auth/auth-context';
-import { api, type MoneyAccount, type Product, type ProductUnit, type PurchaseInput,
-  type PurchaseLineInput, type PurchaseRecord, type StockBatch, type StockLocation,
-  type Supplier, type SupplierAction, type Variant } from '@/services/api';
+import { api, resolveAssetUrl, type PurchasePaymentAccount, type PurchaseRecord, type Supplier, type SupplierAction } from '@/services/api';
+import { displayDocumentNumber } from '@/utils/document-number';
 
 const command = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
   const value = Math.floor(Math.random() * 16);
   return (c === 'x' ? value : (value & 3) | 8).toString(16);
 });
 const message = (cause: unknown) => cause instanceof Error ? cause.message : 'Could not connect. Try again.';
+const currency = (value: string | number) => Number(value || 0).toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function Screen({ title, icon = 'purchase', backTo = '/purchases', children }: {
   title: string; icon?: AppSymbolName; backTo?: string; children: React.ReactNode;
@@ -48,10 +50,6 @@ function Action({ label, onPress, disabled, secondary, icon }: { label: string; 
     {icon && <AppSymbol name={icon} size={18} color={secondary ? '#006D64' : '#FFFFFF'} />}
     <Text style={[styles.actionText, secondary && { color: '#006D64' }]}>{label}</Text>
   </Pressable>;
-}
-function SectionHeading({ icon, children }: { icon: AppSymbolName; children: React.ReactNode }) {
-  return <View style={styles.sectionHeading}><AppSymbol name={icon} size={19} color="#006D64" />
-    <Text style={styles.heading}>{children}</Text></View>;
 }
 function Choice({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
   return <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={onPress}
@@ -94,15 +92,26 @@ export function SupplierFormScreen() {
   const [fields, setFields] = useState({ name: '', phone: '', address: '', area: '', district: '', notes: '', payment_terms: '', opening_payable: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [imageUri, setImageUri] = useState<string | null>(null);
+  const [existingImage, setExistingImage] = useState<string | null>(null);
+  const [removeImage, setRemoveImage] = useState(false);
   const commandId = useRef(command());
   useEffect(() => {
     if (!id || !session?.account) return;
-    void api.supplier(session.token, session.account.business.id, id).then(({ supplier }) =>
+    void api.supplier(session.token, session.account.business.id, id).then(({ supplier }) => {
       setFields(current => ({ ...current, name: supplier.name, phone: supplier.phone, address: supplier.address,
-        area: supplier.area, district: supplier.district, notes: supplier.notes, payment_terms: supplier.payment_terms })))
+        area: supplier.area, district: supplier.district, notes: supplier.notes, payment_terms: supplier.payment_terms }));
+      setExistingImage(supplier.image_url);
+    })
       .catch(cause => setError(message(cause)));
   }, [id, session]);
   const set = (key: keyof typeof fields) => (value: string) => setFields(current => ({ ...current, [key]: value }));
+  async function pickImage() {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.82 });
+      if (!result.canceled && result.assets[0]) { setImageUri(result.assets[0].uri); setRemoveImage(false); }
+    } catch { setError('Could not select a supplier photo.'); }
+  }
   async function save() {
     if (!session?.account) return;
     setBusy(true); setError('');
@@ -111,11 +120,17 @@ export function SupplierFormScreen() {
       const { opening_payable, ...profile } = fields;
       const result = editing && id ? await api.updateSupplier(session.token, business, id, profile) :
         await api.createSupplier(session.token, business, fields, commandId.current);
+      if (imageUri) await api.uploadSupplierImage(session.token, business, result.supplier.id, imageUri);
+      else if (removeImage && existingImage) await api.removeSupplierImage(session.token, business, result.supplier.id);
       router.replace(`/suppliers/${result.supplier.id}` as Href);
     } catch (cause) { setError(message(cause)); }
     finally { setBusy(false); }
   }
   return <Screen title={editing ? 'Edit supplier' : 'Add supplier'} icon="parties" backTo="/suppliers">
+    {(imageUri || !removeImage && existingImage) && <Image source={{ uri: imageUri || resolveAssetUrl(existingImage) || '' }}
+      style={{ width: 84, height: 84, borderRadius: 14 }} contentFit="cover" />}
+    <Action label={imageUri || existingImage ? 'Change supplier photo' : 'Add supplier photo (optional)'} icon="edit" secondary onPress={() => void pickImage()} />
+    {!!(imageUri || !removeImage && existingImage) && <Action label="Remove photo" secondary onPress={() => { setImageUri(null); setRemoveImage(true); }} />}
     <Field label="Name *" value={fields.name} onChangeText={set('name')} />
     <Field label="Phone (optional)" value={fields.phone} onChangeText={set('phone')} keyboardType="phone-pad" />
     <Field label="Address" value={fields.address} onChangeText={set('address')} />
@@ -138,7 +153,7 @@ export function SupplierDetailScreen() {
   const [nextPurchases, setNextPurchases] = useState<number | null>(null);
   const [activity, setActivity] = useState<{ id: number; description: string; account: string; debit: string; credit: string }[]>([]);
   const [nextActivity, setNextActivity] = useState<number | null>(null);
-  const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
+  const [accounts, setAccounts] = useState<PurchasePaymentAccount[]>([]);
   const [kind, setKind] = useState<SupplierAction['kind']>('payment');
   const [target, setTarget] = useState('');
   const [accountId, setAccountId] = useState('');
@@ -152,7 +167,7 @@ export function SupplierDetailScreen() {
     try {
       const [supplierResult, purchaseResult, activityResult, accountResult] = await Promise.all([
         api.supplier(session.token, business, id), api.purchases(session.token, business, 1, id),
-        api.supplierActivity(session.token, business, id), api.moneyAccounts(session.token, business)]);
+        api.supplierActivity(session.token, business, id), api.purchasePaymentAccounts(session.token, business)]);
       setSupplier(supplierResult.supplier); setPurchases(purchaseResult.purchases); setNextPurchases(purchaseResult.next_page);
       setActivity(activityResult.activity); setNextActivity(activityResult.next_page); setAccounts(accountResult.accounts);
       setAccountId(current => current || accountResult.accounts.find(item => item.is_default)?.id || ''); setError('');
@@ -174,12 +189,14 @@ export function SupplierDetailScreen() {
   }
   return <Screen title={supplier?.name || 'Supplier details'} icon="parties" backTo="/suppliers">
     <ErrorText value={error} />
-    {supplier && <><Text style={styles.heading}>To pay ৳{supplier.to_pay}</Text>
+    {supplier && <>{!!supplier.image_url && <Image source={{ uri: resolveAssetUrl(supplier.image_url) || '' }}
+      style={{ width: 96, height: 96, borderRadius: 16 }} contentFit="cover" />}
+      <Text style={styles.heading}>To pay ৳{supplier.to_pay}</Text>
       <Text style={styles.heading}>Advance ৳{supplier.supplier_advance}</Text>
       <Text style={styles.muted}>{[supplier.phone, supplier.address, supplier.area, supplier.district].filter(Boolean).join(' · ') || 'No contact details'}</Text>
       {!!supplier.payment_terms && <Text>Terms: {supplier.payment_terms}</Text>}
       <Action label="Edit supplier" icon="edit" secondary onPress={() => router.push(`/suppliers/${id}/edit` as Href)} />
-      <Action label="New purchase from this supplier" icon="purchase" onPress={() => router.push(`/purchases/new?supplierId=${id}`)} />
+      <Action label="New purchase" icon="purchase" onPress={() => router.push('/purchases/new')} />
       <Text style={styles.heading}>Supplier money</Text>
       <View style={styles.row}>{(['payment', 'advance', 'advance_refund', 'payment_refund', 'apply_advance', 'allocation_reversal'] as const)
         .map(item => <Choice key={item} label={item.replaceAll('_', ' ')} selected={kind === item}
@@ -190,7 +207,7 @@ export function SupplierDetailScreen() {
             .map(item => <Choice key={item.id} label={`Opening ৳${item.due}`} selected={target === `opening:${item.id}`}
               onPress={() => setTarget(`opening:${item.id}`)} />)}
           {purchases.filter(item => item.status === 'completed').map(item =>
-            <Choice key={item.id} label={`${item.number} · Due ৳${item.due}`} selected={target === item.id}
+            <Choice key={item.id} label={`${displayDocumentNumber(item.number)} · Due ৳${item.due}`} selected={target === item.id}
               onPress={() => setTarget(item.id)} />)}
         </View></>}
       {!['apply_advance', 'allocation_reversal'].includes(kind) && <><Text style={styles.label}>Money account</Text>
@@ -200,7 +217,7 @@ export function SupplierDetailScreen() {
       <Action label={busy ? 'Saving…' : 'Record supplier action'} disabled={busy} onPress={() => void postAction()} />
       <Text style={styles.heading}>Purchases</Text>
       {purchases.map(item => <Pressable key={item.id} style={styles.card} onPress={() => router.push(`/purchases/${item.id}` as Href)}>
-        <Text style={styles.heading}>{item.number || 'Draft purchase'} · ৳{item.total}</Text><Text>{item.status} · Due ৳{item.due}</Text>
+        <Text style={styles.heading}>{item.number ? displayDocumentNumber(item.number) : 'Draft purchase'} · ৳{item.total}</Text><Text>{item.status} · Due ৳{item.due}</Text>
       </Pressable>)}
       {nextPurchases && <Action label="More purchases" secondary onPress={() => {
         if (!session?.account) return;
@@ -210,7 +227,7 @@ export function SupplierDetailScreen() {
       }} />}
       <Text style={styles.heading}>Statement</Text>
       {activity.map(item => <View key={item.id} style={styles.card}><Text>{item.description}</Text>
-        <Text style={styles.muted}>{item.account} · Debit ৳{item.debit} · Credit ৳{item.credit}</Text></View>)}
+        <Text style={styles.muted}>{item.account} · Debit ৳{currency(item.debit)} · Credit ৳{currency(item.credit)}</Text></View>)}
       {nextActivity && <Action label="More activity" secondary onPress={() => {
         if (!session?.account) return;
         void api.supplierActivity(session.token, session.account.business.id, supplier.id, nextActivity)
@@ -238,153 +255,9 @@ export function PurchasesScreen() {
   return <Screen title="Purchases" backTo="/more"><Action label="New purchase" icon="plus" onPress={() => router.push('/purchases/new')} />
     <ErrorText value={error} />{rows.length === 0 && !error && <Text style={styles.muted}>No purchases yet.</Text>}
     {rows.map(item => <Pressable key={item.id} style={styles.card} onPress={() => router.push(`/purchases/${item.id}` as Href)}>
-      <Text style={styles.heading}>{item.number || 'Draft purchase'} · {item.supplier_name}</Text>
+      <Text style={styles.heading}>{item.number ? displayDocumentNumber(item.number) : 'Draft purchase'} · {item.supplier_name}</Text>
       <Text>৳{item.total} · Due ৳{item.due} · {item.status}</Text></Pressable>)}
     {next && <Action label="Load more" secondary onPress={() => void load(next)} />}
-  </Screen>;
-}
-
-type EditableLine = PurchaseLineInput & { key: string; productName: string; variants: Variant[]; units: ProductUnit[]; batches: StockBatch[]; newLot: string; newExpiry: string };
-const emptyLine = (): EditableLine => ({ key: command(), product_id: '', quantity: '1', unit_cost: '', productName: '', variants: [], units: [], batches: [], newLot: '', newExpiry: '' });
-
-export function PurchaseFormScreen() {
-  const { id, supplierId, locationId } = useLocalSearchParams<{ id?: string; supplierId?: string; locationId?: string }>();
-  const { session } = useAuth();
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [locations, setLocations] = useState<StockLocation[]>([]);
-  const [supplier, setSupplier] = useState(supplierId || '');
-  const [location, setLocation] = useState(locationId || '');
-  const [notes, setNotes] = useState('');
-  const [lines, setLines] = useState<EditableLine[]>([emptyLine()]);
-  const [productSearch, setProductSearch] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  const draftCommand = useRef(command());
-  useEffect(() => {
-    if (!session?.account) return;
-    const business = session.account.business.id;
-    void Promise.all([api.suppliers(session.token, business), api.products(session.token, business, { active: 'true' }),
-      api.locations(session.token, business), ...(id ? [api.purchase(session.token, business, id)] : [])])
-      .then(([supplierResult, productResult, locationResult, existing]) => {
-        setSuppliers(supplierResult.suppliers); setProducts(productResult.products); setLocations(locationResult.locations);
-        setLocation(current => current || String(locationResult.locations.find(item => item.is_default)?.id || ''));
-        if (existing && 'purchase' in existing) {
-          const draft = existing.purchase as PurchaseRecord;
-          setSupplier(draft.supplier_id); setLocation(String(draft.location_id)); setNotes(draft.notes);
-          void Promise.all((draft.lines || []).map(async item => {
-            const [detail, unitResult, batchResult] = await Promise.all([
-              api.product(session.token, business, item.product_id),
-              api.productUnits(session.token, business, item.product_id, item.variant_id),
-              api.productBatches(session.token, business, item.product_id, item.variant_id)]);
-            return { ...item, key: command(), productName: item.product_name, newLot: '', newExpiry: '',
-              variants: detail.variants || [], units: unitResult.units, batches: batchResult.batches };
-          })).then(loaded => setLines(loaded.length ? loaded : [emptyLine()])).catch(cause => setError(message(cause)));
-        }
-      }).catch(cause => setError(message(cause)));
-  }, [session, id]);
-  useEffect(() => {
-    if (!session?.account || !productSearch.trim()) return;
-    const timer = setTimeout(() => {
-      void api.products(session.token, session.account!.business.id, { search: productSearch, active: 'true' })
-        .then(result => setProducts(result.products))
-        .catch(cause => setError(message(cause)));
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [session, productSearch]);
-  const updateLine = (key: string, change: Partial<EditableLine>) => setLines(current =>
-    current.map(item => item.key === key ? { ...item, ...change } : item));
-  async function chooseProduct(key: string, product: Product) {
-    if (!session?.account) return;
-    try {
-      const detail = await api.product(session.token, session.account.business.id, product.id);
-      const variant = detail.variants?.find(item => item.is_active);
-      updateLine(key, { product_id: product.id, productName: product.name, variant_id: variant?.id,
-        unit_id: undefined, batch_id: undefined, unit_cost: variant?.purchase_price || product.purchase_price || '',
-        variants: detail.variants || [], units: [], batches: [] });
-      if (variant) await chooseVariant(key, product.id, variant.id);
-    } catch (cause) { setError(message(cause)); }
-  }
-  async function chooseVariant(key: string, productId: string, variantId: string) {
-    if (!session?.account) return;
-    try {
-      const business = session.account.business.id;
-      const [unitsResult, batchesResult] = await Promise.all([
-        api.productUnits(session.token, business, productId, variantId),
-        api.productBatches(session.token, business, productId, variantId)]);
-      updateLine(key, { variant_id: variantId, unit_id: undefined, batch_id: undefined,
-        units: unitsResult.units, batches: batchesResult.batches });
-    } catch (cause) { setError(message(cause)); }
-  }
-  async function createLineBatch(line: EditableLine) {
-    if (!session?.account || !line.variant_id || !line.newLot.trim()) {
-      setError('Choose a variant and enter a batch identifier.'); return;
-    }
-    const tracking = line.variants.find(item => item.id === line.variant_id)?.tracking_mode;
-    if (tracking === 'expiry' && !/^\d{4}-\d{2}-\d{2}$/.test(line.newExpiry)) {
-      setError('Enter an expiry date as YYYY-MM-DD.'); return;
-    }
-    try {
-      const result = await api.createBatch(session.token, session.account.business.id, line.product_id,
-        { variant_id: line.variant_id, lot_code: line.newLot.trim(), expires_on: line.newExpiry || null });
-      updateLine(line.key, { batch_id: result.batch.id, batches: [...line.batches, result.batch], newLot: '', newExpiry: '' });
-      setError('');
-    } catch (cause) { setError(message(cause)); }
-  }
-  async function save() {
-    if (!session?.account) return;
-    if (!supplier || !location || lines.some(item => !item.product_id || !item.quantity || !item.unit_cost)) {
-      setError('Choose a supplier, location, product, quantity and cost for every line.'); return;
-    }
-    const payload: PurchaseInput = { supplier_id: supplier, location_id: Number(location), notes,
-      lines: lines.map(({ product_id, variant_id, unit_id, batch_id, quantity, unit_cost }) =>
-        ({ product_id, ...(variant_id && { variant_id }), ...(unit_id && { unit_id }),
-          ...(batch_id && { batch_id }), quantity, unit_cost })) };
-    setBusy(true); setError('');
-    try {
-      const business = session.account.business.id;
-      const result = id ? await api.updatePurchase(session.token, business, id, payload, draftCommand.current) :
-        await api.createPurchase(session.token, business, payload, draftCommand.current);
-      router.replace(`/purchases/${result.purchase.id}` as Href);
-    } catch (cause) { setError(message(cause)); }
-    finally { setBusy(false); }
-  }
-  return <Screen title={id ? 'Edit purchase draft' : 'New purchase'} backTo="/purchases">
-    <Text style={styles.muted}>Saving a draft leaves stock and balances unchanged. Complete it online from the next screen.</Text>
-    <SectionHeading icon="parties">Supplier</SectionHeading><View style={styles.row}>{suppliers.map(item =>
-      <Choice key={item.id} label={item.name} selected={supplier === item.id} onPress={() => setSupplier(item.id)} />)}</View>
-    <Action label="Add supplier" icon="plus" secondary onPress={() => router.push('/suppliers/new')} />
-    <SectionHeading icon="location">Receive at</SectionHeading><View style={styles.row}>{locations.filter(item => item.is_active).map(item =>
-      <Choice key={item.id} label={item.name} selected={location === String(item.id)} onPress={() => setLocation(String(item.id))} />)}</View>
-    {lines.map((line, index) => <View key={line.key} style={styles.card}>
-      <SectionHeading icon="products">Product {index + 1}</SectionHeading>
-      <Field label="Find product" value={productSearch} onChangeText={setProductSearch} placeholder="Search by name" />
-      <View style={styles.row}>{products.filter(item => item.is_active && item.name.toLowerCase().includes(productSearch.toLowerCase())).slice(0, 25)
-        .map(item => <Choice key={item.id} label={item.name} selected={line.product_id === item.id}
-          onPress={() => void chooseProduct(line.key, item)} />)}</View>
-      {!!line.product_id && <><Text style={styles.label}>Variant</Text><View style={styles.row}>{line.variants.filter(item => item.is_active)
-        .map(item => <Choice key={item.id} label={item.label || item.sku || 'Standard'} selected={line.variant_id === item.id}
-          onPress={() => void chooseVariant(line.key, line.product_id, item.id)} />)}</View>
-        <Text style={styles.label}>Packaging unit</Text><View style={styles.row}>
-          <Choice label="Base unit" selected={!line.unit_id} onPress={() => updateLine(line.key, { unit_id: undefined })} />
-          {line.units.filter(item => item.is_active).map(item => <Choice key={item.id} label={`${item.name} (${item.factor})`}
-            selected={line.unit_id === item.id} onPress={() => updateLine(line.key, { unit_id: item.id })} />)}</View>
-        {(line.variants.find(item => item.id === line.variant_id)?.tracking_mode !== 'simple') && <>
-          <Text style={styles.label}>Batch required</Text><View style={styles.row}>{line.batches.map(item =>
-            <Choice key={item.id} label={`${item.lot_code}${item.expires_on ? ` · ${item.expires_on}` : ''}`}
-              selected={line.batch_id === item.id} onPress={() => updateLine(line.key, { batch_id: item.id })} />)}</View>
-          <Field label="New batch identifier" value={line.newLot} onChangeText={value => updateLine(line.key, { newLot: value })} />
-          {line.variants.find(item => item.id === line.variant_id)?.tracking_mode === 'expiry' &&
-            <Field label="Expiry YYYY-MM-DD" value={line.newExpiry} onChangeText={value => updateLine(line.key, { newExpiry: value })} />}
-          <Action label="Create batch" icon="batch" secondary onPress={() => void createLineBatch(line)} /></>}
-      </>}
-      <Field label="Quantity" value={line.quantity} onChangeText={value => updateLine(line.key, { quantity: value })} keyboardType="decimal-pad" />
-      <Field label="Cost per selected unit ৳" value={line.unit_cost} onChangeText={value => updateLine(line.key, { unit_cost: value })} keyboardType="decimal-pad" />
-      {lines.length > 1 && <Action label="Remove line" icon="minus" secondary onPress={() => setLines(current => current.filter(item => item.key !== line.key))} />}
-    </View>)}
-    <Action label="Add another product" icon="plus" secondary onPress={() => setLines(current => [...current, emptyLine()])} />
-    <Field label="Notes" value={notes} onChangeText={setNotes} multiline />
-    <ErrorText value={error} /><Action label={busy ? 'Saving…' : 'Save draft'} icon="default" disabled={busy} onPress={() => void save()} />
   </Screen>;
 }
 
@@ -392,19 +265,24 @@ export function PurchaseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { session } = useAuth();
   const [purchase, setPurchase] = useState<PurchaseRecord | null>(null);
-  const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
+  const [accounts, setAccounts] = useState<PurchasePaymentAccount[]>([]);
   const [paid, setPaid] = useState('0');
   const [accountId, setAccountId] = useState('');
   const [reason, setReason] = useState('');
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentOpen, setPaymentOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const completionCommand = useRef(command());
   const cancellationCommand = useRef(command());
+  const paymentCommand = useRef(command());
   const load = useCallback(async () => {
     if (!session?.account || !id) return;
     try {
       const [record, money] = await Promise.all([api.purchase(session.token, session.account.business.id, id),
-        api.moneyAccounts(session.token, session.account.business.id)]);
+      api.purchasePaymentAccounts(session.token, session.account.business.id)]);
       setPurchase(record.purchase); setAccounts(money.accounts);
       setAccountId(current => current || money.accounts.find(item => item.is_default)?.id || ''); setError('');
     } catch (cause) { setError(message(cause)); }
@@ -420,40 +298,106 @@ export function PurchaseDetailScreen() {
     } catch (cause) { setError(`Purchase was not confirmed: ${message(cause)}. Check this draft before retrying.`); }
     finally { setBusy(false); }
   }
-  async function cancel() {
-    if (!session?.account || !purchase) return;
+  async function cancel(): Promise<boolean> {
+    if (!session?.account || !purchase) return false;
     setBusy(true); setError('');
     try {
       const result = await api.cancelPurchase(session.token, session.account.business.id, purchase.id, reason, cancellationCommand.current);
-      setPurchase(result.purchase); cancellationCommand.current = command();
+      setPurchase(result.purchase); cancellationCommand.current = command(); return true;
+    } catch (cause) { setError(message(cause)); return false; }
+    finally { setBusy(false); }
+  }
+  async function paySupplier() {
+    if (!session?.account || !purchase) return;
+    const amount = Number(paymentAmount);
+    const due = Number(purchase.due);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > due) { setError(`Enter an amount from ৳0.01 to ৳${due.toFixed(2)}.`); return; }
+    if (!accountId) { setError('Choose the money account used for this payment.'); return; }
+    setBusy(true); setError('');
+    try {
+      await api.supplierAction(session.token, session.account.business.id, purchase.supplier_id,
+        { kind: 'payment', amount: amount.toFixed(2), account_id: accountId, purchase_id: purchase.id }, paymentCommand.current);
+      paymentCommand.current = command();
+      setPaymentOpen(false); setPaymentAmount('');
+      await load();
     } catch (cause) { setError(message(cause)); }
     finally { setBusy(false); }
   }
-  return <Screen title={purchase?.number || 'Purchase draft'} backTo="/purchases"><ErrorText value={error} />
-    {purchase && <><Text style={styles.heading}>{purchase.supplier_name}</Text>
-      <Text style={styles.muted}>{purchase.status} · {purchase.created_at.slice(0, 10)}</Text>
-      <Text style={styles.muted}>Received at {purchase.location_name}</Text>
-      <Text style={styles.heading}>Total ৳{purchase.total}</Text><Text>Paid ৳{purchase.paid} · Due ৳{purchase.due}</Text>
-      {purchase.lines?.map(line => <View key={line.id} style={styles.card}>
-        <Text style={styles.heading}>{line.product_name}{line.variant_name ? ` · ${line.variant_name}` : ''}</Text>
-        <Text>{line.quantity} {line.unit_name || 'unit'} × ৳{line.unit_cost} = ৳{line.line_total}</Text>
-        {!!line.lot_code && <Text style={styles.muted}>Batch {line.lot_code}</Text>}
-      </View>)}
-      {purchase.status === 'draft' && <>
+  const due = Number(purchase?.due ?? 0);
+  const total = Number(purchase?.total ?? 0);
+  const amountPaid = Number(purchase?.paid ?? 0);
+  const paidPercent = total > 0 ? Math.min(100, Math.max(0, amountPaid / total * 100)) : 0;
+  const completed = purchase?.status === 'completed';
+  const statusLabel = purchase?.status === 'cancelled' ? 'Cancelled' : completed ? due <= 0 ? 'Paid in full' : amountPaid > 0 ? 'Partially paid' : 'Unpaid' : 'Draft';
+  const activeAccounts = accounts.filter(item => item.is_active);
+  const selectedAccount = activeAccounts.find(item => item.id === accountId);
+  const willGoNegative = !!selectedAccount && Number(paymentAmount) > Number(selectedAccount.balance);
+
+  return <Screen title={purchase?.number ? displayDocumentNumber(purchase.number) : 'Purchase draft'} backTo="/purchases"><ErrorText value={error} />
+    {purchase && <>
+      <View style={detailStyles.metaHeader}>
+        <View style={detailStyles.metaCopy}>
+          <Text style={detailStyles.date}>{new Date(purchase.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })} · {purchase.location_name}</Text>
+          <Text style={detailStyles.supplierLabel}>SUPPLIER</Text>
+          <Text style={detailStyles.supplierName}>{purchase.supplier_name}</Text>
+        </View>
+        {purchase.status !== 'cancelled' && <Pressable style={detailStyles.moreButton} onPress={() => setMoreOpen(true)} accessibilityRole="button" accessibilityLabel="More purchase actions"><Text style={detailStyles.moreGlyph}>•••</Text></Pressable>}
+      </View>
+
+      {completed && <View style={detailStyles.paymentCard}>
+        <View style={detailStyles.paymentHeader}><Text style={detailStyles.sectionTitle}>Payment Summary</Text><View style={[detailStyles.badge, due <= 0 ? detailStyles.paidBadge : amountPaid > 0 ? detailStyles.partialBadge : detailStyles.unpaidBadge]}><Text style={[detailStyles.badgeText, due <= 0 ? detailStyles.paidBadgeText : amountPaid > 0 ? detailStyles.partialBadgeText : detailStyles.unpaidBadgeText]}>{statusLabel}</Text></View></View>
+        <View style={detailStyles.totalLine}><Text style={detailStyles.totalLabel}>Purchase Total</Text><Text style={detailStyles.totalValue}>৳{total.toFixed(2)}</Text></View>
+        <View style={detailStyles.duePanel}><Text style={detailStyles.dueCaption}>REMAINING TO PAY</Text><Text style={detailStyles.dueValue}>৳{due.toFixed(2)}</Text></View>
+        <View style={detailStyles.progressTrack}><View style={[detailStyles.progress, { width: `${paidPercent}%` }]} /></View>
+        <View style={detailStyles.paidLine}><Text style={detailStyles.paidText}>Paid ৳{amountPaid.toFixed(2)}</Text><Text style={detailStyles.paidText}>{paidPercent.toFixed(1)}% paid</Text></View>
+        {due > 0 && <Action label="Pay Supplier" icon="receive" onPress={() => { setPaymentAmount(due.toFixed(2)); setPaymentOpen(true); setError(''); }} />}
+        <Action label="View Payment History" secondary onPress={() => router.push(`/suppliers/${purchase.supplier_id}` as Href)} />
+      </View>}
+
+      {purchase.status === 'draft' && <View style={styles.card}>
+        <Text style={detailStyles.sectionTitle}>Purchase Summary</Text>
+        <Text style={styles.muted}>Total ৳{purchase.total} · Received at {purchase.location_name}</Text>
         <Action label="Edit draft" icon="edit" secondary onPress={() => router.push(`/purchases/${purchase.id}/edit` as Href)} />
         <Field label="Pay now ৳" value={paid} onChangeText={setPaid} keyboardType="decimal-pad" />
-        {Number(paid) > 0 && <View style={styles.row}>{accounts.filter(item => item.is_active).map(item =>
-          <Choice key={item.id} label={item.name} selected={accountId === item.id} onPress={() => setAccountId(item.id)} />)}</View>}
-        <Text style={styles.muted}>Completing requires an online confirmation before stock and বাকি are posted.</Text>
-        <Action label={busy ? 'Completing…' : 'Complete purchase online'} icon="default" disabled={busy} onPress={() => void complete()} />
-      </>}
-      {purchase.status === 'completed' && <Action label="Supplier account and payments" secondary
-        onPress={() => router.push(`/suppliers/${purchase.supplier_id}` as Href)} />}
-      {purchase.status !== 'cancelled' && <>
-        {purchase.status === 'completed' && <Field label="Cancellation reason" value={reason} onChangeText={setReason} />}
-        <Action label={busy ? 'Working…' : 'Cancel purchase'} secondary disabled={busy} onPress={() => void cancel()} />
-      </>}
+        {Number(paid) > 0 && <View style={styles.row}>{activeAccounts.map(item => <Choice key={item.id} label={item.name} selected={accountId === item.id} onPress={() => setAccountId(item.id)} />)}</View>}
+        <Text style={styles.muted}>Completing confirms the purchase and updates stock and supplier balance.</Text>
+        <Action label={busy ? 'Completing…' : 'Complete purchase'} icon="default" disabled={busy} onPress={() => void complete()} />
+      </View>}
+
+      <View style={detailStyles.itemsHeader}><Text style={detailStyles.sectionTitle}>Purchased Items</Text><Text style={styles.muted}>{purchase.lines?.length ?? 0} {(purchase.lines?.length ?? 0) === 1 ? 'product' : 'products'}</Text></View>
+      {purchase.lines?.map(line => <View key={line.id} style={detailStyles.itemRow}>
+        {line.image_url ? <Image source={{ uri: resolveAssetUrl(line.image_url) || '' }} style={detailStyles.itemImage} contentFit="cover" cachePolicy="disk" /> : <View style={detailStyles.itemPlaceholder}><AppSymbol name="products" size={20} color="#75847E" /></View>}
+        <View style={detailStyles.itemCopy}><Text style={detailStyles.itemName} numberOfLines={2}>{line.product_name}{line.variant_name ? ` · ${line.variant_name}` : ''}</Text><Text style={detailStyles.itemMeta}>{line.quantity} {line.unit_name || 'unit'} × ৳{line.unit_cost}</Text>{!!line.lot_code && <Text style={styles.muted}>Batch {line.lot_code}</Text>}</View>
+        <Text style={detailStyles.itemTotal}>৳{Number(line.line_total).toFixed(2)}</Text>
+      </View>)}
+      {purchase.status === 'cancelled' && <Text style={styles.muted}>This purchase was cancelled.</Text>}
     </>}
+
+    <Modal visible={paymentOpen} transparent animationType="slide" onRequestClose={() => setPaymentOpen(false)}>
+      <View style={detailStyles.modalBackdrop}><View style={detailStyles.sheet}>
+        <View style={detailStyles.sheetHeader}><View><Text style={detailStyles.sheetTitle}>Pay Supplier</Text><Text style={styles.muted}>৳{due.toFixed(2)} due · {purchase?.supplier_name}</Text></View><Pressable onPress={() => setPaymentOpen(false)} style={detailStyles.closeButton}><AppSymbol name="close" size={18} color="#52635E" /></Pressable></View>
+        <Text style={detailStyles.fieldLabel}>Amount to Pay</Text>
+        <Field label="৳" value={paymentAmount} onChangeText={setPaymentAmount} keyboardType="decimal-pad" />
+        <Text style={detailStyles.fieldLabel}>Pay From</Text>
+        <View style={styles.row}>{activeAccounts.map(item => <Choice key={item.id} label={item.name} selected={accountId === item.id} onPress={() => setAccountId(item.id)} />)}</View>
+        {willGoNegative && <Text style={detailStyles.balanceWarning}>Warning: this payment exceeds {selectedAccount?.name}&apos;s available balance of ৳{currency(selectedAccount?.balance ?? 0)}. The accounting balance will become negative.</Text>}
+        <View style={detailStyles.remainingBox}><Text style={styles.muted}>Remaining After Payment</Text><Text style={detailStyles.remainingValue}>৳{Math.max(0, due - (Number(paymentAmount) || 0)).toFixed(2)}</Text></View>
+        <Action label={busy ? 'Recording payment…' : 'Confirm Payment'} disabled={busy || activeAccounts.length === 0} onPress={() => void paySupplier()} />
+      </View></View>
+    </Modal>
+
+    <Modal visible={moreOpen} transparent animationType="fade" onRequestClose={() => setMoreOpen(false)}>
+      <Pressable style={detailStyles.menuBackdrop} onPress={() => setMoreOpen(false)}><View style={detailStyles.menu}>
+        <Pressable style={detailStyles.menuItem} onPress={() => { setMoreOpen(false); setCancelOpen(true); }}><AppSymbol name="close" size={18} color="#A62925" /><Text style={detailStyles.cancelText}>Cancel Purchase</Text></Pressable>
+      </View></Pressable>
+    </Modal>
+    <Modal visible={cancelOpen} transparent animationType="slide" onRequestClose={() => setCancelOpen(false)}>
+      <View style={detailStyles.modalBackdrop}><View style={detailStyles.sheet}>
+        <View style={detailStyles.sheetHeader}><View><Text style={detailStyles.sheetTitle}>Cancel Purchase</Text><Text style={styles.muted}>This reverses its posted stock and balance effects.</Text></View><Pressable onPress={() => setCancelOpen(false)} style={detailStyles.closeButton}><AppSymbol name="close" size={18} color="#52635E" /></Pressable></View>
+        <Field label="Cancellation reason *" value={reason} onChangeText={setReason} multiline />
+        <Action label={busy ? 'Cancelling…' : 'Confirm Cancellation'} secondary disabled={busy || !reason.trim()} onPress={() => { void cancel().then(cancelled => { if (cancelled) setCancelOpen(false); }); }} />
+      </View></View>
+    </Modal>
   </Screen>;
 }
 
@@ -476,4 +420,15 @@ const styles = StyleSheet.create({
   action: { backgroundColor: '#006D64', borderRadius: 12, minHeight: 48, flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center', padding: 10 },
   secondary: { backgroundColor: '#E0F3EA' }, actionText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
   error: { color: '#A62925', backgroundColor: '#FCEBE9', padding: 12, borderRadius: 10 },
+});
+
+const detailStyles = StyleSheet.create({
+  metaHeader: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, paddingBottom: 4 },
+  metaCopy: { flex: 1, gap: 5 }, date: { color: '#52635E', fontSize: 12 }, supplierLabel: { color: '#75847E', fontSize: 10, fontWeight: '800', letterSpacing: 1, marginTop: 7 }, supplierName: { color: '#15211F', fontSize: 20, fontWeight: '800' },
+  moreButton: { width: 40, height: 40, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2EAE4', alignItems: 'center', justifyContent: 'center' }, moreGlyph: { color: '#52635E', fontSize: 18, fontWeight: '800', letterSpacing: 1 },
+  paymentCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCE8E2', borderRadius: 18, padding: 17, gap: 14 }, paymentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, sectionTitle: { color: '#15211F', fontSize: 17, fontWeight: '800' }, badge: { borderRadius: 14, paddingHorizontal: 10, paddingVertical: 6 }, paidBadge: { backgroundColor: '#E5F8F4' }, partialBadge: { backgroundColor: '#FFF5E1' }, unpaidBadge: { backgroundColor: '#FCEBE9' }, badgeText: { fontSize: 10, fontWeight: '800' }, paidBadgeText: { color: '#006D64' }, partialBadgeText: { color: '#AE741B' }, unpaidBadgeText: { color: '#A62925' },
+  totalLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, totalLabel: { color: '#52635E', fontSize: 13 }, totalValue: { color: '#15211F', fontSize: 15, fontWeight: '700' }, duePanel: { backgroundColor: '#F6F8F7', borderRadius: 14, padding: 14, gap: 4 }, dueCaption: { color: '#52635E', fontSize: 10, fontWeight: '800', letterSpacing: 0.7 }, dueValue: { color: '#15211F', fontSize: 30, fontWeight: '800', letterSpacing: -0.6 }, progressTrack: { height: 7, overflow: 'hidden', borderRadius: 4, backgroundColor: '#E5ECE9' }, progress: { height: '100%', borderRadius: 4, backgroundColor: '#00A18F' }, paidLine: { flexDirection: 'row', justifyContent: 'space-between' }, paidText: { color: '#52635E', fontSize: 12, fontWeight: '600' },
+  itemsHeader: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', paddingTop: 5 }, itemRow: { minHeight: 82, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 11, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2EAE4', borderRadius: 15 }, itemImage: { width: 56, height: 56, borderRadius: 11, backgroundColor: '#F6F8F7' }, itemPlaceholder: { width: 56, height: 56, borderRadius: 11, backgroundColor: '#F1F5F3', alignItems: 'center', justifyContent: 'center' }, itemCopy: { flex: 1, gap: 4, minWidth: 0 }, itemName: { color: '#15211F', fontSize: 13, fontWeight: '700' }, itemMeta: { color: '#52635E', fontSize: 11 }, itemTotal: { color: '#15211F', fontSize: 13, fontWeight: '800' },
+  modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,25,22,.45)' }, sheet: { width: '100%', maxWidth: 620, alignSelf: 'center', padding: 20, paddingBottom: 28, gap: 13, borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: '#FFFFFF' }, sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }, sheetTitle: { color: '#15211F', fontSize: 21, fontWeight: '800', marginBottom: 3 }, closeButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F3' }, fieldLabel: { color: '#344943', fontSize: 13, fontWeight: '700', marginBottom: -7 }, balanceWarning: { color: '#8A4B08', backgroundColor: '#FFF5E1', borderWidth: 1, borderColor: '#F2D7A0', padding: 11, borderRadius: 11, fontSize: 12, lineHeight: 18 }, remainingBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 13, borderRadius: 12, backgroundColor: '#F6F8F7' }, remainingValue: { color: '#15211F', fontSize: 16, fontWeight: '800' },
+  menuBackdrop: { flex: 1, justifyContent: 'flex-start', alignItems: 'flex-end', paddingTop: 105, paddingHorizontal: 18, backgroundColor: 'rgba(15,25,22,.22)' }, menu: { width: 210, backgroundColor: '#FFFFFF', borderRadius: 13, padding: 6, elevation: 5 }, menuItem: { minHeight: 45, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 10 }, cancelText: { color: '#A62925', fontSize: 13, fontWeight: '700' },
 });

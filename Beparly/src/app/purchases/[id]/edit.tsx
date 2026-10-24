@@ -1,1 +1,1 @@
-export { PurchaseFormScreen as default } from '@/features/purchases/purchase-ui';
+export { PurchaseFlowScreen as default } from '@/features/purchases/purchase-flow';

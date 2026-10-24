@@ -1,0 +1,265 @@
+import json
+import uuid
+from datetime import timedelta
+from decimal import Decimal
+
+from django.test import TestCase
+from django.utils import timezone
+
+from accounting.models import Contact, JournalEntry, MoneyAccount
+from accounting.services import balance, setup_business
+from accounts.models import Business, BusinessMember, User
+from audit.models import AuditEvent
+from products.models import Product, ProductUnit, ProductVariant
+from stockkeeper.models import StockBalance, StockLocation, StockMovement
+from stockkeeper.services import receive
+
+from .models import Quotation, QuotationSaleDraft, Sale
+from .quotations import (QuotationConflict, QuotationError, change_status, complete_draft, convert,
+                         duplicate, issue, save_draft, serialize)
+
+
+class QuotationTests(TestCase):
+    def setUp(self):
+        self.owner = User.objects.create_user(phone='01712345678', password='OwnerPass#83')
+        self.staff = User.objects.create_user(phone='01712345679', password='StaffPass#83')
+        self.business = Business.objects.create(name='Quotation Test')
+        BusinessMember.objects.create(user=self.owner, business=self.business, role='owner')
+        BusinessMember.objects.create(user=self.staff, business=self.business, role='employee', can_post_stock=True)
+        setup_business(self.business)
+        self.location = StockLocation.objects.get(business=self.business, is_default=True)
+        self.location.address = 'Dhaka Shop'
+        self.location.save(update_fields=['address'])
+        self.cash = MoneyAccount.objects.get(business=self.business, is_default=True)
+        self.product = Product.objects.create(business=self.business, name='সাবান', sku='SOAP',
+            retail_price=Decimal('10'), wholesale_price=Decimal('8'), purchase_price=Decimal('4'))
+        self.variant = self.product.variants.get()
+        self.unit = ProductUnit.objects.create(product=self.product, variant=self.variant, name='Box',
+            factor=Decimal('2'), selling_price=Decimal('18'))
+        receive(self.product, self.location, Decimal('20'), Decimal('4'), self.owner, uuid.uuid4())
+
+    def payload(self, **changes):
+        data = {'location_id': self.location.pk, 'price_tier': 'retail', 'customer_name': 'রহিম',
+            'customer_phone': '01712345670', 'discount': '1.00', 'delivery_fee': '2.00',
+            'delivery_address': 'Dhaka', 'lines': [{'product_id': str(self.product.pk),
+            'variant_id': str(self.variant.pk), 'unit_id': str(self.unit.pk), 'quantity': '2'}]}
+        data.update(changes)
+        return data
+
+    def issued(self):
+        quote = save_draft(self.business, self.owner, uuid.uuid4(), self.payload())
+        return issue(self.business, self.owner, uuid.uuid4(), quote.pk, quote.version)
+
+    def test_issue_and_status_have_no_stock_or_money_effect_and_freeze_snapshots(self):
+        before_stock = StockBalance.objects.get(variant=self.variant, location=self.location).quantity
+        before_movements = StockMovement.objects.count()
+        before_journals = JournalEntry.objects.count()
+        quote = self.issued()
+        self.assertEqual(quote.number, 'Q-001')
+        self.assertEqual(quote.total, Decimal('37.00'))
+        self.assertEqual(quote.lines.get().conversion_factor, Decimal('2'))
+        self.assertEqual(StockBalance.objects.get(variant=self.variant, location=self.location).quantity, before_stock)
+        self.assertEqual(StockMovement.objects.count(), before_movements)
+        self.assertEqual(JournalEntry.objects.count(), before_journals)
+        self.variant.retail_price = Decimal('99')
+        self.variant.save()
+        self.product.name = 'Changed'
+        self.product.save()
+        self.assertEqual(quote.lines.get().product_name, 'সাবান')
+        self.assertEqual(quote.lines.get().unit_price, Decimal('18'))
+        with self.assertRaises(QuotationError):
+            save_draft(self.business, self.owner, uuid.uuid4(), self.payload(version=quote.version), quote.pk)
+        accepted = change_status(self.business, self.owner, uuid.uuid4(), quote.pk, 'accepted')
+        self.assertEqual(accepted.status, 'accepted')
+
+    def test_versions_commands_and_staff_price_permission(self):
+        with self.assertRaises(QuotationError):
+            save_draft(self.business, self.staff, uuid.uuid4(), self.payload(
+                lines=[{**self.payload()['lines'][0], 'unit_price': '17.00'}]))
+        command = uuid.uuid4()
+        quote = save_draft(self.business, self.staff, command, self.payload())
+        self.assertEqual(save_draft(self.business, self.staff, command, {}), quote)
+        with self.assertRaises(QuotationConflict):
+            save_draft(self.business, self.staff, uuid.uuid4(), self.payload(version=0), quote.pk)
+        updated = save_draft(self.business, self.staff, uuid.uuid4(), self.payload(version=1, notes='Revised'), quote.pk)
+        self.assertEqual(updated.version, 2)
+        self.assertEqual(Quotation.objects.count(), 1)
+
+    def test_wholesale_quote_uses_retail_catalog_price_when_wholesale_price_is_unset(self):
+        self.variant.wholesale_price = None
+        self.variant.save(update_fields=['wholesale_price'])
+        lines = [{'product_id': str(self.product.pk), 'variant_id': str(self.variant.pk),
+                  'quantity': '2', 'unit_price': ''}]
+        quote = save_draft(self.business, self.staff, uuid.uuid4(), self.payload(
+            price_tier='wholesale', lines=lines, delivery_fee='0', delivery_address=''))
+        self.assertEqual(quote.lines.get().unit_price, Decimal('10.00'))
+        self.assertEqual(quote.subtotal, Decimal('20.00'))
+        self.assertEqual(quote.total, Decimal('19.00'))
+        quote = issue(self.business, self.owner, uuid.uuid4(), quote.pk, quote.version)
+        change_status(self.business, self.owner, uuid.uuid4(), quote.pk, 'accepted')
+        draft = convert(self.business, self.owner, uuid.uuid4(), quote.pk)
+        sale = complete_draft(self.business, self.owner, uuid.uuid4(), draft.pk,
+                              {'paid': '19', 'account_id': str(self.cash.pk)})
+        self.assertEqual(sale.lines.get().unit_price, Decimal('10.00'))
+        self.assertEqual(sale.total, Decimal('19.00'))
+
+    def test_conversion_reuses_one_draft_and_checkout_posts_once(self):
+        customer = Contact.objects.create(business=self.business, name='Rahim', is_customer=True)
+        quote = save_draft(self.business, self.owner, uuid.uuid4(), self.payload(customer_id=str(customer.pk)))
+        quote = issue(self.business, self.owner, uuid.uuid4(), quote.pk, quote.version)
+        change_status(self.business, self.owner, uuid.uuid4(), quote.pk, 'accepted')
+        before = StockBalance.objects.get(variant=self.variant, location=self.location).quantity
+        draft = convert(self.business, self.owner, uuid.uuid4(), quote.pk)
+        self.assertEqual(convert(self.business, self.owner, uuid.uuid4(), quote.pk).pk, draft.pk)
+        self.assertEqual(QuotationSaleDraft.objects.count(), 1)
+        self.assertEqual(StockBalance.objects.get(variant=self.variant, location=self.location).quantity, before)
+        command = uuid.uuid4()
+        sale = complete_draft(self.business, self.owner, command, draft.pk,
+                              {'paid': '10', 'account_id': str(self.cash.pk)})
+        self.assertEqual(sale.quotation_id, quote.pk)
+        self.assertEqual(serialize(quote)['sale_id'], str(sale.pk))
+        self.assertEqual(sale.total, Decimal('37.00'))
+        self.assertEqual(sale.paid, Decimal('10'))
+        self.assertEqual(sale.lines.get().product_name, 'সাবান')
+        self.assertEqual(StockBalance.objects.get(variant=self.variant, location=self.location).quantity, before-4)
+        self.assertEqual(balance(self.cash.ledger_account), Decimal('10'))
+        self.assertEqual(complete_draft(self.business, self.owner, command, draft.pk, {}).pk, sale.pk)
+        self.assertEqual(AuditEvent.objects.filter(entity_type='quotation', entity_id=str(quote.pk), action='completed').count(), 1)
+        with self.assertRaises(QuotationConflict):
+            complete_draft(self.business, self.owner, uuid.uuid4(), draft.pk, {'paid': '37'})
+        self.assertEqual(Sale.objects.count(), 1)
+
+    def test_changed_factor_stock_and_guest_due(self):
+        quote = self.issued()
+        change_status(self.business, self.owner, uuid.uuid4(), quote.pk, 'accepted')
+        self.unit.factor = Decimal('3')
+        self.unit.save()
+        with self.assertRaisesRegex(QuotationError, 'factor'):
+            convert(self.business, self.owner, uuid.uuid4(), quote.pk)
+        self.unit.factor = Decimal('2')
+        self.unit.save()
+        draft = convert(self.business, self.owner, uuid.uuid4(), quote.pk)
+        with self.assertRaisesRegex(ValueError, 'customer'):
+            complete_draft(self.business, self.owner, uuid.uuid4(), draft.pk, {'paid': '0'})
+        quote.refresh_from_db()
+        self.assertEqual(quote.status, 'accepted')
+        self.assertEqual(Sale.objects.count(), 0)
+
+    def test_ten_variants_and_packages_keep_their_issued_prices(self):
+        product = Product.objects.create(business=self.business, name='Shirt', sku='SHIRT', product_type='variant')
+        lines = []
+        for index in range(10):
+            variant = ProductVariant.objects.create(product=product, business=self.business, label=f'Size {index}',
+                sku=f'SHIRT-{index}', combination_key=str(index), base_unit='Piece', retail_price=Decimal('12.00'))
+            unit = ProductUnit.objects.create(product=product, variant=variant, name='Pack',
+                factor=Decimal(index + 2), selling_price=Decimal(f'{index+20}.25'))
+            receive(product, self.location, Decimal('30'), Decimal('4'), self.owner, uuid.uuid4(), variant=variant)
+            lines.append({'product_id': str(product.pk), 'variant_id': str(variant.pk),
+                          'unit_id': str(unit.pk), 'quantity': '1.5'})
+        quote = save_draft(self.business, self.owner, uuid.uuid4(), self.payload(lines=lines, discount='0', delivery_fee='0'))
+        quote = issue(self.business, self.owner, uuid.uuid4(), quote.pk, quote.version)
+        for row in quote.lines.order_by('pk'):
+            self.assertEqual(row.base_quantity, row.quantity * row.conversion_factor)
+            self.assertEqual(row.line_total, (row.quantity * row.unit_price).quantize(Decimal('0.01')))
+        self.assertEqual(len({row.sku for row in quote.lines.all()}), 10)
+        self.assertEqual(quote.total, sum((row.line_total for row in quote.lines.all()), Decimal('0')))
+        ProductVariant.objects.filter(product=product).update(retail_price=Decimal('99.00'))
+        ProductUnit.objects.filter(product=product).update(selling_price=Decimal('99.00'))
+        self.assertEqual(quote.lines.order_by('pk')[0].unit_price, Decimal('20.25'))
+
+    def test_stock_is_checked_again_at_checkout(self):
+        quote = self.issued()
+        change_status(self.business, self.owner, uuid.uuid4(), quote.pk, 'accepted')
+        draft = convert(self.business, self.owner, uuid.uuid4(), quote.pk)
+        StockBalance.objects.filter(variant=self.variant, location=self.location).update(quantity=Decimal('0'))
+        with self.assertRaisesRegex(QuotationError, 'Insufficient stock'):
+            complete_draft(self.business, self.owner, uuid.uuid4(), draft.pk,
+                           {'paid': '37', 'account_id': str(self.cash.pk)})
+        self.assertFalse(Sale.objects.exists())
+
+    def test_expired_quote_requires_duplication_and_new_number(self):
+        quote = self.issued()
+        Quotation.objects.filter(pk=quote.pk).update(valid_until=timezone.localdate() - timedelta(days=1))
+        quote.refresh_from_db()
+        self.assertEqual(serialize(quote)['status'], 'expired')
+        with self.assertRaises(QuotationError):
+            change_status(self.business, self.owner, uuid.uuid4(), quote.pk, 'accepted')
+        copy = duplicate(self.business, self.owner, uuid.uuid4(), quote.pk)
+        self.assertEqual(copy.status, 'draft')
+        self.assertEqual(copy.number, '')
+        copy = issue(self.business, self.owner, uuid.uuid4(), copy.pk, copy.version)
+        self.assertEqual(copy.number, 'Q-002')
+
+    def test_accepted_before_expiry_can_convert_after_validity_date(self):
+        quote = self.issued()
+        change_status(self.business, self.owner, uuid.uuid4(), quote.pk, 'accepted')
+        Quotation.objects.filter(pk=quote.pk).update(valid_until=timezone.localdate() - timedelta(days=1))
+        self.assertEqual(convert(self.business, self.owner, uuid.uuid4(), quote.pk).quotation_id, quote.pk)
+
+    def test_owner_checkout_price_override_and_staff_denial(self):
+        quote = self.issued()
+        change_status(self.business, self.owner, uuid.uuid4(), quote.pk, 'accepted')
+        draft = convert(self.business, self.owner, uuid.uuid4(), quote.pk)
+        with self.assertRaisesRegex(QuotationError, 'owner'):
+            complete_draft(self.business, self.staff, uuid.uuid4(), draft.pk,
+                           {'paid': '39', 'account_id': str(self.cash.pk), 'prices': ['19.00']})
+        sale = complete_draft(self.business, self.owner, uuid.uuid4(), draft.pk,
+                              {'paid': '39', 'account_id': str(self.cash.pk), 'prices': ['19.00']})
+        self.assertEqual(sale.lines.get().unit_price, Decimal('19.00'))
+        self.assertEqual(sale.total, Decimal('39.00'))
+
+    def test_registered_customer_snapshot_survives_contact_change(self):
+        customer = Contact.objects.create(business=self.business, name='আগের নাম', phone='01712345672', is_customer=True)
+        quote = save_draft(self.business, self.owner, uuid.uuid4(), self.payload(customer_id=str(customer.pk)))
+        quote = issue(self.business, self.owner, uuid.uuid4(), quote.pk, quote.version)
+        customer.name = 'New name'
+        customer.phone = '01712345673'
+        customer.save(update_fields=['name', 'phone'])
+        self.assertEqual(serialize(quote)['customer_name'], 'আগের নাম')
+        self.assertEqual(serialize(quote)['customer_phone'], '01712345672')
+
+    def test_product_image_stays_with_issued_quote_and_resulting_sale(self):
+        self.product.image_key = 'products/quoted.png'
+        self.product.save(update_fields=['image_key'])
+        quote = self.issued()
+        original = serialize(quote)['lines'][0]['image_url']
+        self.assertIn('products/quoted.png', original)
+        self.product.image_key = 'products/new.png'
+        self.product.save(update_fields=['image_key'])
+        self.assertEqual(serialize(quote)['lines'][0]['image_url'], original)
+        copied = duplicate(self.business, self.owner, uuid.uuid4(), quote.pk)
+        self.assertEqual(serialize(copied)['lines'][0]['image_url'], original)
+        change_status(self.business, self.owner, uuid.uuid4(), quote.pk, 'accepted')
+        draft = convert(self.business, self.owner, uuid.uuid4(), quote.pk)
+        sale = complete_draft(self.business, self.owner, uuid.uuid4(), draft.pk,
+                              {'paid': str(quote.total), 'account_id': str(self.cash.pk)})
+        self.assertEqual(sale.lines.get().image_url_snapshot, original)
+
+    def test_api_is_business_scoped_and_pdf_is_authenticated(self):
+        quote = self.issued()
+        path = f'/api/v1/businesses/{self.business.pk}/quotations/{quote.pk}/'
+        self.assertEqual(self.client.get(path).status_code, 401)
+        login = self.client.post('/api/v1/auth/login/', data=json.dumps(
+            {'phone': self.owner.phone, 'password': 'OwnerPass#83'}), content_type='application/json')
+        token = login.json()['token']
+        headers = {'HTTP_AUTHORIZATION': f'Bearer {token}'}
+        self.assertEqual(self.client.get(path, **headers).json()['quotation']['number'], 'Q-001')
+        other = Business.objects.create(name='Other')
+        self.assertEqual(self.client.get(path.replace(str(self.business.pk), str(other.pk), 1), **headers).status_code, 404)
+        response = self.client.get(path + 'documents/a4/', **headers)
+        self.assertEqual(response.status_code, 200, response.content[:200])
+        self.assertTrue(response.content.startswith(b'%PDF'))
+        self.assertTrue(self.client.get(path + 'documents/a5/', **headers).content.startswith(b'%PDF'))
+
+    def test_staff_without_sales_permission_cannot_read_or_write_quotes(self):
+        membership = BusinessMember.objects.get(user=self.staff, business=self.business)
+        membership.can_post_stock = False
+        membership.save(update_fields=['can_post_stock'])
+        login = self.client.post('/api/v1/auth/login/', data=json.dumps(
+            {'phone': self.staff.phone, 'password': 'StaffPass#83'}), content_type='application/json')
+        token = login.json()['token']
+        path = f'/api/v1/businesses/{self.business.pk}/quotations/'
+        headers = {'HTTP_AUTHORIZATION': f'Bearer {token}', 'HTTP_X_COMMAND_ID': str(uuid.uuid4())}
+        self.assertEqual(self.client.get(path, **headers).status_code, 403)
+        self.assertEqual(self.client.post(path, data=json.dumps(self.payload()),
+            content_type='application/json', **headers).status_code, 403)

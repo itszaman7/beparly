@@ -14,6 +14,8 @@ from audit.models import AuditEvent
 
 from .models import Category, Product, ProductVariant, ProductUnit, StockBatch
 from stockkeeper.models import StockBalance, StockMovement, StockLocation
+from purchases.services import save_draft, complete_purchase
+from accounting.models import Contact
 
 
 class ProductApiTests(TestCase):
@@ -41,6 +43,41 @@ class ProductApiTests(TestCase):
         if data is None:
             return getattr(self.client, method)(path, **headers)
         return getattr(self.client, method)(path, json.dumps(data), content_type='application/json', **headers)
+
+    def test_purchase_catalog_returns_exact_variants_and_last_received_base_cost(self):
+        product = Product.objects.create(business=self.business, name='Vivo X300', product_type='variant', sku='VIVO')
+        small = ProductVariant.objects.create(business=self.business, product=product, sku='VX-8', barcode='80123',
+                                              label='8GB / 256GB', combination_key='8-256', base_unit='Piece', purchase_price=Decimal('65000'))
+        ProductVariant.objects.create(business=self.business, product=product, sku='VX-12', barcode='120123',
+                                      label='12GB / 256GB', combination_key='12-256', base_unit='Piece', purchase_price=Decimal('72000'))
+        supplier = Contact.objects.create(business=self.business, name='Distributor', is_supplier=True, created_by=self.user)
+        location = StockLocation.objects.get(business=self.business, is_default=True)
+        purchase = save_draft(self.business, self.user, uuid.uuid4(), {'supplier_id': str(supplier.pk),
+            'location_id': location.pk, 'lines': [{'product_id': str(product.pk), 'variant_id': str(small.pk),
+                                                  'quantity': '2', 'unit_cost': '60000'}]})
+        complete_purchase(purchase, self.user, uuid.uuid4())
+        response = self.call('get', self.base + 'products/purchase-catalog/?search=VX-8')
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(len(response.json()['items']), 1)
+        self.assertEqual(response.json()['items'][0]['variant_id'], str(small.pk))
+        self.assertEqual(Decimal(response.json()['items'][0]['last_purchase_cost']), Decimal('60000'))
+        carton = ProductUnit.objects.create(product=product, variant=small, name='Carton', factor=Decimal('2'), barcode='PACK-8')
+        packed = save_draft(self.business, self.user, uuid.uuid4(), {'supplier_id': str(supplier.pk),
+            'location_id': location.pk, 'lines': [{'product_id': str(product.pk), 'variant_id': str(small.pk),
+                                                  'unit_id': str(carton.pk), 'quantity': '1', 'unit_cost': '100000'}]})
+        complete_purchase(packed, self.user, uuid.uuid4())
+        packed_cost = self.call('get', self.base + 'products/purchase-catalog/?search=VX-8').json()['items'][0]
+        self.assertEqual(Decimal(packed_cost['last_purchase_cost']), Decimal('50000'))
+        self.assertTrue(self.call('get', self.base + 'products/purchase-catalog/?search=PACK-8').json()['items'][0]['package_barcode_match'])
+        self.assertEqual(self.call('get', self.base + 'products/purchase-catalog/?search=80123').json()['items'][0]['sku'], 'VX-8')
+        for index in range(30):
+            ProductVariant.objects.create(business=self.business, product=product, sku=f'VX-{index + 20}',
+                label=f'{index + 20}GB', combination_key=f'variant-{index}')
+        first_page = self.call('get', self.base + 'products/purchase-catalog/')
+        self.assertEqual(len(first_page.json()['items']), 30)
+        self.assertEqual(first_page.json()['next_page'], 2)
+        self.assertEqual(len(self.call('get', self.base + 'products/purchase-catalog/?page=2').json()['items']), 2)
+        self.assertEqual(self.call('get', self.base + 'products/purchase-catalog/', token=self.other_token).status_code, 404)
 
     def test_nested_categories_and_descendant_filter(self):
         root = self.call('post', self.base + 'categories/', {'name': 'Computer'})

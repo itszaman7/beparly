@@ -82,6 +82,7 @@ def account_data(user):
         'businesses': [
             {'id': member.business_id, 'name': member.business.name, 'phone': member.business.phone,
              'address': member.business.address, 'logo_url': member.business.logo.url if member.business.logo else None,
+             'show_currency_symbol': member.business.show_currency_symbol,
              'role': member.role, 'can_manage_purchases': member.role == BusinessMember.OWNER or member.can_manage_purchases}
             for member in BusinessMember.objects.select_related('business').filter(user=user).order_by('id')
         ],
@@ -201,14 +202,18 @@ def business_profile(request, business_id):
             for key, limit in (('phone', 20), ('address', 255)):
                 if key in data and (not isinstance(data[key], str) or len(data[key].strip()) > limit):
                     raise ValueError(f'{key.title()} is too long.')
+            if 'show_currency_symbol' in data and not isinstance(data['show_currency_symbol'], bool):
+                raise ValueError('show_currency_symbol must be true or false.')
             member.business.phone = str(data.get('phone', member.business.phone)).strip()
             member.business.address = str(data.get('address', member.business.address)).strip()
-            member.business.save(update_fields=['phone', 'address'])
+            member.business.show_currency_symbol = data.get('show_currency_symbol', member.business.show_currency_symbol)
+            member.business.save(update_fields=['phone', 'address', 'show_currency_symbol'])
         except ValueError as exc:
             return error('invalid_input', str(exc))
     business = member.business
     return JsonResponse({'business': {'id': business.id, 'name': business.name, 'phone': business.phone,
-        'address': business.address, 'logo_url': business.logo.url if business.logo else None, 'role': member.role,
+        'address': business.address, 'logo_url': business.logo.url if business.logo else None,
+        'show_currency_symbol': business.show_currency_symbol, 'role': member.role,
         'can_manage_purchases': member.role == BusinessMember.OWNER or member.can_manage_purchases}})
 
 

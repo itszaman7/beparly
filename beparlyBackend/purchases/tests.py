@@ -1,11 +1,15 @@
 import json
+import tempfile
 import uuid
 from decimal import Decimal
+from io import BytesIO
 
-from django.test import TestCase
+from PIL import Image
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import TestCase, override_settings
 
 from accounting.models import Contact, JournalEntry, MoneyAccount
-from accounting.services import contact_position, setup_business
+from accounting.services import contact_position, create_money_account, setup_business
 from accounts.models import Business, BusinessMember, User
 from audit.models import AuditEvent
 from products.models import Product, StockBatch
@@ -14,7 +18,7 @@ from stockkeeper.services import consume, post_adjustment
 
 from .models import OpeningPayable, Purchase, SupplierOperation
 from .services import (PurchaseError, cancel_purchase, complete_purchase, create_supplier,
-                       save_draft, supplier_operation)
+                       purchase_data, save_draft, supplier_operation)
 
 
 class PurchaseTests(TestCase):
@@ -43,6 +47,24 @@ class PurchaseTests(TestCase):
                 {'product_id': str(self.batch_product.pk), 'quantity': '3', 'unit_cost': '5.00',
                  'batch_id': str(self.batch.pk)}]})
 
+    def test_large_draft_keeps_stock_and_balances_unchanged(self):
+        lines = [{'product_id': str(self.product.pk), 'quantity': '1', 'unit_cost': '8.00'} for _ in range(101)]
+        purchase = self.draft(lines)
+        self.assertEqual(purchase.lines.count(), 101)
+        self.assertEqual(purchase.total, Decimal('808'))
+        self.assertFalse(StockMovement.objects.filter(type='purchase').exists())
+        self.assertEqual(Decimal(contact_position(self.supplier)['to_pay']), 0)
+
+    def test_draft_details_include_variant_and_batch_for_cart_restore(self):
+        self.product.image_key = 'products/example.webp'
+        self.product.save(update_fields=['image_key'])
+        rows = purchase_data(self.draft(), details=True)['lines']
+        self.assertEqual(rows[0]['sku'], 'RICE')
+        self.assertIn('products/example.webp', rows[0]['image_url'])
+        self.assertEqual(rows[0]['base_unit'], 'Piece')
+        self.assertEqual(rows[1]['tracking_mode'], 'expiry')
+        self.assertEqual(rows[1]['lot_code'], 'L1')
+
     def test_draft_inactive_then_multi_line_purchase_reconciles_once(self):
         purchase = self.draft()
         self.assertEqual(StockMovement.objects.filter(type='purchase').count(), 0)
@@ -50,6 +72,7 @@ class PurchaseTests(TestCase):
         command = uuid.uuid4()
         complete_purchase(purchase, self.owner, command, '10.00', self.cash)
         purchase.refresh_from_db()
+        self.assertEqual(purchase.number, 'P-001')
         self.assertEqual((purchase.total, purchase.paid), (Decimal('31'), Decimal('10')))
         self.assertEqual(Decimal(contact_position(self.supplier)['to_pay']), Decimal('21'))
         self.assertEqual(StockMovement.objects.filter(reference_id=purchase.pk, type='purchase').count(), 2)
@@ -128,6 +151,48 @@ class PurchaseTests(TestCase):
         self.staff_member.save(update_fields=['can_manage_purchases'])
         self.assertEqual(self.client.get(path, **headers).status_code, 200)
         self.assertEqual(self.client.get(f'/api/v1/businesses/{other.pk}/suppliers/', **headers).status_code, 404)
+
+    def test_purchase_payment_accounts_include_user_added_account_for_staff(self):
+        wallet = create_money_account(self.business, 'Shop bKash', 'wallet')
+        login = self.client.post('/api/v1/auth/login/', data=json.dumps({'phone': self.staff.phone,
+            'password': 'StaffPass#83'}), content_type='application/json').json()
+        auth = {'HTTP_AUTHORIZATION': f'Bearer {login["token"]}'}
+        path = f'/api/v1/businesses/{self.business.pk}/purchases/payment-accounts/'
+        self.assertEqual(self.client.get(path, **auth).status_code, 403)
+        self.staff_member.can_manage_purchases = True
+        self.staff_member.save(update_fields=['can_manage_purchases'])
+        response = self.client.get(path, **auth)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual({row['id'] for row in response.json()['accounts']}, {str(self.cash.pk), str(wallet.pk)})
+        self.assertTrue(all('balance' in row for row in response.json()['accounts']))
+        purchase = self.draft()
+        posted = self.client.post(
+            f'/api/v1/businesses/{self.business.pk}/purchases/{purchase.pk}/complete/',
+            data=json.dumps({'paid': '10.00', 'account_id': str(wallet.pk)}),
+            content_type='application/json', HTTP_X_COMMAND_ID=str(uuid.uuid4()), **auth)
+        self.assertEqual(posted.status_code, 200, posted.content)
+        self.assertEqual(SupplierOperation.objects.get(purchase=purchase, kind='payment').account_id, wallet.pk)
+        other = Business.objects.create(name='Different shop')
+        self.assertEqual(self.client.get(f'/api/v1/businesses/{other.pk}/purchases/payment-accounts/', **auth).status_code, 404)
+
+    def test_supplier_photo_validated_and_tenant_scoped(self):
+        login = self.client.post('/api/v1/auth/login/', data=json.dumps({'phone': self.owner.phone,
+            'password': 'OwnerPass#83'}), content_type='application/json').json()
+        auth = {'HTTP_AUTHORIZATION': f'Bearer {login["token"]}'}
+        path = f'/api/v1/businesses/{self.business.pk}/suppliers/{self.supplier.pk}/image/'
+        bad = self.client.post(path, {'image': SimpleUploadedFile('wrong.jpg', b'not an image')}, **auth)
+        self.assertEqual(bad.status_code, 400)
+        buffer = BytesIO()
+        Image.new('RGB', (16, 16), 'red').save(buffer, format='PNG')
+        with tempfile.TemporaryDirectory() as directory, override_settings(MEDIA_ROOT=directory):
+            response = self.client.post(path, {'image': SimpleUploadedFile('photo.png', buffer.getvalue(), content_type='image/png')}, **auth)
+            self.assertEqual(response.status_code, 200, response.content)
+            self.assertIn('/media/', response.json()['supplier']['image_url'])
+            self.assertTrue(AuditEvent.objects.filter(entity_type='supplier', action='image_added', entity_id=str(self.supplier.pk)).exists())
+            other = Business.objects.create(name='Different shop')
+            BusinessMember.objects.create(user=self.owner, business=other, role='owner')
+            self.assertEqual(self.client.delete(f'/api/v1/businesses/{other.pk}/suppliers/{self.supplier.pk}/image/', **auth).status_code, 404)
+            self.assertEqual(self.client.delete(path, **auth).json()['supplier']['image_url'], None)
 
     def test_api_draft_completion_retry_and_supplier_search(self):
         login = self.client.post('/api/v1/auth/login/', data=json.dumps({'phone': self.owner.phone,

@@ -12,24 +12,30 @@ import { useAuth } from '@/features/auth/auth-context';
 
 const actions = [
   { label: 'Sales', icon: 'receipt', color: palette.primary, background: palette.primarySoft },
+  { label: 'Quotations', icon: 'duplicate', color: palette.purple, background: palette.purpleSoft },
   { label: 'POS', icon: 'sale', color: palette.blue, background: palette.blueSoft },
   { label: 'Purchase', icon: 'purchase', color: palette.orange, background: palette.orangeSoft },
   { label: 'Products', icon: 'products', color: palette.blue, background: palette.blueSoft },
   { label: 'Stock', icon: 'stock', color: palette.purple, background: palette.purpleSoft },
-  { label: 'Receive', icon: 'receive', color: palette.primary, background: palette.primarySoft },
-  { label: 'Parties', icon: 'parties', color: palette.rose, background: palette.roseSoft },
+  { label: 'Suppliers', icon: 'parties', color: palette.orange, background: palette.orangeSoft },
+  { label: 'Contacts', icon: 'parties', color: palette.rose, background: palette.roseSoft },
+  { label: 'Money In', icon: 'receive', color: palette.primary, background: palette.primarySoft },
   { label: 'Dues', icon: 'dues', color: palette.amber, background: palette.amberSoft },
-  { label: 'Reports', icon: 'reports', color: palette.blue, background: palette.blueSoft },
   { label: 'Accounting', icon: 'money', color: palette.primary, background: palette.primarySoft },
   { label: 'Expense', icon: 'expense', color: palette.orange, background: palette.orangeSoft },
 ] as const satisfies readonly { label: string; icon: keyof typeof symbols; color: string; background: string }[];
 
 const actionRoutes: Partial<Record<(typeof actions)[number]['label'], string>> = {
   Sales: '/sales',
+  Quotations: '/sales/quotations',
   Purchase: '/purchases',
   POS: '/sales/new?mode=quick',
   Products: '/products',
   Stock: '/stock',
+  Suppliers: '/suppliers',
+  Contacts: '/contacts',
+  'Money In': '/money/new?flow=in',
+  Dues: '/dues',
   Accounting: '/money',
   Expense: '/money/new?flow=expense',
 };
@@ -114,7 +120,7 @@ export default function HomeScreen() {
             <View>
               <Entrance delay={130}><SectionTitle title="Quick actions" /></Entrance>
               <View style={styles.actionGrid}>
-                {actions.filter((action) => account.role === 'owner' || ((action.label !== 'Accounting' && action.label !== 'Expense') && (action.label !== 'Purchase' || account.can_manage_purchases))).map((action, index) => (
+                {actions.filter((action) => (account.role === 'owner' || action.label !== 'Accounting' && action.label !== 'Expense') && (action.label !== 'Purchase' || account.role === 'owner' || account.can_manage_purchases) && (action.label !== 'Suppliers' || account.role === 'owner' || account.can_manage_purchases)).map((action, index) => (
                   <Entrance key={action.label} delay={160 + index * 45} style={styles.actionSlot}>
                     <PressScale
                       onPress={() => {

@@ -57,7 +57,6 @@ function Navigation() {
             <Stack.Screen name="suppliers" />
             <Stack.Screen name="purchases" />
             <Stack.Screen name="contacts" />
-            <Stack.Screen name="assets" />
             <Stack.Screen name="business-settings" />
             <Stack.Screen name="sign-in" />
             <Stack.Screen name="register" />

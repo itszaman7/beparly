@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from uuid import UUID
 
 from django.db import IntegrityError, transaction
 from django.db.models import Sum
@@ -10,10 +11,10 @@ from django.views.decorators.csrf import csrf_exempt
 from accounts.models import BusinessMember
 from accounts.views import body, current_member, current_session, error
 
-from .models import AssetDepreciation, BusinessAsset, Contact, ExpenseCategory, IncomeCategory, JournalEntry, JournalLine, LedgerAccount, MoneyAccount, MoneyTransaction, normalize_customer_phone
-from .services import (AccountingError, amount, balance, command_uuid, contact_position,
-                       create_money_account, depreciate, money_operation, purchase_asset,
-                       create_financial_category, reverse, sell_asset, setup_business)
+from .models import Contact, ExpenseCategory, IncomeCategory, JournalEntry, JournalLine, LedgerAccount, MoneyAccount, MoneyTransaction, normalize_customer_phone
+from .services import (AccountingError, balance, command_uuid, contact_position,
+                       create_money_account, money_operation, create_financial_category,
+                       reverse, setup_business, ensure_party_accounts)
 from stockkeeper.services import business_today
 
 
@@ -86,9 +87,18 @@ def money_accounts(request, business_id):
         rows = [serialize_account(item) for item in accounts]
         income_accounts = LedgerAccount.objects.filter(business_id=business_id, type='income', is_active=True).order_by('name', 'code')
         income_rows = [serialize_income_account(item) for item in income_accounts]
-        ledger_accounts = LedgerAccount.objects.filter(business_id=business_id, is_active=True).order_by('type', 'name', 'code')
+        ledger_accounts = LedgerAccount.objects.filter(business_id=business_id, is_active=True).exclude(code__in=['AR', 'AP']).order_by('type', 'name', 'code')
+        party_accounts = []
+        for contact in Contact.objects.filter(business_id=business_id).exclude(receivable_account=None, payable_account=None).select_related('receivable_account', 'payable_account').order_by('name'):
+            for account in (contact.receivable_account, contact.payable_account):
+                if account:
+                    row = serialize_ledger_account(account)
+                    row.update({'contact_id': str(contact.pk), 'contact_name': contact.name,
+                                'party_type': 'customer' if account.type == 'asset' else 'supplier'})
+                    party_accounts.append(row)
         return JsonResponse({'accounts': rows, 'available_money': str(sum((Decimal(row['balance']) for row in rows), Decimal('0'))),
             'ledger_accounts': [serialize_ledger_account(item) for item in ledger_accounts],
+            'party_accounts': party_accounts,
             'income_accounts': income_rows, 'posted_revenue': str(sum((Decimal(row['balance']) for row in income_rows), Decimal('0')))})
     try:
         data = body(request)
@@ -136,7 +146,11 @@ def money_account_ledger(request, business_id, account_id):
     member, problem = owner(request, business_id)
     if problem:
         return problem
-    money_account = MoneyAccount.objects.filter(business=member.business, pk=account_id, is_active=True).select_related('ledger_account').first()
+    try:
+        money_id = UUID(str(account_id))
+    except (ValueError, TypeError, AttributeError):
+        money_id = None
+    money_account = MoneyAccount.objects.filter(business=member.business, pk=money_id, is_active=True).select_related('ledger_account').first() if money_id else None
     ledger_account = money_account.ledger_account if money_account else LedgerAccount.objects.filter(
         business=member.business, code=account_id, is_active=True).first()
     if not ledger_account:
@@ -197,7 +211,7 @@ def reverse_transaction(request, business_id, transaction_id):
     if not txn:
         return error('not_found', 'Transaction not found.', 404)
     if txn.journal.source_type != 'money':
-        return error('invalid_action', 'Use an asset correction workflow for asset transactions.', 409)
+        return error('invalid_action', 'This historical asset transaction cannot be corrected from Money.', 409)
     if txn.kind.endswith('_reversal'):
         return error('invalid_action', 'A correction cannot be reversed from this screen.', 409)
     if txn.kind in ('customer_advance', 'supplier_advance') and txn.contact and (
@@ -242,6 +256,7 @@ def contacts(request, business_id):
             address=str(data.get('address', '')).strip()[:255], district=str(data.get('district', '')).strip()[:80],
             area=str(data.get('area', '')).strip()[:100], notes=str(data.get('notes', '')).strip(), created_by=current_session(request).user,
             is_customer=data['is_customer'], is_supplier=data['is_supplier'])
+        item = ensure_party_accounts(item)
         return JsonResponse({'contact': serialize_contact(item)}, status=201)
     except (ValueError, ValidationError, AccountingError) as exc:
         return error('invalid_input', str(exc))
@@ -299,55 +314,3 @@ def expense_categories(request, business_id):
 @csrf_exempt
 def income_categories(request, business_id):
     return financial_categories(request, business_id, 'income')
-
-
-def serialize_asset(item):
-    depreciated = sum((row.amount for row in item.depreciations.all()), 0)
-    return {'id': str(item.pk), 'name': item.name, 'cost': str(item.cost),
-            'residual_value': str(item.residual_value), 'useful_life_months': item.useful_life_months,
-            'in_service_date': item.in_service_date.isoformat(), 'sold_on': item.sold_on.isoformat() if item.sold_on else None,
-            'depreciated': str(depreciated), 'book_value': str(item.cost - depreciated)}
-
-
-@csrf_exempt
-def assets(request, business_id):
-    if request.method not in ('GET', 'POST'):
-        return error('method_not_allowed', 'Use GET or POST.', 405)
-    member, problem = owner(request, business_id)
-    if problem:
-        return problem
-    setup_business(member.business)
-    if request.method == 'GET':
-        return JsonResponse({'assets': [serialize_asset(item) for item in BusinessAsset.objects.filter(business_id=business_id).prefetch_related('depreciations').order_by('-created_at')[:100]]})
-    try:
-        data = body(request)
-        account = MoneyAccount.objects.filter(business_id=business_id, pk=data.get('account_id')).first()
-        if not account:
-            raise AccountingError('Choose a payment account.')
-        item = purchase_asset(member.business, current_session(request).user, command(request),
-            str(data.get('name', '')).strip(), data.get('cost'), data.get('residual_value', '0'),
-            data.get('useful_life_months'), parse_date(data.get('in_service_date')), account)
-        return JsonResponse({'asset': serialize_asset(item)}, status=201)
-    except (ValueError, ValidationError, AccountingError) as exc:
-        return error('invalid_input', str(exc))
-
-
-@csrf_exempt
-def asset_sale(request, business_id, asset_id):
-    if request.method != 'POST':
-        return error('method_not_allowed', 'Use POST.', 405)
-    _, problem = owner(request, business_id)
-    if problem:
-        return problem
-    item = BusinessAsset.objects.filter(business_id=business_id, pk=asset_id).first()
-    if not item:
-        return error('not_found', 'Asset not found.', 404)
-    try:
-        data = body(request)
-        account = MoneyAccount.objects.filter(business_id=business_id, pk=data.get('account_id')).first()
-        if not account:
-            raise AccountingError('Choose a money account.')
-        item = sell_asset(item, current_session(request).user, command(request), data.get('proceeds'), account)
-        return JsonResponse({'asset': serialize_asset(item)})
-    except (ValueError, ValidationError, AccountingError) as exc:
-        return error('invalid_input', str(exc))
