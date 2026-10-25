@@ -4,6 +4,7 @@ from django.db.models import Q
 
 
 class PurchaseSequence(models.Model):
+    id = models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')
     business = models.OneToOneField('accounts.Business', on_delete=models.PROTECT)
     value = models.PositiveIntegerField(default=0)
 
@@ -29,6 +30,7 @@ class Purchase(models.Model):
     actor = models.ForeignKey('accounts.User', on_delete=models.PROTECT)
     created_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
+    due_date = models.DateField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -40,6 +42,7 @@ class Purchase(models.Model):
 
 
 class PurchaseLine(models.Model):
+    id = models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')
     purchase = models.ForeignKey(Purchase, on_delete=models.PROTECT, related_name='lines')
     product = models.ForeignKey('products.Product', on_delete=models.PROTECT)
     variant = models.ForeignKey('products.ProductVariant', on_delete=models.PROTECT)

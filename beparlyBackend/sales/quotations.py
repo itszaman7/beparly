@@ -292,7 +292,7 @@ def complete_draft(business, actor, command_id, draft_id, data):
     if Sale.objects.filter(quotation=draft.quotation).exists():
         raise QuotationConflict('This quotation was already completed as a sale.')
     check_availability(draft.quotation)
-    if not isinstance(data, dict) or set(data) - {'paid', 'account_id', 'customer_id', 'batch_ids', 'prices'}:
+    if not isinstance(data, dict) or set(data) - {'paid', 'due_date', 'account_id', 'customer_id', 'batch_ids', 'prices'}:
         raise QuotationError('Send payment choices and optional batch selections.')
     payload = dict(draft.payload)
     payload['lines'] = [dict(row) for row in payload['lines']]
@@ -310,6 +310,7 @@ def complete_draft(business, actor, command_id, draft_id, data):
         for row, price in zip(payload['lines'], data['prices']):
             row['unit_price'] = str(amount(price))
     payload['paid'] = data.get('paid', '0')
+    payload['due_date'] = data.get('due_date')
     payload['account_id'] = data.get('account_id')
     sale = create_sale(business, actor, command_id, payload, quotation=draft.quotation)
     _record(draft.quotation, actor, command_id, 'completed', {'sale': str(sale.pk)})

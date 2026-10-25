@@ -34,6 +34,7 @@ class Sale(models.Model):
     source = models.CharField(max_length=80, blank=True)
     notes = models.TextField(blank=True)
     invoice_date = models.DateField(default=timezone.localdate)
+    due_date = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

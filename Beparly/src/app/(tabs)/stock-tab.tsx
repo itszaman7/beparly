@@ -1,3 +1,5 @@
-import { LocationsScreen } from '@/features/stock/stock-ui';
+import { Redirect } from 'expo-router';
 
-export default function StockTab() { return <LocationsScreen />; }
+export default function FormerStockTab() {
+  return <Redirect href="/inventory" />;
+}

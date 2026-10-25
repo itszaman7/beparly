@@ -133,6 +133,11 @@ def create_sale(business, actor, command_id, data, *, quotation=None):
             raise SaleError('Payment cannot exceed the sale total.')
         if total > paid and (guest_sale or not contact or not contact.is_customer):
             raise SaleError('A customer is required when any amount will remain due.')
+        due_date = parse_date(str(data.get('due_date'))) if data.get('due_date') else None
+        if total > paid and not due_date:
+            raise SaleError('Choose a valid due date for this credit sale.')
+        if data.get('due_date') and not due_date:
+            raise SaleError('Choose a valid due date.')
 
         # Business row serializes all checkouts and sequence increments; stock rows and FIFO layers are locked too.
         sequence, _ = SaleSequence.objects.select_for_update().get_or_create(business=business)
@@ -149,7 +154,8 @@ def create_sale(business, actor, command_id, data, *, quotation=None):
             price_tier=tier, subtotal=subtotal, discount=discount, delivery_fee=delivery_fee, total=total, paid=Decimal('0'),
             payment_status='due', billing_address={'text': location.address.strip(), 'location_id': str(location.pk)},
             delivery_address={'text': delivery_address} if delivery_address else {}, source=str(data.get('source') or '').strip()[:80],
-            notes=str(data.get('notes') or '').strip()[:2000], invoice_date=invoice_date)
+            notes=str(data.get('notes') or '').strip()[:2000], invoice_date=invoice_date,
+            due_date=due_date if total > paid else None)
         from accounting.services import ensure_inventory_cutoff
         ensure_inventory_cutoff(business)
         cost = Decimal('0')
@@ -447,6 +453,7 @@ def serialize_sale(sale, include_lines=False):
         'customer_phone': sale.customer_phone_snapshot, 'customer_address': sale.customer_address_snapshot,
         'location_id': sale.location_id,
         'mode': sale.mode, 'price_tier': sale.price_tier, 'status': sale.status, 'payment_status': sale.payment_status,
+        'due_date': sale.due_date.isoformat() if sale.due_date else None,
         'cancellation_reason': sale.cancellation_reason,
         'subtotal': str(sale.subtotal), 'discount': str(sale.discount), 'delivery_fee': str(sale.delivery_fee),
         'total': str(sale.total), 'net_total': str(net_total), 'returned_amount': str(returned_amount), 'paid': str(sale.paid),

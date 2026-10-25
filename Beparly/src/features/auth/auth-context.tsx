@@ -34,7 +34,7 @@ function newSession(result: AuthResult, preferredBusinessId?: number | null): No
     businesses: result.businesses,
     account: business ? {
       user: result.user,
-      business: { id: business.id, name: business.name, show_currency_symbol: business.show_currency_symbol ?? true },
+      business: { id: business.id, name: business.name, show_currency_symbol: business.show_currency_symbol ?? true, timezone: business.timezone },
       role: business.role,
       can_manage_purchases: business.can_manage_purchases,
     } : null,
@@ -108,7 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!session || !business) return;
       setSession({ ...session, account: {
         user: session.user,
-        business: { id: business.id, name: business.name, show_currency_symbol: business.show_currency_symbol ?? true },
+        business: { id: business.id, name: business.name, show_currency_symbol: business.show_currency_symbol ?? true, timezone: business.timezone },
         role: business.role,
         can_manage_purchases: business.can_manage_purchases,
       } });
@@ -120,7 +120,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession((current) => current && {
         ...current,
         businesses: [...current.businesses, business],
-        account: { user: current.user, business: { id: business.id, name: business.name, show_currency_symbol: business.show_currency_symbol ?? true }, role: business.role,
+        account: { user: current.user, business: { id: business.id, name: business.name, show_currency_symbol: business.show_currency_symbol ?? true, timezone: business.timezone }, role: business.role,
           can_manage_purchases: business.can_manage_purchases },
       });
       await sessionStorage.saveBusinessId(business.id);

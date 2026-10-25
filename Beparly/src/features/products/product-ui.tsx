@@ -52,11 +52,14 @@ function ChoiceModal({ visible, title, onClose, children }: { visible: boolean; 
 }
 export function ProductListScreen() {
   const { session } = useAuth();
+  const { stock: stockParam } = useLocalSearchParams<{ stock?: string }>();
   const token = session?.token; const businessId = session?.account?.business.id;
   const [search, setSearch] = useState(''); const [query, setQuery] = useState('');
   const [category, setCategory] = useState<string | null>(null); const [categories, setCategories] = useState<Category[]>([]);
-  const [stock, setStock] = useState<NonNullable<ProductListOptions['stock']>>('all');
-  const [active, setActive] = useState<NonNullable<ProductListOptions['active']>>('all');
+  const [stock, setStock] = useState<NonNullable<ProductListOptions['stock']>>(
+    stockParam === 'low_stock' || stockParam === 'out_of_stock' ? stockParam : 'all');
+  const [active, setActive] = useState<NonNullable<ProductListOptions['active']>>(
+    stockParam === 'low_stock' || stockParam === 'out_of_stock' ? 'true' : 'all');
   const [tracking, setTracking] = useState<NonNullable<ProductListOptions['tracking']>>('all');
   const [sort, setSort] = useState<NonNullable<ProductListOptions['sort']>>('name');
   const [filterOpen, setFilterOpen] = useState(false); const [sortOpen, setSortOpen] = useState(false);
@@ -244,7 +247,7 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
   }, [token, businessId, editing, duplicateId]);
   async function pick(camera: boolean) {
     try {
-      if (camera) { const permission = await ImagePicker.requestCameraPermissionsAsync(); if (!permission.granted) { toast.error('Camera permission is needed.'); return; } }
+      if (camera && Platform.OS !== 'web') { const permission = await ImagePicker.requestCameraPermissionsAsync(); if (!permission.granted) { toast.error('Camera permission is needed.'); return; } }
       const result = camera ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1 }) : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
       if (result.canceled || !result.assets?.length) return;
       const asset = result.assets[0];
@@ -281,9 +284,10 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
         quantity: openingQuantity, unit_cost: buying.trim(), location_id: locationId ?? undefined,
         ...(tracking !== 'simple' ? { lot_code: openingLot.trim() } : {}), ...(tracking === 'expiry' ? { expires_on: openingExpiry } : {}) } } : input;
     }
-    const command = commandId(); let photoPending = false; setBusy(true);
+    const command = commandId(); let photoPending = false; let savedId: string | null = null; setBusy(true);
     try {
       const result = editing && id ? await api.updateProduct(token, businessId, id, input, command) : await api.createProduct(token, businessId, creationInput, command);
+      savedId = result.product.id;
       if (imageUri) {
         try { await api.uploadProductImage(token, businessId, result.product.id, imageUri); }
         catch (cause) {
@@ -297,6 +301,11 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
       else toast.success(editing ? 'Product updated.' : 'Product added.');
       router.replace(`/products/${result.product.id}` as Href);
     } catch (cause) {
+      if (savedId) {
+        toast.error('Product saved, but its photo could not be updated. Open Edit Product to retry the photo.');
+        router.replace(`/products/${savedId}` as Href);
+        return;
+      }
       if (Platform.OS !== 'web' && cause instanceof ApiError && cause.status === 0) {
         try {
           const file = imageUri ? await stageProductImage(imageUri, command) : null;
@@ -330,7 +339,7 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
           <View style={styles.photoActions}>
             <Text style={styles.muted}>A clear photo helps you find this product quickly.</Text>
             <Pressable accessibilityRole="button" onPress={() => void pick(false)} style={styles.photoButton}><Text style={styles.link}>Choose from gallery</Text></Pressable>
-            {Platform.OS !== 'web' && <Pressable accessibilityRole="button" onPress={() => void pick(true)} style={styles.photoButton}><Text style={styles.link}>Take photo</Text></Pressable>}
+            <Pressable accessibilityRole="button" onPress={() => void pick(true)} style={styles.photoButton}><Text style={styles.link}>Take photo</Text></Pressable>
             {!!(imageUri || currentImage) && <Pressable accessibilityRole="button" onPress={() => { setImageUri(null); setRemoveImage(true); }} style={styles.photoButton}><Text style={styles.removeLink}>Remove photo</Text></Pressable>}
           </View>
         </View>

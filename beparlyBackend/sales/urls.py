@@ -9,6 +9,7 @@ urlpatterns = [
     path('businesses/<int:business_id>/quotations/<uuid:quote_id>/documents/<str:size>/', quotation_views.quotation_document),
     path('businesses/<int:business_id>/quotation-sale-drafts/<uuid:draft_id>/', quotation_views.quotation_checkout),
     path('businesses/<int:business_id>/sales/options/', views.sales_options),
+    path('businesses/<int:business_id>/sales/hub-summary/', views.sales_hub_summary),
     path('businesses/<int:business_id>/sales/customers/', views.sales_customers),
     path('businesses/<int:business_id>/sales/', views.sales),
     path('businesses/<int:business_id>/sales/<uuid:sale_id>/payments/', views.sale_detail),

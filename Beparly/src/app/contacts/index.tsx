@@ -1,1 +1,1 @@
-export { ContactsScreen as default } from '@/features/money/money-ui';
+export { ContactsScreen as default } from '@/features/contacts/contact-ui';

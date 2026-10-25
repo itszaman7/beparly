@@ -167,11 +167,25 @@ if os.environ.get('PRODUCT_STORAGE_BUCKET'):
                 'object_parameters': {'CacheControl': 'max-age=86400'},
             },
         },
+        'attachments': {
+            'BACKEND': 'storages.backends.s3.S3Storage',
+            'OPTIONS': {
+                'bucket_name': os.environ.get('ATTACHMENT_STORAGE_BUCKET') or os.environ['PRODUCT_STORAGE_BUCKET'],
+                'region_name': os.environ.get('PRODUCT_STORAGE_REGION', 'ap-south-1'),
+                'endpoint_url': os.environ.get('PRODUCT_STORAGE_ENDPOINT') or None,
+                'location': 'private-attachments',
+                'querystring_auth': True,
+                'default_acl': None,
+                'object_parameters': {'CacheControl': 'private, no-store'},
+            },
+        },
         'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
     }
 if not DEBUG and not all((os.environ.get('PRODUCT_STORAGE_BUCKET'), os.environ.get('PRODUCT_CDN_DOMAIN'),
                           os.environ.get('PRODUCT_CDN_KEY_ID'), os.environ.get('PRODUCT_CDN_PRIVATE_KEY_PATH'))):
     raise RuntimeError('Production product storage requires a bucket and signed CDN configuration.')
+if not DEBUG and not os.environ.get('ATTACHMENT_STORAGE_BUCKET'):
+    raise RuntimeError('Production supporting documents require a separate private ATTACHMENT_STORAGE_BUCKET.')
 
 
 # Email

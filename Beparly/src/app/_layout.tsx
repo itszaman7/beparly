@@ -50,14 +50,17 @@ function Navigation() {
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
           <Stack screenOptions={{ headerShown: false }}>
             <Stack.Screen name="(tabs)" />
+            <Stack.Screen name="businesses/new" />
             <Stack.Screen name="stock" />
             <Stack.Screen name="products" />
             <Stack.Screen name="money" />
+            <Stack.Screen name="reports" />
             <Stack.Screen name="sales" />
             <Stack.Screen name="suppliers" />
             <Stack.Screen name="purchases" />
             <Stack.Screen name="contacts" />
             <Stack.Screen name="business-settings" />
+            <Stack.Screen name="print-settings" />
             <Stack.Screen name="sign-in" />
             <Stack.Screen name="register" />
           </Stack>

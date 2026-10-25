@@ -30,6 +30,7 @@ export default function NewSale() {
   const [tier] = useState<'retail' | 'wholesale'>(mode === 'quick' ? 'retail' : 'wholesale');
   const [paymentMode, setPaymentMode] = useState<'full' | 'partial' | 'due' | ''>('');
   const [paid, setPaid] = useState('');
+  const [dueDate, setDueDate] = useState('');
   const [discount, setDiscount] = useState('');
   const [discountType, setDiscountType] = useState<'amount' | 'percent'>('amount');
   const [showDiscount, setShowDiscount] = useState(false);
@@ -113,11 +114,13 @@ export default function NewSale() {
     if (deliveryFee && (!/^\d+(?:\.\d{1,2})?$/.test(deliveryFee) || Number(deliveryFee) < 0)) { setError('Enter a valid delivery charge with up to two decimal places.'); return; }
     if (Number(deliveryFee || 0) > 0 && !deliveryAddress.trim()) { setError('Add the delivery address for this charge.'); return; }
     if (paymentMode !== 'full' && !customerId) { setError('Choose a registered customer for partial payment or due.'); return; }
+    if (Number(paidAmount) < total && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) { setError('Enter a due date as YYYY-MM-DD.'); return; }
     setSaving(true); setError('');
     try {
       const result = await api.createSale(session.token, businessId, {
         mode, price_tier: tier, location_id: saleLocationId ?? locationId,
         ...(customerId ? { customer_id: customerId } : {}), paid: paidAmount,
+        ...(Number(paidAmount) < total ? { due_date: dueDate } : {}),
         ...(Number(paidAmount) > 0 ? { account_id: accountId } : {}),
         discount: discount || '0', discount_type: discountType,
         delivery_fee: deliveryFee.trim() || '0', delivery_address: deliveryAddress.trim(),
@@ -255,12 +258,13 @@ export default function NewSale() {
             <Text style={styles.dueText}>Remaining due · ৳{Math.max(0, total - Number(paid || 0)).toFixed(2)}</Text>
           </> : null}
           {paymentMode === 'due' && customerId ? <Text style={styles.dueText}>Full amount due · ৳{total.toFixed(2)}</Text> : null}
+          {paymentMode !== 'full' && paymentMode !== '' ? <View style={{ gap: 7 }}><Text style={styles.fieldLabel}>Due date *</Text><TextInput value={dueDate} onChangeText={setDueDate} placeholder="YYYY-MM-DD" keyboardType="numbers-and-punctuation" style={styles.formInput} accessibilityLabel="Customer due date" /></View> : null}
           {paymentMode === 'full' || paymentMode === 'partial' ? <>
             <Text style={styles.fieldLabel}>Payment account · {selectedAccount?.name ?? 'Choose account'}</Text>
             {accounts.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.inlineChips}>{accounts.map((account) => <Chip key={account.id} label={account.name} selected={accountId === account.id} onPress={() => setAccountId(account.id)} />)}</ScrollView> : <Text style={styles.muted}>No payment account is set up yet.</Text>}
             <Pressable onPress={() => router.push('/money/accounts' as Href)} style={{ minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 6 }}><AppSymbol name="plus" size={15} color={palette.primaryDeep} /><Text style={styles.changeText}>{accounts.length ? 'Manage payment accounts' : 'Add payment account'}</Text></Pressable>
           </> : null}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 11, padding: 12, backgroundColor: palette.primarySoft, borderWidth: 1, borderColor: palette.border, borderRadius: 15 }}><View style={styles.locationIcon}><AppSymbol name="location" size={17} color={palette.primaryDeep} /></View><View style={styles.customerCopy}><Text style={styles.customerName}>Billing address · {effectiveSaleLocation?.name ?? 'Selected shop'}</Text><Text style={styles.customerHint}>{effectiveSaleLocation?.address || 'Shop address is required'}</Text></View>{effectiveSaleLocation?.address ? <AppSymbol name="activate" size={18} color={palette.primaryDeep} /> : null}</View>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 11, padding: 12, backgroundColor: palette.primarySoft, borderWidth: 1, borderColor: palette.border, borderRadius: 15 }}><View style={styles.locationIcon}><AppSymbol name="location" size={17} color={palette.primaryDeep} /></View><View style={styles.customerCopy}><Text style={styles.customerName}>Shop address · {effectiveSaleLocation?.name ?? 'Selected shop'}</Text><Text style={styles.customerHint}>{effectiveSaleLocation?.address || 'Shop address is required'}</Text></View>{effectiveSaleLocation?.address ? <AppSymbol name="activate" size={18} color={palette.primaryDeep} /> : null}</View>
           <View style={{ gap: 8 }}><Text style={styles.fieldLabel}>Stock location</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.inlineChips}>{locations.map((location) => <Chip key={location.id} label={location.name} selected={(saleLocationId ?? locationId) === location.id} onPress={() => setSaleLocationId(location.id)} />)}</ScrollView></View>
           <View style={{ gap: 8 }}><Text style={styles.fieldLabel}>Sale source <Text style={styles.muted}>(optional)</Text></Text><TextInput value={saleSource} onChangeText={setSaleSource} placeholder="e.g. Facebook, phone, counter" placeholderTextColor={palette.muted} style={styles.formInput} /><Text style={styles.fieldLabel}>Sales notes <Text style={styles.muted}>(optional)</Text></Text><TextInput value={saleNotes} onChangeText={setSaleNotes} placeholder="Add a note for this sale" placeholderTextColor={palette.muted} style={[styles.formInput, { minHeight: 68 }]} multiline /></View>
           {error ? <><Text style={styles.error}>{error}</Text>{error.toLowerCase().includes('income category') ? <Pressable onPress={() => router.push('/money/income-categories' as Href)} style={{ minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 6 }}><AppSymbol name="plus" size={15} color={palette.primaryDeep} /><Text style={styles.changeText}>Set up income category</Text></Pressable> : null}</> : null}

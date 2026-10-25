@@ -3,7 +3,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from django.db import IntegrityError, transaction
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -54,6 +54,7 @@ def serialize_txn(item):
     return {'id': str(item.pk), 'kind': item.kind, 'amount': str(item.amount),
             'account_id': str(item.account_id), 'destination_id': str(item.destination_id) if item.destination_id else None,
             'contact_id': str(item.contact_id) if item.contact_id else None, 'note': item.note,
+            'reference': item.expense.reference if item.kind == 'expense' else '',
             'event_date': item.event_date.isoformat(), 'created_at': item.created_at.isoformat(),
             'reversed': hasattr(item.journal, 'reversal')}
 
@@ -103,7 +104,8 @@ def money_accounts(request, business_id):
     try:
         data = body(request)
         item = create_money_account(member.business, str(data.get('name', '')).strip(), data.get('kind'),
-                                    str(data.get('masked_reference', '')).strip(), command(request))
+                                    str(data.get('masked_reference', '')).strip(), command(request),
+                                    opening_balance=data.get('opening_balance', '0'), actor=current_session(request).user)
         return JsonResponse({'account': serialize_account(item)}, status=201)
     except (ValueError, ValidationError, AccountingError) as exc:
         return error('invalid_input', str(exc))
@@ -118,7 +120,7 @@ def money_transactions(request, business_id):
         return problem
     setup_business(member.business)
     if request.method == 'GET':
-        rows = MoneyTransaction.objects.filter(business_id=business_id).select_related('journal').order_by('-created_at')[:50]
+        rows = MoneyTransaction.objects.filter(business_id=business_id).select_related('journal', 'expense').order_by('-created_at')[:50]
         return JsonResponse({'transactions': [serialize_txn(item) for item in rows]})
     try:
         data = body(request)
@@ -131,12 +133,27 @@ def money_transactions(request, business_id):
         income_category = IncomeCategory.objects.filter(business_id=business_id, pk=data.get('category_id')).first() if data.get('category_id') else None
         item = money_operation(member.business, current_session(request).user, command(request),
             data.get('kind'), data.get('amount'), account, destination=destination, contact=contact,
-            category=category, income_category=income_category, note=str(data.get('note', '')).strip()[:240], event_date=parse_date(data.get('event_date')))
+            category=category, income_category=income_category, note=str(data.get('note', '')).strip()[:240],
+            reference=str(data.get('reference', '')).strip(), event_date=parse_date(data.get('event_date')))
         return JsonResponse({'transaction': serialize_txn(item)}, status=201)
     except (ValueError, ValidationError, AccountingError) as exc:
         return error('invalid_input', str(exc))
     except IntegrityError:
         return error('conflict', 'This command conflicts with a posted transaction.', 409)
+
+
+def expense_detail(request, business_id, transaction_id):
+    if request.method != 'GET':
+        return error('method_not_allowed', 'Use GET.', 405)
+    _, problem = owner(request, business_id)
+    if problem:
+        return problem
+    item = MoneyTransaction.objects.filter(business_id=business_id, pk=transaction_id, kind='expense')\
+        .select_related('journal', 'expense__category', 'account').first()
+    if not item:
+        return error('not_found', 'Expense not found.', 404)
+    return JsonResponse({'transaction': {**serialize_txn(item), 'category_name': item.expense.category.name,
+                                         'account_name': item.account.name}})
 
 
 @csrf_exempt
@@ -163,7 +180,7 @@ def money_account_ledger(request, business_id, account_id):
     except AccountingError as exc:
         return error('invalid_input', str(exc))
     normal_credit = ledger_account.type in ('liability', 'equity', 'income')
-    all_entries = JournalEntry.objects.filter(business=member.business, lines__account=ledger_account).distinct().order_by('event_date', 'created_at')
+    all_entries = JournalEntry.objects.filter(business=member.business, lines__account=ledger_account).distinct()
     before = all_entries.filter(event_date__lt=start) if start else JournalEntry.objects.none()
     opening_lines = JournalLine.objects.filter(account=ledger_account, entry__in=before).aggregate(debit=Sum('debit'), credit=Sum('credit'))
     opening = ((opening_lines['credit'] or Decimal('0')) - (opening_lines['debit'] or Decimal('0'))) if normal_credit else ((opening_lines['debit'] or Decimal('0')) - (opening_lines['credit'] or Decimal('0')))
@@ -172,20 +189,18 @@ def money_account_ledger(request, business_id, account_id):
         filtered = filtered.filter(event_date__gte=start)
     if end:
         filtered = filtered.filter(event_date__lte=end)
+    period_totals = JournalLine.objects.filter(account=ledger_account, entry__in=filtered).aggregate(
+        debit=Sum('debit'), credit=Sum('credit'))
+    total_debit = period_totals['debit'] or Decimal('0')
+    total_credit = period_totals['credit'] or Decimal('0')
+    total_in = total_credit if normal_credit else total_debit
+    total_out = total_debit if normal_credit else total_credit
+    truncated = filtered.count() > 500
+    recent_entries = list(filtered.order_by('-event_date', '-created_at', '-pk')[:500])
     entries = []
-    total_in = Decimal('0')
-    total_out = Decimal('0')
-    total_debit = Decimal('0')
-    total_credit = Decimal('0')
-    for item in filtered[:500]:
+    for item in reversed(recent_entries):
         line = item.lines.filter(account=ledger_account).aggregate(debit=Sum('debit'), credit=Sum('credit'))
-        total_debit += line['debit'] or Decimal('0')
-        total_credit += line['credit'] or Decimal('0')
         change = ((line['credit'] or Decimal('0')) - (line['debit'] or Decimal('0'))) if normal_credit else ((line['debit'] or Decimal('0')) - (line['credit'] or Decimal('0')))
-        if change >= 0:
-            total_in += change
-        else:
-            total_out += -change
         entries.append({'id': str(item.pk), 'kind': item.source_type, 'amount': str(abs(change)),
             'account_id': account_id, 'destination_id': None, 'contact_id': None, 'note': item.description,
             'event_date': item.event_date.isoformat(), 'created_at': item.created_at.isoformat(),
@@ -197,7 +212,7 @@ def money_account_ledger(request, business_id, account_id):
     return JsonResponse({'account': account_data, 'opening_balance': str(opening),
         'total_in': str(total_in), 'total_out': str(total_out), 'total_debit': str(total_debit),
         'total_credit': str(total_credit), 'change': str(total_in - total_out),
-        'closing_balance': str(closing), 'transactions': entries})
+        'closing_balance': str(closing), 'transactions': entries, 'truncated': truncated})
 
 
 @csrf_exempt
@@ -242,7 +257,29 @@ def contacts(request, business_id):
     if problem:
         return problem
     if request.method == 'GET':
-        return JsonResponse({'contacts': [serialize_contact(item) for item in Contact.objects.filter(business_id=business_id).order_by('name')[:100]]})
+        try:
+            page = int(request.GET.get('page', '1'))
+            if not 1 <= page <= 100000:
+                raise ValueError
+        except ValueError:
+            return error('invalid_input', 'Choose a valid page.')
+        role = request.GET.get('role', 'all')
+        if role not in ('all', 'customer', 'supplier'):
+            return error('invalid_input', 'Choose all, customer or supplier.')
+        search = request.GET.get('search', '').strip()[:100]
+        rows = Contact.objects.filter(business_id=business_id).select_related(
+            'receivable_account', 'payable_account')
+        if role == 'customer':
+            rows = rows.filter(is_customer=True)
+        elif role == 'supplier':
+            rows = rows.filter(is_supplier=True)
+        if search:
+            rows = rows.filter(Q(name__icontains=search) | Q(phone__icontains=search) |
+                               Q(address__icontains=search) | Q(area__icontains=search) |
+                               Q(district__icontains=search))
+        rows = list(rows.order_by('name', 'id')[(page - 1) * 100:page * 100 + 1])
+        return JsonResponse({'contacts': [serialize_contact(item) for item in rows[:100]],
+                             'next_page': page + 1 if len(rows) > 100 else None})
     try:
         data = body(request)
         name = str(data.get('name', '')).strip()
@@ -265,7 +302,10 @@ def contacts(request, business_id):
 def serialize_contact(item):
     return {'id': str(item.pk), 'name': item.name, 'phone': item.phone,
             'address': item.address, 'district': item.district, 'area': item.area, 'notes': item.notes, 'customer_type': item.customer_type,
-            'is_customer': item.is_customer, 'is_supplier': item.is_supplier, **contact_position(item)}
+            'is_customer': item.is_customer, 'is_supplier': item.is_supplier,
+            'customer_ledger_id': item.receivable_account.code if item.receivable_account_id else None,
+            'supplier_ledger_id': item.payable_account.code if item.payable_account_id else None,
+            **contact_position(item)}
 
 
 def contact_detail(request, business_id, contact_id):
@@ -274,7 +314,7 @@ def contact_detail(request, business_id, contact_id):
     _, problem = owner(request, business_id)
     if problem:
         return problem
-    item = Contact.objects.filter(business_id=business_id, pk=contact_id).first()
+    item = Contact.objects.select_related('receivable_account', 'payable_account').filter(business_id=business_id, pk=contact_id).first()
     if not item:
         return error('not_found', 'Contact not found.', 404)
     lines = JournalLine.objects.filter(contact=item).select_related('entry', 'account').order_by('-entry__created_at')[:50]

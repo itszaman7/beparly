@@ -1,6 +1,7 @@
 import json
 import tempfile
 import uuid
+from datetime import date
 from decimal import Decimal
 from io import BytesIO
 
@@ -10,7 +11,8 @@ from django.test import TestCase, override_settings
 
 from accounting.models import Contact, JournalEntry, MoneyAccount
 from accounting.services import contact_position, create_money_account, setup_business
-from accounts.models import Business, BusinessMember, User
+from accounts.models import AuthSession, Business, BusinessMember, User
+from stockkeeper.services import business_today
 from audit.models import AuditEvent
 from products.models import Product, StockBatch
 from stockkeeper.models import CostLayer, StockBalance, StockLocation, StockMovement
@@ -70,7 +72,7 @@ class PurchaseTests(TestCase):
         self.assertEqual(StockMovement.objects.filter(type='purchase').count(), 0)
         self.assertEqual(Decimal(contact_position(self.supplier)['to_pay']), 0)
         command = uuid.uuid4()
-        complete_purchase(purchase, self.owner, command, '10.00', self.cash)
+        complete_purchase(purchase, self.owner, command, '10.00', self.cash, date(2026, 11, 30))
         purchase.refresh_from_db()
         self.assertEqual(purchase.number, 'P-001')
         self.assertEqual((purchase.total, purchase.paid), (Decimal('31'), Decimal('10')))
@@ -83,6 +85,22 @@ class PurchaseTests(TestCase):
         self.assertEqual(complete_purchase(purchase, self.owner, command).pk, purchase.pk)
         self.assertEqual(SupplierOperation.objects.filter(purchase=purchase, kind='payment').count(), 1)
         self.assertTrue(AuditEvent.objects.filter(entity_type='purchase', action='completed', entity_id=str(purchase.pk)).exists())
+
+    def test_supplier_due_uses_posted_payment_and_missing_legacy_date_bucket(self):
+        purchase = self.draft([{'product_id': str(self.product.pk), 'quantity': '2', 'unit_cost': '8.00'}])
+        complete_purchase(purchase, self.owner, uuid.uuid4(), '5', self.cash, date(2026, 11, 30))
+        purchase.due_date = None  # Simulate a record posted before due dates were introduced.
+        purchase.save(update_fields=['due_date'])
+        auth = {'HTTP_AUTHORIZATION': f'Bearer {AuthSession.issue(self.owner)}'}
+        cutoff = business_today(self.business).isoformat()
+        route = f'/api/v1/businesses/{self.business.pk}/reports/supplier-dues/?as_of={cutoff}'
+        response = self.client.get(route, **auth)
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()['buckets']['due_date_not_set'], '11.00')
+        self.assertEqual(response.json()['buckets']['overdue'], '0')
+        supplier_operation(self.business, self.supplier, self.owner, uuid.uuid4(), 'payment', '4',
+                           purchase=purchase, account=self.cash)
+        self.assertEqual(self.client.get(route, **auth).json()['total_outstanding'], '7.00')
 
     def test_opening_payable_advance_allocation_and_refunds(self):
         supplier = create_supplier(self.business, self.owner,
@@ -103,7 +121,7 @@ class PurchaseTests(TestCase):
 
     def test_cancel_requires_refund_and_unused_stock(self):
         purchase = self.draft()
-        complete_purchase(purchase, self.owner, uuid.uuid4(), '5', self.cash)
+        complete_purchase(purchase, self.owner, uuid.uuid4(), '5', self.cash, date(2026, 11, 30))
         with self.assertRaises(PurchaseError):
             cancel_purchase(purchase, self.owner, uuid.uuid4(), 'Mistake')
         supplier_operation(self.business, self.supplier, self.owner, uuid.uuid4(), 'payment_refund',
@@ -118,7 +136,7 @@ class PurchaseTests(TestCase):
 
     def test_consumed_purchase_layer_blocks_cancellation_without_partial_reversal(self):
         purchase = self.draft()
-        complete_purchase(purchase, self.owner, uuid.uuid4())
+        complete_purchase(purchase, self.owner, uuid.uuid4(), due_date=date(2026, 11, 30))
         consume(self.product, self.product.variants.get(), self.location, Decimal('1'), None)
         with self.assertRaises(PurchaseError):
             cancel_purchase(purchase, self.owner, uuid.uuid4(), 'Supplier sent wrong goods')
@@ -129,7 +147,7 @@ class PurchaseTests(TestCase):
 
     def test_rejects_overpayment_and_manual_adjustment_creates_no_purchase(self):
         purchase = self.draft()
-        complete_purchase(purchase, self.owner, uuid.uuid4())
+        complete_purchase(purchase, self.owner, uuid.uuid4(), due_date=date(2026, 11, 30))
         with self.assertRaises(PurchaseError):
             supplier_operation(self.business, self.supplier, self.owner, uuid.uuid4(), 'payment',
                 '32', purchase=purchase, account=self.cash)
@@ -168,7 +186,7 @@ class PurchaseTests(TestCase):
         purchase = self.draft()
         posted = self.client.post(
             f'/api/v1/businesses/{self.business.pk}/purchases/{purchase.pk}/complete/',
-            data=json.dumps({'paid': '10.00', 'account_id': str(wallet.pk)}),
+            data=json.dumps({'paid': '10.00', 'account_id': str(wallet.pk), 'due_date': '2026-11-30'}),
             content_type='application/json', HTTP_X_COMMAND_ID=str(uuid.uuid4()), **auth)
         self.assertEqual(posted.status_code, 200, posted.content)
         self.assertEqual(SupplierOperation.objects.get(purchase=purchase, kind='payment').account_id, wallet.pk)
@@ -211,9 +229,12 @@ class PurchaseTests(TestCase):
         self.assertEqual(retry.json()['purchase']['id'], purchase_id)
         self.assertEqual(Purchase.objects.count(), 1)
         self.assertEqual(self.client.get(root + 'suppliers/?search=Supplier', **auth).json()['suppliers'][0]['id'], str(self.supplier.pk))
+        self.supplier.phone = '01712345679'
+        self.supplier.save(update_fields=['phone'])
+        self.assertEqual(self.client.get(root + 'suppliers/?search=45679', **auth).json()['suppliers'][0]['id'], str(self.supplier.pk))
         completion = str(uuid.uuid4())
         url = root + f'purchases/{purchase_id}/complete/'
-        posted = self.client.post(url, data=json.dumps({'paid': '0'}), content_type='application/json',
+        posted = self.client.post(url, data=json.dumps({'paid': '0', 'due_date': '2026-11-30'}), content_type='application/json',
             HTTP_X_COMMAND_ID=completion, **auth)
         self.assertEqual(posted.status_code, 200, posted.content)
         repeated = self.client.post(url, data=json.dumps({'paid': '0'}), content_type='application/json',

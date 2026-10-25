@@ -2,19 +2,27 @@ import { Platform } from 'react-native';
 
 export type Account = {
   user: { id: number; name: string; phone: string };
-  business: { id: number; name: string; phone?: string; address?: string; logo_url?: string | null; show_currency_symbol?: boolean };
+  business: { id: number; name: string; phone?: string; address?: string; logo_url?: string | null; show_currency_symbol?: boolean; invoice_footer_text?: string; label_print_settings?: LabelPrintSettings; timezone?: string };
   role: 'owner' | 'employee';
   can_manage_purchases?: boolean;
 };
 
+export type LabelPrintSettings = { paper: '4x6' | '4x6_metric' | '2x4' | 'custom'; width_mm: number; height_mm: number;
+  horizontal_offset_mm: number; vertical_offset_mm: number; scale_percent: number; inner_padding_mm: number;
+  rotation: 0 | 90 | 180 | 270; safe_margin_mm: number };
+
 export type BusinessProfile = Account['business'] & { role: Account['role']; can_manage_purchases?: boolean };
+export type BusinessSwitcherStat = { business_id: number; products: number; locations: number };
 export type AuthResult = { token: string; user: Account['user']; businesses: BusinessProfile[] };
 export type Employee = { id: number; name: string; phone: string; can_manage_locations: boolean; can_post_stock: boolean; can_manage_purchases: boolean };
-export type Supplier = { id: string; name: string; phone: string; address: string; area: string; district: string; notes: string; payment_terms: string; image_url: string | null; to_pay: string; supplier_advance: string; opening_payables?: { id: string; amount: string; paid: string; due: string }[] };
+export type Supplier = { id: string; name: string; phone: string; address: string; area: string; district: string; notes: string; payment_terms: string; image_url: string | null; to_pay: string; supplier_advance: string; supplier_ledger_id?: string | null; opening_payables?: { id: string; amount: string; paid: string; due: string }[] };
 export type PurchaseLineInput = { product_id: string; variant_id?: string; unit_id?: string; batch_id?: string; quantity: string; unit_cost: string };
 export type PurchaseCatalogItem = { product_id: string; variant_id: string; name: string; variant_label: string; sku: string; barcode: string; package_barcode_match?: boolean; base_unit: string; tracking_mode: Product['tracking_mode']; image_url: string | null; stock: string; last_purchase_cost: string | null; default_purchase_cost: string | null };
 export type PurchaseInput = { supplier_id: string; location_id: number; notes?: string; lines: PurchaseLineInput[] };
-export type PurchaseRecord = { id: string; number: string; status: 'draft' | 'completed' | 'cancelled'; supplier_id: string; supplier_name: string; location_id: number; location_name: string; total: string; paid: string; due: string; notes: string; created_at: string; completed_at: string | null; cancellation_reason: string; lines?: (PurchaseLineInput & { id: number; product_name: string; variant_name: string; sku: string; image_url: string | null; base_unit: string; tracking_mode: Product['tracking_mode']; unit_name: string; lot_code: string; base_quantity: string; line_total: string })[]; operations?: { id: string; kind: string; amount: string; created_at: string }[] };
+export type PurchaseRecord = { id: string; number: string; status: 'draft' | 'completed' | 'cancelled'; supplier_id: string; supplier_name: string; location_id: number; location_name: string; total: string; paid: string; due: string; due_date?: string | null; notes: string; created_at: string; completed_at: string | null; cancellation_reason: string; lines?: (PurchaseLineInput & { id: number; product_name: string; variant_name: string; sku: string; image_url: string | null; base_unit: string; tracking_mode: Product['tracking_mode']; unit_name: string; lot_code: string; base_quantity: string; line_total: string })[]; operations?: { id: string; kind: string; amount: string; created_at: string }[] };
+export type RecordAttachment = { id: string; name: string; content_type: string; size: number; created_at: string };
+export type PendingAttachment = { commandId: string; uri: string; name: string; contentType: string; size?: number; file?: File };
+export type AttachmentKind = 'expense' | 'purchase';
 export type SupplierAction = { kind: 'payment' | 'payment_refund' | 'advance' | 'advance_refund' | 'apply_advance' | 'allocation_reversal'; amount: string; account_id?: string; purchase_id?: string; opening_id?: string };
 export type StockLocation = {
   id: number;
@@ -70,10 +78,19 @@ export type ProductMovement = { id: string; type: string; quantity_change: strin
 export type AuditEvent = { id: string; entity_type: string; entity_id: string; subject: string; location_id: number | null; action: string; changes: Record<string, unknown>; actor: string; created_at: string };
 export type MoneyAccount = { id: string; name: string; kind: 'cash' | 'bank' | 'wallet' | 'other'; masked_reference: string; is_default: boolean; is_active: boolean; balance: string; created_at: string };
 export type PurchasePaymentAccount = Pick<MoneyAccount, 'id' | 'name' | 'kind' | 'masked_reference' | 'is_default' | 'is_active' | 'balance'>;
-export type MoneyTransaction = { id: string; kind: string; amount: string; account_id: string; destination_id: string | null; contact_id: string | null; note: string; event_date: string; created_at: string; reversed: boolean };
+export type MoneyTransaction = { id: string; kind: string; amount: string; account_id: string; destination_id: string | null; contact_id: string | null; note: string; reference: string; event_date: string; created_at: string; reversed: boolean };
 export type MoneyLedgerEntry = MoneyTransaction & { debit: string; credit: string; change: string; direction: 'in' | 'out' };
-export type Contact = { id: string; name: string; phone: string; customer_type?: 'regular' | 'wholesale'; address?: string; district?: string; area?: string; notes?: string; is_customer: boolean; is_supplier: boolean; customer_advance: string; supplier_advance: string; to_collect: string; to_pay: string };
-export type SaleRecord = { id: string; invoice_number: string; quotation_id?: string | null; customer_id: string | null; customer_name: string; customer_phone?: string; customer_address?: Record<string, string>; location_id: number; mode: 'quick' | 'manual'; price_tier: 'retail' | 'wholesale'; status: string; payment_status: string; cancellation_reason?: string; subtotal: string; discount: string; delivery_fee?: string; total: string; net_total?: string; returned_amount?: string; paid: string; due: string; purchase_cost?: string; profit?: string; item_count?: number; item_quantity?: string; created_at: string; invoice_date?: string; billing_address?: Record<string, string>; delivery_address?: Record<string, string>; source?: string; notes?: string; payment_account_names?: string[]; lines?: { id: number; product_id: string; variant_id: string; name: string; variant: string; sku: string; unit: string; quantity: string; returned_quantity?: string; unit_price: string; inventory_cost?: string; image_url?: string; line_total: string }[]; payments?: { id: string; amount: string; account_id: string; account_name?: string; kind: string; created_at: string }[]; returns?: { id: string; reason: string; amount: string; due_reduction: string; refund_amount: string; refund_account_name: string | null; created_at: string; lines: { line_id: number; quantity: string; condition: 'sellable' | 'damaged' }[] }[] };
+export type FinancialAmounts = { income: string; product_cost: string; other_expenses: string; profit_loss: string };
+export type FinancialSummary = { start_date: string; end_date: string; group_by: 'day' | 'month' | 'year'; rows: ({ period: string; has_activity: boolean } & FinancialAmounts)[]; totals: FinancialAmounts; profit_metrics?: { net_sales: string; other_income: string; gross_profit: string }; breakdown: { income: { id: string; name: string; type: string; amount: string }[]; expenses: { id: string; name: string; type: string; amount: string }[] } };
+export type ReportResponse = { start_date?: string; end_date?: string; as_of?: string; total?: string; total_quantity?: string; total_cost?: string; total_outstanding?: string; value?: string; ledger_value?: string | null; expired_awaiting_disposal?: string; expired_awaiting_disposal_cost?: string; recognized_write_off_quantity?: string; recognized_write_off_cost?: string; available?: boolean; reason?: string; reconciled?: boolean | null; next_page?: number | null; page?: number; rows?: Record<string, unknown>[]; buckets?: Record<string, string>; advances?: string; groups?: Record<string, { id: string; name: string; amount: string }[]>; assets?: string; liabilities?: string; equity?: string; current_earnings?: string; total_debit?: string; total_credit?: string; opening_balance?: string; closing_balance?: string; account?: { id: string; name: string; type: string }; totals?: FinancialAmounts; profit_metrics?: FinancialSummary['profit_metrics'] };
+export type ReportSalePreview = { sale_id: string; sale_number: string; customer_id: string | null; customer_name: string; products: { name: string; variant: string; quantity: string; unit: string }[]; product_count: number; sale_total: string; sale_status: string; posted_date?: string; invoice_date?: string };
+export type ReportSalesResponse = { start_date: string | null; end_date: string | null; as_of: string | null; rows: ReportSalePreview[]; page: number; next_page: number | null };
+export type SalesHubSummary = { completed_sales: number; collected_against_sales: string; customer_due: string;
+  last_seven_days: { date: string; amount: string; count: number }[] };
+export type DashboardActivityRecord = { id: string; kind: 'sale' | 'purchase'; number: string; party_name: string;
+  amount: string; created_at: string };
+export type Contact = { id: string; name: string; phone: string; customer_type?: 'regular' | 'wholesale'; address?: string; district?: string; area?: string; notes?: string; is_customer: boolean; is_supplier: boolean; customer_ledger_id?: string | null; supplier_ledger_id?: string | null; customer_advance: string; supplier_advance: string; to_collect: string; to_pay: string };
+export type SaleRecord = { id: string; invoice_number: string; quotation_id?: string | null; customer_id: string | null; customer_name: string; customer_phone?: string; customer_address?: Record<string, string>; location_id: number; mode: 'quick' | 'manual'; price_tier: 'retail' | 'wholesale'; status: string; payment_status: string; due_date?: string | null; cancellation_reason?: string; subtotal: string; discount: string; delivery_fee?: string; total: string; net_total?: string; returned_amount?: string; paid: string; due: string; purchase_cost?: string; profit?: string; item_count?: number; item_quantity?: string; created_at: string; invoice_date?: string; billing_address?: Record<string, string>; delivery_address?: Record<string, string>; source?: string; notes?: string; payment_account_names?: string[]; lines?: { id: number; product_id: string; variant_id: string; name: string; variant: string; sku: string; unit: string; quantity: string; returned_quantity?: string; unit_price: string; inventory_cost?: string; image_url?: string; line_total: string }[]; payments?: { id: string; amount: string; account_id: string; account_name?: string; kind: string; created_at: string }[]; returns?: { id: string; reason: string; amount: string; due_reduction: string; refund_amount: string; refund_account_name: string | null; created_at: string; lines: { line_id: number; quantity: string; condition: 'sellable' | 'damaged' }[] }[] };
 export type QuotationLineInput = { product_id: string; variant_id?: string; unit_id?: string | null; quantity: string; unit_price?: string };
 export type QuotationInput = { version?: number; customer_id?: string | null; customer_name?: string; customer_phone?: string; customer_address?: string; location_id: number; price_tier: 'retail' | 'wholesale'; valid_until?: string | null; delivery_address?: string; notes?: string; discount: string; delivery_fee: string; lines: QuotationLineInput[] };
 export type QuotationRecord = { id: string; number: string; status: 'draft' | 'pending' | 'accepted' | 'rejected' | 'cancelled' | 'expired'; version: number; sale_id: string | null; customer_id: string | null; customer_name: string; customer_phone: string; customer_address: string; location_id: number; location_name?: string; price_tier: 'retail' | 'wholesale'; valid_until: string | null; issued_at: string | null; delivery_address: string; notes: string; subtotal: string; discount: string; delivery_fee: string; total: string; created_at: string; updated_at: string; lines?: (QuotationLineInput & { id: number; product_name: string; variant_name: string; image_url?: string; sku: string; unit_name: string; conversion_factor: string; base_quantity: string; line_total: string; unit_price: string })[] };
@@ -147,6 +164,35 @@ async function uploadImage(token: string, businessId: number, productId: string,
   return result;
 }
 
+async function uploadRecordAttachment(token: string, businessId: number, kind: AttachmentKind, recordId: string, item: PendingAttachment) {
+  const data = new FormData();
+  if (Platform.OS === 'web') {
+    data.append('file', item.file ?? await (await fetch(item.uri)).blob(), item.name);
+  } else {
+    data.append('file', { uri: item.uri, name: item.name, type: item.contentType } as unknown as Blob);
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl()}/api/v1/businesses/${businessId}/attachments/${kind}/${recordId}/`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'X-Command-ID': item.commandId }, body: data,
+    });
+  } catch { throw new ApiError('Document upload failed. Check your connection and retry.', 0); }
+  const result = await response.json().catch(() => null);
+  if (!response.ok) throw new ApiError(result?.error?.message ?? 'Could not upload document.', response.status);
+  return result as { attachment: RecordAttachment };
+}
+
+async function downloadRecordAttachment(token: string, businessId: number, kind: AttachmentKind, recordId: string, attachmentId: string) {
+  const response = await fetch(`${apiBaseUrl()}/api/v1/businesses/${businessId}/attachments/${kind}/${recordId}/${attachmentId}/`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => null);
+    throw new ApiError(result?.error?.message ?? 'Could not open document.', response.status);
+  }
+  return response;
+}
+
 async function uploadSupplierImage(token: string, businessId: number, supplierId: string, uri: string): Promise<{ supplier: Supplier }> {
   const data = new FormData();
   if (Platform.OS === 'web' || uri.startsWith('data:')) {
@@ -165,7 +211,32 @@ async function uploadSupplierImage(token: string, businessId: number, supplierId
   return result;
 }
 
+async function uploadBusinessLogo(token: string, businessId: number, uri: string): Promise<{ logo_url: string | null }> {
+  const data = new FormData();
+  if (Platform.OS === 'web' || uri.startsWith('data:')) {
+    data.append('image', await (await fetch(uri)).blob(), 'shop-logo.jpg');
+  } else {
+    data.append('image', { uri, name: 'shop-logo.jpg', type: 'image/jpeg' } as unknown as Blob);
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${apiBaseUrl()}/api/v1/businesses/${businessId}/logo/`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: data,
+    });
+  } catch { throw new ApiError('Logo upload failed. Check your connection.', 0); }
+  const result = await response.json().catch(() => null);
+  if (!response.ok) throw new ApiError(result?.error?.message ?? 'Could not upload the logo.', response.status);
+  return result;
+}
+
 export const api = {
+  expense: (token: string, businessId: number, transactionId: string) =>
+    request<{ transaction: MoneyTransaction & { category_name: string; account_name: string } }>(
+      `businesses/${businessId}/money/expenses/${transactionId}/`, 'GET', undefined, token),
+  recordAttachments: (token: string, businessId: number, kind: AttachmentKind, recordId: string) =>
+    request<{ attachments: RecordAttachment[] }>(`businesses/${businessId}/attachments/${kind}/${recordId}/`, 'GET', undefined, token),
+  uploadRecordAttachment,
+  downloadRecordAttachment,
   quotations: (token: string, businessId: number, search = '', page = 1) =>
     request<{ quotations: QuotationRecord[]; next_page: number | null }>(`businesses/${businessId}/quotations/?search=${encodeURIComponent(search)}&page=${page}`, 'GET', undefined, token),
   quotation: (token: string, businessId: number, id: string) =>
@@ -174,7 +245,7 @@ export const api = {
     request<{ quotation: QuotationRecord }>(`businesses/${businessId}/quotations/${id ? `${id}/` : ''}`, id ? 'PATCH' : 'POST', data, token, commandId),
   quotationAction: (token: string, businessId: number, id: string, action: 'issue' | 'status' | 'duplicate' | 'convert', data: object, commandId: string) =>
     request<{ quotation?: QuotationRecord; sale_draft?: QuotationSaleDraft }>(`businesses/${businessId}/quotations/${id}/${action}/`, 'POST', data, token, commandId),
-  quotationCheckout: (token: string, businessId: number, draftId: string, data: { paid: string; account_id?: string; customer_id?: string; batch_ids?: (string | null)[]; prices?: string[] }, commandId: string) =>
+  quotationCheckout: (token: string, businessId: number, draftId: string, data: { paid: string; due_date?: string; account_id?: string; customer_id?: string; batch_ids?: (string | null)[]; prices?: string[] }, commandId: string) =>
     request<{ sale: SaleRecord }>(`businesses/${businessId}/quotation-sale-drafts/${draftId}/`, 'POST', data, token, commandId),
   quotationDocumentUrl: (businessId: number, id: string, size: 'a4' | 'a5') => `${apiBaseUrl()}/api/v1/businesses/${businessId}/quotations/${id}/documents/${size}/`,
   register: (data: { username?: string; phone: string; password: string }) =>
@@ -183,8 +254,14 @@ export const api = {
   me: (token: string) => request<Omit<AuthResult, 'token'>>('auth/me/', 'GET', undefined, token),
   logout: (token: string) => request<{ ok: boolean }>('auth/logout/', 'POST', {}, token),
   businesses: (token: string) => request<{ user: Account['user']; businesses: BusinessProfile[] }>('businesses/', 'GET', undefined, token),
+  businessSwitcherSummary: (token: string) => request<{ businesses: BusinessSwitcherStat[] }>('businesses/switcher-summary/', 'GET', undefined, token),
+  dashboardActivity: (token: string, businessId: number) =>
+    request<{ activity: DashboardActivityRecord[] }>(`businesses/${businessId}/dashboard-activity/`, 'GET', undefined, token),
   businessProfile: (token: string, businessId: number) => request<{ business: BusinessProfile }>(`businesses/${businessId}/profile/`, 'GET', undefined, token),
-  updateBusinessProfile: (token: string, businessId: number, data: { phone: string; address: string; show_currency_symbol?: boolean }) => request<{ business: BusinessProfile }>(`businesses/${businessId}/profile/`, 'PATCH', data, token),
+  updateBusinessProfile: (token: string, businessId: number, data: { phone?: string; address?: string; show_currency_symbol?: boolean; invoice_footer_text?: string; label_print_settings?: LabelPrintSettings }) => request<{ business: BusinessProfile }>(`businesses/${businessId}/profile/`, 'PATCH', data, token),
+  labelCalibrationUrl: (businessId: number) => `${apiBaseUrl()}/api/v1/businesses/${businessId}/label-calibration/`,
+  uploadBusinessLogo,
+  removeBusinessLogo: (token: string, businessId: number) => request<{ logo_url: null }>(`businesses/${businessId}/logo/`, 'DELETE', undefined, token),
   createBusiness: (token: string, name: string, openingCash?: string) => request<{ business: BusinessProfile }>('businesses/', 'POST', { name, ...(openingCash ? { opening_cash: openingCash } : {}) }, token),
   employees: (token: string, businessId: number) => request<{ employees: Employee[] }>(`businesses/${businessId}/employees/`, 'GET', undefined, token),
   createEmployee: (token: string, businessId: number, data: { username?: string; phone: string; password: string }) =>
@@ -220,7 +297,7 @@ export const api = {
     request<{ purchase: PurchaseRecord }>(`businesses/${businessId}/purchases/`, 'POST', data, token, commandId),
   updatePurchase: (token: string, businessId: number, id: string, data: PurchaseInput, commandId: string) =>
     request<{ purchase: PurchaseRecord }>(`businesses/${businessId}/purchases/${id}/`, 'PATCH', data, token, commandId),
-  completePurchase: (token: string, businessId: number, id: string, data: { paid: string; account_id?: string }, commandId: string) =>
+  completePurchase: (token: string, businessId: number, id: string, data: { paid: string; account_id?: string; due_date?: string }, commandId: string) =>
     request<{ purchase: PurchaseRecord }>(`businesses/${businessId}/purchases/${id}/complete/`, 'POST', data, token, commandId),
   cancelPurchase: (token: string, businessId: number, id: string, reason: string, commandId: string) =>
     request<{ purchase: PurchaseRecord }>(`businesses/${businessId}/purchases/${id}/cancel/`, 'POST', { reason }, token, commandId),
@@ -304,15 +381,23 @@ export const api = {
     request<{ recommended_batch_ids: string[] }>(`businesses/${businessId}/products/${id}/fefo/?location_id=${locationId}`, 'GET', undefined, token),
   moneyAccounts: (token: string, businessId: number) =>
     request<{ accounts: MoneyAccount[]; available_money: string; ledger_accounts: { id: string; code?: string; name: string; type: string; system_managed?: boolean; balance: string }[]; party_accounts: { id: string; code: string; name: string; type: string; balance: string; contact_id: string; contact_name: string; party_type: 'customer' | 'supplier' }[]; income_accounts: { id: string; name: string; balance: string }[]; posted_revenue: string }>(`businesses/${businessId}/money/accounts/`, 'GET', undefined, token),
-  createMoneyAccount: (token: string, businessId: number, data: { name: string; kind: MoneyAccount['kind']; masked_reference?: string }, commandId: string) =>
+  createMoneyAccount: (token: string, businessId: number, data: { name: string; kind: MoneyAccount['kind']; masked_reference?: string; opening_balance?: string }, commandId: string) =>
     request<{ account: MoneyAccount }>(`businesses/${businessId}/money/accounts/`, 'POST', data, token, commandId),
   moneyTransactions: (token: string, businessId: number) =>
     request<{ transactions: MoneyTransaction[] }>(`businesses/${businessId}/money/transactions/`, 'GET', undefined, token),
   moneyAccountLedger: (token: string, businessId: number, accountId: string, startDate?: string, endDate?: string) => {
     const query = new URLSearchParams(); if (startDate) query.set('start_date', startDate); if (endDate) query.set('end_date', endDate);
-    return request<{ account: MoneyAccount & { type?: string }; opening_balance: string; total_in: string; total_out: string; total_debit: string; total_credit: string; change: string; closing_balance: string; transactions: MoneyLedgerEntry[] }>(`businesses/${businessId}/money/accounts/${accountId}/ledger/${query.size ? `?${query}` : ''}`, 'GET', undefined, token);
+    return request<{ account: MoneyAccount & { type?: string }; opening_balance: string; total_in: string; total_out: string; total_debit: string; total_credit: string; change: string; closing_balance: string; transactions: MoneyLedgerEntry[]; truncated: boolean }>(`businesses/${businessId}/money/accounts/${accountId}/ledger/${query.size ? `?${query}` : ''}`, 'GET', undefined, token);
   },
-  postMoneyTransaction: (token: string, businessId: number, data: { kind: string; amount: string; account_id: string; destination_id?: string; contact_id?: string; category_id?: number; note?: string; event_date?: string }, commandId: string) =>
+  financialSummary: (token: string, businessId: number, startDate: string, endDate: string, groupBy: 'day' | 'month' | 'year') =>
+    request<FinancialSummary>(`businesses/${businessId}/reports/financial-summary/?start_date=${startDate}&end_date=${endDate}&group_by=${groupBy}`, 'GET', undefined, token),
+  report: (token: string, businessId: number, name: string, params: URLSearchParams) =>
+    request<ReportResponse>(`businesses/${businessId}/reports/${name}/?${params}`, 'GET', undefined, token),
+  reportSales: (token: string, businessId: number, params: URLSearchParams) =>
+    request<ReportSalesResponse>(`businesses/${businessId}/reports/sales/?${params}`, 'GET', undefined, token),
+  rescheduleDue: (token: string, businessId: number, kind: 'sale' | 'purchase', id: string, dueDate: string, reason: string, commandId: string) =>
+    request<{ change_id: number; due_date: string; effective_on: string }>(`businesses/${businessId}/dues/${kind}/${id}/reschedule/`, 'POST', { due_date: dueDate, reason }, token, commandId),
+  postMoneyTransaction: (token: string, businessId: number, data: { kind: string; amount: string; account_id: string; destination_id?: string; contact_id?: string; category_id?: number; note?: string; reference?: string; event_date?: string }, commandId: string) =>
     request<{ transaction: MoneyTransaction }>(`businesses/${businessId}/money/transactions/`, 'POST', data, token, commandId),
   reverseMoneyTransaction: (token: string, businessId: number, id: string, reason: string, commandId: string) =>
     request<{ reversal_id: string }>(`businesses/${businessId}/money/transactions/${id}/reverse/`, 'POST', { reason }, token, commandId),
@@ -322,14 +407,16 @@ export const api = {
     request<{ categories: { id: number; name: string; type?: string }[] }>(`businesses/${businessId}/money/income-categories/`, 'GET', undefined, token),
   createFinancialCategory: (token: string, businessId: number, type: 'expense' | 'income', name: string) =>
     request<{ category: { id: number; name: string; type: string } }>(`businesses/${businessId}/money/${type}-categories/`, 'POST', { name, type }, token),
-  contacts: (token: string, businessId: number) =>
-    request<{ contacts: Contact[] }>(`businesses/${businessId}/contacts/`, 'GET', undefined, token),
+  contacts: (token: string, businessId: number, page = 1, search = '', role: 'all' | 'customer' | 'supplier' = 'all') =>
+    request<{ contacts: Contact[]; next_page: number | null }>(`businesses/${businessId}/contacts/?page=${page}&search=${encodeURIComponent(search)}&role=${role}`, 'GET', undefined, token),
   createContact: (token: string, businessId: number, data: { name?: string; phone?: string; customer_type?: 'regular' | 'wholesale'; address?: string; district?: string; area?: string; notes?: string; is_customer: boolean; is_supplier: boolean }) =>
     request<{ contact: Contact }>(`businesses/${businessId}/contacts/`, 'POST', data, token),
   contact: (token: string, businessId: number, id: string) =>
     request<{ contact: Contact; statement: { date: string; description: string; kind: string; debit: string; credit: string }[] }>(`businesses/${businessId}/contacts/${id}/`, 'GET', undefined, token),
-  sales: (token: string, businessId: number) =>
-    request<{ sales: SaleRecord[] }>(`businesses/${businessId}/sales/`, 'GET', undefined, token),
+  sales: (token: string, businessId: number, customerId?: string) =>
+    request<{ sales: SaleRecord[] }>(`businesses/${businessId}/sales/${customerId ? `?customer_id=${encodeURIComponent(customerId)}` : ''}`, 'GET', undefined, token),
+  salesHubSummary: (token: string, businessId: number) =>
+    request<SalesHubSummary>(`businesses/${businessId}/sales/hub-summary/`, 'GET', undefined, token),
   salesOptions: (token: string, businessId: number, includeContacts = true) =>
     request<{ accounts: MoneyAccount[]; contacts: Contact[]; categories: { id: number; name: string }[] }>(`businesses/${businessId}/sales/options/${includeContacts ? '' : '?include_contacts=false'}`, 'GET', undefined, token),
   createSalesIncomeCategory: (token: string, businessId: number, name: string) =>
@@ -338,7 +425,7 @@ export const api = {
     request<{ customer: Contact; existing: boolean }>(`businesses/${businessId}/sales/customers/`, 'POST', data, token),
   quotationCustomers: (token: string, businessId: number, search = '', page = 1) =>
     request<{ customers: Pick<Contact, 'id' | 'name' | 'phone' | 'address' | 'area' | 'district'>[]; next_page: number | null }>(`businesses/${businessId}/sales/customers/?search=${encodeURIComponent(search)}&page=${page}`, 'GET', undefined, token),
-  createSale: (token: string, businessId: number, data: { mode: 'quick' | 'manual'; price_tier: 'retail' | 'wholesale'; location_id: number; income_category_id?: number; customer_id?: string; paid: string; account_id?: string; discount: string; discount_type: 'amount' | 'percent'; delivery_fee?: string; billing_address?: Record<string, string>; delivery_address?: string; source?: string; notes?: string; invoice_date?: string; lines: { product_id: string; quantity: string; variant_id?: string }[] }, commandId: string) =>
+  createSale: (token: string, businessId: number, data: { mode: 'quick' | 'manual'; price_tier: 'retail' | 'wholesale'; location_id: number; income_category_id?: number; customer_id?: string; paid: string; due_date?: string; account_id?: string; discount: string; discount_type: 'amount' | 'percent'; delivery_fee?: string; billing_address?: Record<string, string>; delivery_address?: string; source?: string; notes?: string; invoice_date?: string; lines: { product_id: string; quantity: string; variant_id?: string }[] }, commandId: string) =>
     request<{ sale: SaleRecord }>(`businesses/${businessId}/sales/`, 'POST', data, token, commandId),
   sale: (token: string, businessId: number, saleId: string) =>
     request<{ sale: SaleRecord }>(`businesses/${businessId}/sales/${saleId}/payments/`, 'GET', undefined, token),
@@ -348,5 +435,5 @@ export const api = {
     request<{ sale: SaleRecord }>(`businesses/${businessId}/sales/${saleId}/cancel/`, 'POST', { reason }, token, commandId),
   returnSale: (token: string, businessId: number, saleId: string, data: { reason: string; refund_account_id?: string; lines: { line_id: number; quantity: string; condition: 'sellable' | 'damaged' }[] }, commandId: string) =>
     request<{ sale: SaleRecord; return_id: string }>(`businesses/${businessId}/sales/${saleId}/returns/`, 'POST', data, token, commandId),
-  documentUrl: (businessId: number, saleId: string, kind: 'invoice' | 'receipt') => `${apiBaseUrl()}/api/v1/businesses/${businessId}/sales/${saleId}/documents/${kind}/`,
+  documentUrl: (businessId: number, saleId: string, kind: 'invoice' | 'receipt' | 'label') => `${apiBaseUrl()}/api/v1/businesses/${businessId}/sales/${saleId}/documents/${kind}/`,
 };

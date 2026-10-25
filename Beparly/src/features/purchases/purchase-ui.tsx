@@ -7,8 +7,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol, type AppSymbolName } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { RecordAttachments } from '@/features/attachments/record-attachments';
+import { PartyAvatar, PartyButton, PartyInfo, PartyMetric } from '@/features/contacts/party-ui';
 import { useAuth } from '@/features/auth/auth-context';
-import { api, resolveAssetUrl, type PurchasePaymentAccount, type PurchaseRecord, type Supplier, type SupplierAction } from '@/services/api';
+import { api, resolveAssetUrl, type PurchasePaymentAccount, type PurchaseRecord, type Supplier, type SupplierAction,
+  type PendingAttachment, type RecordAttachment } from '@/services/api';
 import { displayDocumentNumber } from '@/utils/document-number';
 
 const command = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -18,11 +21,11 @@ const command = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c
 const message = (cause: unknown) => cause instanceof Error ? cause.message : 'Could not connect. Try again.';
 const currency = (value: string | number) => Number(value || 0).toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-function Screen({ title, icon = 'purchase', backTo = '/purchases', children }: {
-  title: string; icon?: AppSymbolName; backTo?: string; children: React.ReactNode;
+function Screen({ title, icon = 'purchase', backTo = '/purchases', wide = false, children }: {
+  title: string; icon?: AppSymbolName; backTo?: string; wide?: boolean; children: React.ReactNode;
 }) {
   return <SafeAreaView style={styles.safe}>
-    <View style={styles.headerShell}><View style={styles.header}>
+    <View style={styles.headerShell}><View style={[styles.header, wide && { maxWidth: 1076 }]}>
       <Pressable accessibilityRole="button" accessibilityLabel="Go back"
         onPress={() => router.canGoBack() ? router.back() : router.replace(backTo as Href)} style={styles.backButton}>
         <AppSymbol name="back" size={23} color="#006D64" />
@@ -31,7 +34,7 @@ function Screen({ title, icon = 'purchase', backTo = '/purchases', children }: {
       <Text style={styles.title} numberOfLines={1}>{title}</Text>
     </View></View>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
-      <View style={styles.content}>{children}</View>
+      <View style={[styles.content, wide && { maxWidth: 1040 }]}>{children}</View>
     </ScrollView>
   </SafeAreaView>;
 }
@@ -62,26 +65,43 @@ export function SuppliersScreen() {
   const [items, setItems] = useState<Supplier[]>([]);
   const [page, setPage] = useState<number | null>(1);
   const [search, setSearch] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const load = useCallback(async (next = 1, term = search) => {
+  const requestId = useRef(0);
+  useEffect(() => {
+    const timeout = setTimeout(() => setAppliedSearch(search.trim()), 300);
+    return () => clearTimeout(timeout);
+  }, [search]);
+  const load = useCallback(async (next = 1) => {
     if (!session?.account) return;
+    const request = ++requestId.current;
+    setLoading(true);
     try {
-      const result = await api.suppliers(session.token, session.account.business.id, next, term);
+      const result = await api.suppliers(session.token, session.account.business.id, next, appliedSearch);
+      if (request !== requestId.current) return;
       setItems(current => next === 1 ? result.suppliers : [...current, ...result.suppliers]);
-      setPage(result.next_page); setError('');
-    } catch (cause) { setError(message(cause)); }
-  }, [session, search]);
+      setPage(result.next_page);
+      setError('');
+    } catch (cause) { if (request === requestId.current) setError(message(cause)); }
+    finally { if (request === requestId.current) setLoading(false); }
+  }, [session, appliedSearch]);
   useFocusEffect(useCallback(() => { void load(1); }, [load]));
-  return <Screen title="Suppliers" icon="parties" backTo="/more"><Field label="Search suppliers" value={search} onChangeText={setSearch} placeholder="Name or phone" />
-    <Action label="Search" secondary onPress={() => void load(1, search)} />
-    <Action label="Add supplier" icon="plus" onPress={() => router.push('/suppliers/new')} />
+  return <Screen title="Suppliers" icon="parties" backTo="/more" wide>
+    <View style={supplierStyles.topRow}><View style={{ flex: 1, minWidth: 180 }}><Text style={supplierStyles.pageHeading}>Supplier directory</Text><Text style={styles.muted}>Check payables, purchases and supplier account history.</Text></View><PartyButton label="+ Add supplier" primary onPress={() => router.push('/suppliers/new')} /></View>
+    <TextInput value={search} onChangeText={setSearch} placeholder="Search supplier name or phone" placeholderTextColor="#83918B" style={supplierStyles.search} accessibilityLabel="Search suppliers" />
     <ErrorText value={error} />
-    {items.length === 0 && !error && <Text style={styles.muted}>No suppliers yet.</Text>}
-    {items.map(item => <Pressable key={item.id} style={styles.card} onPress={() => router.push(`/suppliers/${item.id}` as Href)}>
-      <Text style={styles.heading}>{item.name}</Text><Text style={styles.muted}>{item.phone || 'No phone'}</Text>
-      <Text>To pay ৳{item.to_pay} · Advance ৳{item.supplier_advance}</Text>
-    </Pressable>)}
-    {page && <Action label="Load more" secondary onPress={() => void load(page)} />}
+    <Text style={supplierStyles.caption}>{items.length} shown{page ? ' · More available' : ''}</Text>
+    {loading && !items.length ? <Text style={styles.muted}>Loading suppliers…</Text> : items.length ? items.map(item => <View key={item.id} style={styles.card}>
+      <View style={supplierStyles.listRow}>{item.image_url ? <Image source={{ uri: resolveAssetUrl(item.image_url) || '' }} style={supplierStyles.avatar} contentFit="cover" /> : <PartyAvatar name={item.name} />}
+        <View style={supplierStyles.listCopy}><Text style={supplierStyles.personName}>{item.name}</Text><Text style={supplierStyles.role}>SUPPLIER</Text><Text style={styles.muted}>{item.phone || 'No phone'}{[item.area, item.district].filter(Boolean).length ? ` · ${[item.area, item.district].filter(Boolean).join(', ')}` : ''}</Text></View>
+        <View style={{ alignItems: 'flex-end', gap: 4 }}><Text style={[supplierStyles.balance, Number(item.to_pay) > 0 && supplierStyles.due]}>To pay ৳{currency(item.to_pay)}</Text><Text style={styles.muted}>Advance ৳{currency(item.supplier_advance)}</Text></View>
+      </View>
+      <View style={supplierStyles.actions}><PartyButton label="View details" onPress={() => router.push(`/suppliers/${item.id}` as Href)} />
+        {session?.account?.role === 'owner' && item.supplier_ledger_id && <PartyButton label="Supplier ledger" onPress={() => router.push(`/money/account/${item.supplier_ledger_id}` as Href)} />}
+      </View>
+    </View>) : !error ? <View style={styles.card}><Text style={styles.heading}>{search ? 'No matching suppliers' : 'No suppliers yet'}</Text><Text style={styles.muted}>{search ? 'Try another name or phone.' : 'Add a supplier to start recording purchases.'}</Text></View> : null}
+    {page && !loading && <Action label="Load more" secondary onPress={() => void load(page)} />}
   </Screen>;
 }
 
@@ -151,13 +171,14 @@ export function SupplierDetailScreen() {
   const [supplier, setSupplier] = useState<Supplier | null>(null);
   const [purchases, setPurchases] = useState<PurchaseRecord[]>([]);
   const [nextPurchases, setNextPurchases] = useState<number | null>(null);
-  const [activity, setActivity] = useState<{ id: number; description: string; account: string; debit: string; credit: string }[]>([]);
+  const [activity, setActivity] = useState<{ id: number; description: string; account: string; debit: string; credit: string; created_at: string }[]>([]);
   const [nextActivity, setNextActivity] = useState<number | null>(null);
   const [accounts, setAccounts] = useState<PurchasePaymentAccount[]>([]);
   const [kind, setKind] = useState<SupplierAction['kind']>('payment');
   const [target, setTarget] = useState('');
   const [accountId, setAccountId] = useState('');
   const [amount, setAmount] = useState('');
+  const [detailTab, setDetailTab] = useState<'purchases' | 'activity' | 'money'>('purchases');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const commandId = useRef(command());
@@ -187,54 +208,62 @@ export function SupplierDetailScreen() {
     } catch (cause) { setError(message(cause)); }
     finally { setBusy(false); }
   }
-  return <Screen title={supplier?.name || 'Supplier details'} icon="parties" backTo="/suppliers">
+  return <Screen title="Supplier details" icon="parties" backTo="/suppliers" wide>
     <ErrorText value={error} />
-    {supplier && <>{!!supplier.image_url && <Image source={{ uri: resolveAssetUrl(supplier.image_url) || '' }}
-      style={{ width: 96, height: 96, borderRadius: 16 }} contentFit="cover" />}
-      <Text style={styles.heading}>To pay ৳{supplier.to_pay}</Text>
-      <Text style={styles.heading}>Advance ৳{supplier.supplier_advance}</Text>
-      <Text style={styles.muted}>{[supplier.phone, supplier.address, supplier.area, supplier.district].filter(Boolean).join(' · ') || 'No contact details'}</Text>
-      {!!supplier.payment_terms && <Text>Terms: {supplier.payment_terms}</Text>}
-      <Action label="Edit supplier" icon="edit" secondary onPress={() => router.push(`/suppliers/${id}/edit` as Href)} />
-      <Action label="New purchase" icon="purchase" onPress={() => router.push('/purchases/new')} />
-      <Text style={styles.heading}>Supplier money</Text>
-      <View style={styles.row}>{(['payment', 'advance', 'advance_refund', 'payment_refund', 'apply_advance', 'allocation_reversal'] as const)
-        .map(item => <Choice key={item} label={item.replaceAll('_', ' ')} selected={kind === item}
-          onPress={() => { setKind(item); setTarget(''); commandId.current = command(); }} />)}</View>
-      {['payment', 'payment_refund', 'apply_advance', 'allocation_reversal'].includes(kind) && <>
-        <Text style={styles.label}>Select payable</Text><View style={styles.row}>
-          {supplier.opening_payables?.filter(item => Number(item.due) > 0 || ['payment_refund', 'allocation_reversal'].includes(kind))
-            .map(item => <Choice key={item.id} label={`Opening ৳${item.due}`} selected={target === `opening:${item.id}`}
-              onPress={() => setTarget(`opening:${item.id}`)} />)}
-          {purchases.filter(item => item.status === 'completed').map(item =>
-            <Choice key={item.id} label={`${displayDocumentNumber(item.number)} · Due ৳${item.due}`} selected={target === item.id}
-              onPress={() => setTarget(item.id)} />)}
-        </View></>}
-      {!['apply_advance', 'allocation_reversal'].includes(kind) && <><Text style={styles.label}>Money account</Text>
-        <View style={styles.row}>{accounts.filter(item => item.is_active).map(item =>
-          <Choice key={item.id} label={item.name} selected={accountId === item.id} onPress={() => setAccountId(item.id)} />)}</View></>}
-      <Field label="Amount ৳" value={amount} onChangeText={setAmount} keyboardType="decimal-pad" />
-      <Action label={busy ? 'Saving…' : 'Record supplier action'} disabled={busy} onPress={() => void postAction()} />
-      <Text style={styles.heading}>Purchases</Text>
-      {purchases.map(item => <Pressable key={item.id} style={styles.card} onPress={() => router.push(`/purchases/${item.id}` as Href)}>
-        <Text style={styles.heading}>{item.number ? displayDocumentNumber(item.number) : 'Draft purchase'} · ৳{item.total}</Text><Text>{item.status} · Due ৳{item.due}</Text>
-      </Pressable>)}
-      {nextPurchases && <Action label="More purchases" secondary onPress={() => {
-        if (!session?.account) return;
-        void api.purchases(session.token, session.account.business.id, nextPurchases, supplier.id)
-          .then(result => { setPurchases(current => [...current, ...result.purchases]); setNextPurchases(result.next_page); })
-          .catch(cause => setError(message(cause)));
-      }} />}
-      <Text style={styles.heading}>Statement</Text>
-      {activity.map(item => <View key={item.id} style={styles.card}><Text>{item.description}</Text>
-        <Text style={styles.muted}>{item.account} · Debit ৳{currency(item.debit)} · Credit ৳{currency(item.credit)}</Text></View>)}
-      {nextActivity && <Action label="More activity" secondary onPress={() => {
-        if (!session?.account) return;
-        void api.supplierActivity(session.token, session.account.business.id, supplier.id, nextActivity)
-          .then(result => { setActivity(current => [...current, ...result.activity]); setNextActivity(result.next_page); })
-          .catch(cause => setError(message(cause)));
-      }} />}
-    </>}
+    {supplier ? <>
+      <View style={supplierStyles.profileHeader}>
+        {supplier.image_url ? <Image source={{ uri: resolveAssetUrl(supplier.image_url) || '' }} style={supplierStyles.profileImage} contentFit="cover" /> : <PartyAvatar name={supplier.name} size={62} />}
+        <View style={{ flex: 1, minWidth: 180, gap: 4 }}><Text style={supplierStyles.profileName}>{supplier.name}</Text><Text style={supplierStyles.role}>SUPPLIER</Text></View>
+        <View style={supplierStyles.actions}><PartyButton label="Edit supplier" onPress={() => router.push(`/suppliers/${id}/edit` as Href)} /><PartyButton label="New purchase" primary onPress={() => router.push('/purchases/new')} />
+          {session?.account?.role === 'owner' && supplier.supplier_ledger_id && <PartyButton label="View supplier ledger" onPress={() => router.push(`/money/account/${supplier.supplier_ledger_id}` as Href)} />}
+        </View>
+      </View>
+      <View style={supplierStyles.metrics}><PartyMetric label="We owe supplier" value={`৳${currency(supplier.to_pay)}`} tone="due" /><PartyMetric label="Supplier advance" value={`৳${currency(supplier.supplier_advance)}`} /><PartyMetric label="Purchases shown" value={String(purchases.length)} /></View>
+      <View style={supplierStyles.columns}>
+        <View style={supplierStyles.sideColumn}>
+          <View style={styles.card}><Text style={styles.heading}>Contact details</Text><PartyInfo label="Phone" value={supplier.phone || ''} /><PartyInfo label="Address" value={[supplier.address, supplier.area, supplier.district].filter(Boolean).join(', ')} /><PartyInfo label="Payment terms" value={supplier.payment_terms || ''} /></View>
+          {!!supplier.notes && <View style={styles.card}><Text style={styles.heading}>Notes</Text><Text style={styles.muted}>{supplier.notes}</Text></View>}
+        </View>
+        <View style={supplierStyles.mainColumn}>
+          <View style={supplierStyles.tabs}><Choice label="Purchases" selected={detailTab === 'purchases'} onPress={() => setDetailTab('purchases')} /><Choice label="Activity" selected={detailTab === 'activity'} onPress={() => setDetailTab('activity')} /><Choice label="Supplier money" selected={detailTab === 'money'} onPress={() => setDetailTab('money')} /></View>
+          {detailTab === 'purchases' && <>
+            {purchases.length ? purchases.map(item => <Pressable key={item.id} style={styles.card} onPress={() => router.push(`/purchases/${item.id}` as Href)}><View style={supplierStyles.purchaseRow}><View style={{ flex: 1 }}><Text style={supplierStyles.link}>{item.number ? displayDocumentNumber(item.number) : 'Draft purchase'}</Text><Text style={styles.muted}>{item.created_at.slice(0, 10)} · {item.status}</Text></View><View style={{ alignItems: 'flex-end' }}><Text style={supplierStyles.balance}>৳{currency(item.total)}</Text><Text style={styles.muted}>Due ৳{currency(item.due)}</Text></View></View></Pressable>)
+              : <View style={styles.card}><Text style={styles.muted}>No purchases yet.</Text></View>}
+            {nextPurchases && <Action label="More purchases" secondary onPress={() => {
+              if (!session?.account) return;
+              void api.purchases(session.token, session.account.business.id, nextPurchases, supplier.id)
+                .then(result => { setPurchases(current => [...current, ...result.purchases]); setNextPurchases(result.next_page); })
+                .catch(cause => setError(message(cause)));
+            }} />}
+          </>}
+          {detailTab === 'activity' && <>
+            {activity.length ? activity.map(item => <View key={item.id} style={styles.card}><Text style={supplierStyles.balance}>{item.description}</Text><Text style={styles.muted}>{item.created_at.slice(0, 10)} · {item.account}</Text></View>) : <View style={styles.card}><Text style={styles.muted}>No supplier activity yet.</Text></View>}
+            {nextActivity && <Action label="More activity" secondary onPress={() => {
+              if (!session?.account) return;
+              void api.supplierActivity(session.token, session.account.business.id, supplier.id, nextActivity)
+                .then(result => { setActivity(current => [...current, ...result.activity]); setNextActivity(result.next_page); })
+                .catch(cause => setError(message(cause)));
+            }} />}
+            {session?.account?.role === 'owner' && supplier.supplier_ledger_id && <PartyButton label="View supplier ledger for amounts" onPress={() => router.push(`/money/account/${supplier.supplier_ledger_id}` as Href)} />}
+          </>}
+          {detailTab === 'money' && <View style={styles.card}>
+            <Text style={styles.heading}>Record supplier money</Text><Text style={styles.muted}>The server checks each amount before posting.</Text>
+            <View style={styles.row}>{(['payment', 'advance', 'advance_refund', 'payment_refund', 'apply_advance', 'allocation_reversal'] as const).map(item =>
+              <Choice key={item} label={item.replaceAll('_', ' ')} selected={kind === item} onPress={() => { setKind(item); setTarget(''); commandId.current = command(); }} />)}</View>
+            {['payment', 'payment_refund', 'apply_advance', 'allocation_reversal'].includes(kind) && <><Text style={styles.label}>Select payable</Text><View style={styles.row}>
+              {supplier.opening_payables?.filter(item => Number(item.due) > 0 || ['payment_refund', 'allocation_reversal'].includes(kind)).map(item =>
+                <Choice key={item.id} label={`Opening ৳${currency(item.due)}`} selected={target === `opening:${item.id}`} onPress={() => setTarget(`opening:${item.id}`)} />)}
+              {purchases.filter(item => item.status === 'completed').map(item =>
+                <Choice key={item.id} label={`${displayDocumentNumber(item.number)} · Due ৳${currency(item.due)}`} selected={target === item.id} onPress={() => setTarget(item.id)} />)}
+            </View></>}
+            {!['apply_advance', 'allocation_reversal'].includes(kind) && <><Text style={styles.label}>Money account</Text><View style={styles.row}>{accounts.filter(item => item.is_active).map(item =>
+              <Choice key={item.id} label={item.name} selected={accountId === item.id} onPress={() => setAccountId(item.id)} />)}</View></>}
+            <Field label="Amount ৳" value={amount} onChangeText={setAmount} keyboardType="decimal-pad" />
+            <Action label={busy ? 'Saving…' : 'Record supplier action'} disabled={busy} onPress={() => void postAction()} />
+          </View>}
+        </View>
+      </View>
+    </> : !error ? <Text style={styles.muted}>Loading supplier…</Text> : null}
   </Screen>;
 }
 
@@ -265,8 +294,11 @@ export function PurchaseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { session } = useAuth();
   const [purchase, setPurchase] = useState<PurchaseRecord | null>(null);
+  const [attachments, setAttachments] = useState<RecordAttachment[]>([]);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
   const [accounts, setAccounts] = useState<PurchasePaymentAccount[]>([]);
   const [paid, setPaid] = useState('0');
+  const [dueDate, setDueDate] = useState('');
   const [accountId, setAccountId] = useState('');
   const [reason, setReason] = useState('');
   const [paymentAmount, setPaymentAmount] = useState('');
@@ -281,19 +313,23 @@ export function PurchaseDetailScreen() {
   const load = useCallback(async () => {
     if (!session?.account || !id) return;
     try {
-      const [record, money] = await Promise.all([api.purchase(session.token, session.account.business.id, id),
-      api.purchasePaymentAccounts(session.token, session.account.business.id)]);
+      const [record, money, documents] = await Promise.all([api.purchase(session.token, session.account.business.id, id),
+      api.purchasePaymentAccounts(session.token, session.account.business.id),
+      api.recordAttachments(session.token, session.account.business.id, 'purchase', id)]);
       setPurchase(record.purchase); setAccounts(money.accounts);
+      setAttachments(documents.attachments);
       setAccountId(current => current || money.accounts.find(item => item.is_default)?.id || ''); setError('');
     } catch (cause) { setError(message(cause)); }
   }, [session, id]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
   async function complete() {
     if (!session?.account || !purchase) return;
+    if (Number(paid) < Number(purchase.total) && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) { setError('Enter a due date as YYYY-MM-DD.'); return; }
     setBusy(true); setError('');
     try {
       const result = await api.completePurchase(session.token, session.account.business.id, purchase.id,
-        { paid, ...(Number(paid) > 0 && { account_id: accountId }) }, completionCommand.current);
+        { paid, ...(Number(paid) > 0 && { account_id: accountId }),
+          ...(Number(paid) < Number(purchase.total) && { due_date: dueDate }) }, completionCommand.current);
       setPurchase(result.purchase); completionCommand.current = command();
     } catch (cause) { setError(`Purchase was not confirmed: ${message(cause)}. Check this draft before retrying.`); }
     finally { setBusy(false); }
@@ -359,6 +395,7 @@ export function PurchaseDetailScreen() {
         <Text style={styles.muted}>Total ৳{purchase.total} · Received at {purchase.location_name}</Text>
         <Action label="Edit draft" icon="edit" secondary onPress={() => router.push(`/purchases/${purchase.id}/edit` as Href)} />
         <Field label="Pay now ৳" value={paid} onChangeText={setPaid} keyboardType="decimal-pad" />
+        {Number(paid) < Number(purchase.total) && <Field label="Due date * (YYYY-MM-DD)" value={dueDate} onChangeText={setDueDate} keyboardType="default" />}
         {Number(paid) > 0 && <View style={styles.row}>{activeAccounts.map(item => <Choice key={item.id} label={item.name} selected={accountId === item.id} onPress={() => setAccountId(item.id)} />)}</View>}
         <Text style={styles.muted}>Completing confirms the purchase and updates stock and supplier balance.</Text>
         <Action label={busy ? 'Completing…' : 'Complete purchase'} icon="default" disabled={busy} onPress={() => void complete()} />
@@ -370,6 +407,9 @@ export function PurchaseDetailScreen() {
         <View style={detailStyles.itemCopy}><Text style={detailStyles.itemName} numberOfLines={2}>{line.product_name}{line.variant_name ? ` · ${line.variant_name}` : ''}</Text><Text style={detailStyles.itemMeta}>{line.quantity} {line.unit_name || 'unit'} × ৳{line.unit_cost}</Text>{!!line.lot_code && <Text style={styles.muted}>Batch {line.lot_code}</Text>}</View>
         <Text style={detailStyles.itemTotal}>৳{Number(line.line_total).toFixed(2)}</Text>
       </View>)}
+      <View style={styles.card}><RecordAttachments kind="purchase" pending={pendingAttachments} onChange={setPendingAttachments}
+        existing={attachments} token={session?.token} businessId={session?.account?.business.id} recordId={purchase.id}
+        onUploaded={() => { void load(); }} /></View>
       {purchase.status === 'cancelled' && <Text style={styles.muted}>This purchase was cancelled.</Text>}
     </>}
 
@@ -420,6 +460,31 @@ const styles = StyleSheet.create({
   action: { backgroundColor: '#006D64', borderRadius: 12, minHeight: 48, flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center', padding: 10 },
   secondary: { backgroundColor: '#E0F3EA' }, actionText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
   error: { color: '#A62925', backgroundColor: '#FCEBE9', padding: 12, borderRadius: 10 },
+});
+
+const supplierStyles = StyleSheet.create({
+  topRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  pageHeading: { color: '#15211F', fontSize: 20, fontWeight: '800' },
+  search: { minHeight: 48, borderRadius: 12, borderWidth: 1, borderColor: '#DCE6E2', backgroundColor: 'white', paddingHorizontal: 14, color: '#15211F' },
+  caption: { color: '#67766F', fontSize: 11 },
+  listRow: { flexDirection: 'row', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 },
+  listCopy: { flex: 1, minWidth: 170, gap: 5 },
+  avatar: { width: 48, height: 48, borderRadius: 24 },
+  personName: { color: '#15211F', fontSize: 16, fontWeight: '800' },
+  role: { color: '#9A5A13', fontSize: 10, fontWeight: '800' },
+  balance: { color: '#15211F', fontSize: 12, fontWeight: '700' },
+  due: { color: '#A9630F' },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  profileHeader: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 13, paddingVertical: 6 },
+  profileImage: { width: 62, height: 62, borderRadius: 31 },
+  profileName: { color: '#15211F', fontSize: 25, fontWeight: '800' },
+  metrics: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
+  columns: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, alignItems: 'flex-start' },
+  sideColumn: { flexGrow: 1, flexBasis: 290, minWidth: 260, gap: 12 },
+  mainColumn: { flexGrow: 2, flexBasis: 400, minWidth: 280, gap: 10 },
+  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  purchaseRow: { flexDirection: 'row', justifyContent: 'space-between', gap: 10 },
+  link: { color: '#006D64', fontSize: 13, fontWeight: '800' },
 });
 
 const detailStyles = StyleSheet.create({

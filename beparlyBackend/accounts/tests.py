@@ -1,12 +1,45 @@
 import json
+import tempfile
+from io import BytesIO
 
 from django.test import TestCase, override_settings
 from django.core.exceptions import ValidationError
+from django.core.files.uploadedfile import SimpleUploadedFile
+from PIL import Image
 
 from .models import Business, BusinessMember, User, normalize_phone
 
 
 class AccountApiTests(TestCase):
+    def test_owner_can_upload_replace_and_remove_shop_logo(self):
+        from .models import AuthSession
+
+        token = self.register()
+        business_id = self.create_business(token, 'Logo Shop')
+        path = f'/api/v1/businesses/{business_id}/logo/'
+        image = BytesIO()
+        Image.new('RGB', (64, 32), '#126b5b').save(image, format='PNG')
+
+        def upload(auth):
+            return self.client.post(path, {'image': SimpleUploadedFile('logo.png', image.getvalue(), content_type='image/png')},
+                                    HTTP_AUTHORIZATION=f'Bearer {auth}')
+
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            first = upload(token)
+            self.assertEqual(first.status_code, 200, first.content)
+            self.assertIn('business_logos/', first.json()['logo_url'])
+            self.assertEqual(upload(token).status_code, 200)
+            self.assertTrue(Business.objects.get(pk=business_id).logo)
+            invalid = self.client.post(path, {'image': SimpleUploadedFile('bad.png', b'not an image')},
+                                       HTTP_AUTHORIZATION=f'Bearer {token}')
+            self.assertEqual(invalid.status_code, 400)
+            employee = User.objects.create_user('01812345678', password='EmployeePass#89')
+            BusinessMember.objects.create(user=employee, business_id=business_id, role=BusinessMember.EMPLOYEE)
+            employee_token = AuthSession.issue(employee)
+            self.assertEqual(upload(employee_token).status_code, 403)
+            self.assertEqual(self.client.delete(path, HTTP_AUTHORIZATION=f'Bearer {token}').status_code, 200)
+            self.assertFalse(Business.objects.get(pk=business_id).logo)
+
     def test_phone_formats_normalize_to_one_bangladeshi_number(self):
         for value in ('01712345678', '+8801712345678', '8801712345678', '01712-345678', '+880 1712-345678', '(01712) 345678', '01712.345678'):
             with self.subTest(value=value):
@@ -59,6 +92,34 @@ class AccountApiTests(TestCase):
         self.assertEqual([(item['id'], item['role']) for item in profiles], [(retail, 'owner'), (wholesale, 'owner')])
         self.assertEqual(User.objects.get().first_name, 'Selim')
 
+    def test_business_switcher_summary_uses_real_membership_scoped_counts(self):
+        from .models import AuthSession
+        from products.models import Product
+        from stockkeeper.models import StockLocation
+
+        owner_token = self.register()
+        first = self.create_business(owner_token, 'First shop')
+        second = self.create_business(owner_token, 'Second shop')
+        Product.objects.create(business_id=first, name='Soap', sku='SOAP-1')
+        Product.objects.create(business_id=first, name='Hidden', sku='HIDDEN-1', is_active=False)
+        Product.objects.create(business_id=second, name='Rice', sku='RICE-2')
+        StockLocation.objects.create(business_id=first, name='Warehouse', type=StockLocation.WAREHOUSE)
+        outside = Business.objects.create(name='Outside shop')
+        Product.objects.create(business=outside, name='Private', sku='PRIVATE-3')
+        path = '/api/v1/businesses/switcher-summary/'
+        self.assertEqual(self.client.get(path).status_code, 401)
+        response = self.client.get(path, HTTP_AUTHORIZATION=f'Bearer {owner_token}')
+        self.assertEqual(response.status_code, 200, response.content)
+        stats = {item['business_id']: item for item in response.json()['businesses']}
+        self.assertEqual(set(stats), {first, second})
+        self.assertEqual(stats[first]['products'], 1)
+        self.assertEqual(stats[first]['locations'], 2)
+        self.assertEqual(stats[second]['products'], 1)
+        employee = User.objects.create_user('01812345678', password='EmployeePass#89')
+        BusinessMember.objects.create(user=employee, business_id=second, role=BusinessMember.EMPLOYEE)
+        employee_stats = self.client.get(path, HTTP_AUTHORIZATION=f'Bearer {AuthSession.issue(employee)}')
+        self.assertEqual([item['business_id'] for item in employee_stats.json()['businesses']], [second])
+
     def test_currency_symbol_setting_is_business_wide_and_owner_only(self):
         from .models import AuthSession
 
@@ -81,6 +142,30 @@ class AccountApiTests(TestCase):
                                      data=json.dumps({'show_currency_symbol': True}),
                                      content_type='application/json', HTTP_AUTHORIZATION=f'Bearer {employee_token}')
         self.assertEqual(rejected.status_code, 403)
+
+    def test_invoice_footer_is_owner_editable_and_business_scoped(self):
+        from .models import AuthSession
+
+        owner = self.register()
+        first = self.create_business(owner, 'First shop')
+        second = self.create_business(owner, 'Second shop')
+        path = f'/api/v1/businesses/{first}/profile/'
+        saved = self.client.patch(path, data=json.dumps({'invoice_footer_text': 'ধন্যবাদ\nPlease keep this invoice.'}),
+                                  content_type='application/json', HTTP_AUTHORIZATION=f'Bearer {owner}')
+        self.assertEqual(saved.status_code, 200, saved.content)
+        self.assertEqual(saved.json()['business']['invoice_footer_text'], 'ধন্যবাদ\nPlease keep this invoice.')
+        other = self.client.get(f'/api/v1/businesses/{second}/profile/', HTTP_AUTHORIZATION=f'Bearer {owner}')
+        self.assertEqual(other.json()['business']['invoice_footer_text'], 'Thank you for your business.')
+        invalid = self.client.patch(path, data=json.dumps({'invoice_footer_text': 'x' * 501}),
+                                    content_type='application/json', HTTP_AUTHORIZATION=f'Bearer {owner}')
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(Business.objects.get(pk=first).invoice_footer_text, 'ধন্যবাদ\nPlease keep this invoice.')
+        employee = User.objects.create_user('01812345678', password='EmployeePass#89')
+        BusinessMember.objects.create(user=employee, business_id=first, role=BusinessMember.EMPLOYEE)
+        employee_token = AuthSession.issue(employee)
+        denied = self.client.patch(path, data=json.dumps({'invoice_footer_text': ''}),
+                                   content_type='application/json', HTTP_AUTHORIZATION=f'Bearer {employee_token}')
+        self.assertEqual(denied.status_code, 403)
 
     def test_opening_cash_is_posted_only_during_business_creation(self):
         from decimal import Decimal
@@ -178,3 +263,39 @@ class AccountApiTests(TestCase):
             production = self.client.options('/api/v1/auth/register/', HTTP_ORIGIN='http://localhost:8082')
             self.assertEqual(production.status_code, 405)
             self.assertNotIn('Access-Control-Allow-Origin', production)
+
+    def test_label_print_settings_are_owner_scoped_and_calibration_uses_saved_paper(self):
+        from .label_settings import DEFAULT_LABEL_SETTINGS
+        from .models import AuthSession
+        import re
+
+        owner = self.register()
+        business_id = self.create_business(owner, 'Printer shop')
+        other_id = self.create_business(owner, 'Other shop')
+        settings = {**DEFAULT_LABEL_SETTINGS, 'paper': '2x4', 'width_mm': 50.8,
+                    'height_mm': 101.6, 'horizontal_offset_mm': 2, 'rotation': 90}
+        path = f'/api/v1/businesses/{business_id}/profile/'
+        saved = self.client.patch(path, data=json.dumps({'label_print_settings': settings}),
+                                  content_type='application/json', HTTP_AUTHORIZATION=f'Bearer {owner}')
+        self.assertEqual(saved.status_code, 200, saved.content)
+        self.assertEqual(saved.json()['business']['label_print_settings'], settings)
+        self.assertEqual(Business.objects.get(pk=other_id).label_print_settings, {})
+        invalid = self.client.patch(path, data=json.dumps({'label_print_settings': {**settings, 'scale_percent': 0}}),
+                                    content_type='application/json', HTTP_AUTHORIZATION=f'Bearer {owner}')
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(Business.objects.get(pk=business_id).label_print_settings, settings)
+
+        employee = User.objects.create_user('01812345678', password='EmployeePass#89')
+        BusinessMember.objects.create(user=employee, business_id=business_id, role=BusinessMember.EMPLOYEE)
+        token = AuthSession.issue(employee)
+        denied = self.client.patch(path, data=json.dumps({'label_print_settings': DEFAULT_LABEL_SETTINGS}),
+                                   content_type='application/json', HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(denied.status_code, 403)
+        calibration = f'/api/v1/businesses/{business_id}/label-calibration/'
+        self.assertEqual(self.client.get(calibration).status_code, 404)
+        response = self.client.get(calibration, HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 200)
+        box = re.search(rb'/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]', response.content)
+        self.assertIsNotNone(box)
+        self.assertAlmostEqual(float(box[1]), 50.8 * 72 / 25.4, delta=0.1)
+        self.assertAlmostEqual(float(box[2]), 101.6 * 72 / 25.4, delta=0.1)

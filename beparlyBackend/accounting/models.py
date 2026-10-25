@@ -206,6 +206,44 @@ class Expense(models.Model):
     business = models.ForeignKey('accounts.Business', on_delete=models.PROTECT)
     category = models.ForeignKey(ExpenseCategory, on_delete=models.PROTECT)
     money_transaction = models.OneToOneField(MoneyTransaction, on_delete=models.PROTECT)
+    reference = models.CharField(max_length=80, blank=True)
+
+
+class RecordAttachment(models.Model):
+    """Append-only supporting document for an expense or purchase."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey('accounts.Business', on_delete=models.PROTECT)
+    expense = models.ForeignKey(MoneyTransaction, null=True, blank=True, on_delete=models.PROTECT,
+                                related_name='attachments')
+    purchase = models.ForeignKey('purchases.Purchase', null=True, blank=True, on_delete=models.PROTECT,
+                                 related_name='attachments')
+    name = models.CharField(max_length=160)
+    content_type = models.CharField(max_length=40)
+    size = models.PositiveIntegerField()
+    sha256 = models.CharField(max_length=64)
+    file_key = models.CharField(max_length=500)
+    command_id = models.UUIDField()
+    uploaded_by = models.ForeignKey('accounts.User', on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['business', 'command_id'], name='unique_record_attachment_command'),
+            models.CheckConstraint(condition=(Q(expense__isnull=False, purchase__isnull=True) |
+                                              Q(expense__isnull=True, purchase__isnull=False)),
+                                   name='one_record_attachment_target'),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError('Supporting documents are append-only.')
+        target = self.expense if self.expense_id else self.purchase
+        if not target or target.business_id != self.business_id or self.expense_id and target.kind != 'expense':
+            raise ValidationError('Supporting document must belong to this business record.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('Supporting documents cannot be silently deleted.')
 
 
 class BusinessAsset(models.Model):
@@ -238,3 +276,37 @@ class InventoryAccountingCutoff(models.Model):
     value = models.DecimalField(max_digits=22, decimal_places=7)
     journal = models.OneToOneField(JournalEntry, null=True, on_delete=models.PROTECT)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class DueDateChange(models.Model):
+    """Append-only owner revision; the document's due_date stores the latest value."""
+    business = models.ForeignKey('accounts.Business', on_delete=models.PROTECT)
+    sale = models.ForeignKey('sales.Sale', null=True, blank=True, on_delete=models.PROTECT)
+    purchase = models.ForeignKey('purchases.Purchase', null=True, blank=True, on_delete=models.PROTECT)
+    previous_date = models.DateField(null=True, blank=True)
+    new_date = models.DateField()
+    effective_on = models.DateField()
+    reason = models.CharField(max_length=240)
+    actor = models.ForeignKey('accounts.User', on_delete=models.PROTECT)
+    command_id = models.UUIDField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['business', 'command_id'], name='unique_due_date_command'),
+            models.CheckConstraint(condition=(Q(sale__isnull=False, purchase__isnull=True) |
+                                             Q(sale__isnull=True, purchase__isnull=False)), name='one_due_date_document'),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self._state.adding:
+            raise ValueError('Due date history is append-only.')
+        if (self.sale_id is None) == (self.purchase_id is None):
+            raise ValidationError('Choose exactly one due document.')
+        document = self.sale if self.sale_id else self.purchase
+        if document.business_id != self.business_id:
+            raise ValidationError('Due document must belong to this business.')
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('Due date history cannot be deleted.')

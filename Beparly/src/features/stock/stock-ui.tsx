@@ -112,6 +112,8 @@ function LocationKpi({ label, value, icon, color, background, compact }: { label
 }
 
 export function LocationsScreen() {
+  const { type } = useLocalSearchParams<{ type?: string }>();
+  const locationType = type === 'shop' || type === 'warehouse' ? type : null;
   const { width } = useWindowDimensions();
   const { session } = useAuth();
   const businessId = session?.account?.business.id;
@@ -133,8 +135,9 @@ export function LocationsScreen() {
   const shops = locations.filter((location) => location.type === 'shop').length;
   const warehouses = locations.filter((location) => location.type === 'warehouse').length;
   const inactive = locations.filter((location) => !location.is_active).length;
+  const visibleLocations = locationType ? locations.filter((location) => location.type === locationType) : locations;
   const compactKpis = width < 480;
-  return <Page title="My storage units" root floatingAction={canManage && !loading && !error ?
+  return <Page title={locationType === 'shop' ? 'Shops' : locationType === 'warehouse' ? 'Warehouses' : 'My storage units'} root floatingAction={canManage && !loading && !error ?
     <PressScale accessibilityRole="button" accessibilityLabel="Add storage unit" onPress={() => router.push('/stock/new')} style={styles.floatingAdd}>
       <View style={styles.floatingFace}><AppSymbol name="plus" size={27} color={palette.surface} /></View>
     </PressScale> : null}>
@@ -146,9 +149,9 @@ export function LocationsScreen() {
           <LocationKpi label="Warehouses" value={warehouses} icon="products" color={palette.purple} background={palette.purpleSoft} compact={compactKpis} />
           <LocationKpi label="Inactive" value={inactive} icon="deactivate" color={palette.rose} background={palette.roseSoft} compact={compactKpis} />
         </View>
-        <View style={styles.sectionHeading}><Text style={styles.listTitle}>Shops & warehouses</Text><Text style={styles.listCount}>{locations.length}</Text></View>
-        {locations.length ? locations.map((location) => <LocationCard key={location.id} location={location} />) :
-          <Message title="No storage units yet" detail="Add a shop or warehouse to start tracking stock by location." />}
+        <View style={styles.sectionHeading}><Text style={styles.listTitle}>{locationType === 'shop' ? 'Shops' : locationType === 'warehouse' ? 'Warehouses' : 'Shops & warehouses'}</Text><Text style={styles.listCount}>{visibleLocations.length}</Text></View>
+        {visibleLocations.length ? visibleLocations.map((location) => <LocationCard key={location.id} location={location} />) :
+          <Message title={locationType ? `No ${locationType === 'shop' ? 'shops' : 'warehouses'} yet` : 'No storage units yet'} detail="Add a shop or warehouse to start tracking stock by location." />}
       </>}
   </Page>;
 }
@@ -224,25 +227,12 @@ export function LocationDetailsScreen() {
         {location.is_default && <View style={styles.defaultMark}><AppSymbol name="default" size={17} color={palette.amber} /><Text style={styles.defaultText}>Default</Text></View>}
       </View>
       {dataLoading && !overview ? <View style={styles.loading}><ActivityIndicator color={palette.primary} /><Text style={styles.muted}>Loading inventory…</Text></View> :
-        overview && <><View style={styles.locationKpiGrid}>
+        overview && <View style={styles.locationKpiGrid}>
           <View style={styles.locationKpi}><View style={[styles.kpiIcon, { backgroundColor: palette.primarySoft }]}><AppSymbol name="price" size={21} color={palette.primaryDeep} /></View><Text style={styles.locationKpiValue}>{formatBdt(overview.summary.inventory_value)}</Text><Text style={styles.locationKpiLabel}>Inventory cost value</Text></View>
           <View style={styles.locationKpi}><View style={[styles.kpiIcon, { backgroundColor: palette.blueSoft }]}><AppSymbol name="products" size={21} color={palette.blue} /></View><Text style={styles.locationKpiValue}>{overview.summary.sku_count}</Text><Text style={styles.locationKpiLabel}>SKUs</Text></View>
           <View style={styles.locationKpi}><View style={[styles.kpiIcon, { backgroundColor: palette.amberSoft }]}><AppSymbol name="warning" size={21} color={palette.amber} /></View><Text style={styles.locationKpiValue}>{overview.summary.low_stock_count}</Text><Text style={styles.locationKpiLabel}>Low stock variants</Text></View>
           <View style={styles.locationKpi}><View style={[styles.kpiIcon, { backgroundColor: palette.roseSoft }]}><AppSymbol name="batch" size={21} color={palette.rose} /></View><Text style={styles.locationKpiValue}>{overview.summary.expiring_soon_count}</Text><Text style={styles.locationKpiLabel}>Nearing expiry</Text></View>
-        </View>
-        <View style={styles.inventoryPanel}>
-          <View style={styles.inventoryHeading}>
-            <Pressable accessibilityRole="button" accessibilityLabel={`${location.type === 'warehouse' ? 'Warehouse' : 'Shop'} inventory`} accessibilityState={{ expanded: inventoryOpen }} onPress={() => setInventoryOpen(!inventoryOpen)} style={styles.inventoryToggle}>
-              <AppSymbol name="products" size={20} color={palette.primaryDeep} /><Text style={styles.inventoryTitle}>{location.type === 'warehouse' ? 'Warehouse' : 'Shop'} inventory</Text><Text style={styles.listCount}>{overview.inventory.length}</Text>
-              <AppSymbol name={inventoryOpen ? 'up' : 'down'} size={22} color={palette.secondary} />
-            </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="About inventory columns" accessibilityState={{ expanded: inventoryHelpOpen }} onPress={() => setInventoryHelpOpen(!inventoryHelpOpen)} style={styles.inventoryHelpButton}><AppSymbol name="info" size={21} color={palette.secondary} /></Pressable>
-          </View>
-          {inventoryHelpOpen && <View style={styles.inventoryHelp}><Text style={styles.inventoryHelpText}>{compactTable ? 'Mobile view presents every stock field in a compact card. “—” means unavailable.' : 'Swipe sideways for all columns. Stock value uses the current selling price; purchase cost uses remaining cost layers. “—” means unavailable.'}</Text></View>}
-          {inventoryOpen && (overview.inventory.length ? <>
-            {compactTable ? <View style={styles.compactCards}>{overview.inventory.map((item) => <InventoryCard key={item.variant_id} item={item} />)}</View> : <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator style={styles.inventoryScroll} contentContainerStyle={styles.inventoryTable}><View style={styles.inventoryTableContent}><View style={styles.inventoryHeaderRow}><InventoryCell value="SKU" width={110} strong /><InventoryCell value="Product name" width={250} strong /><InventoryCell value="Available qty" width={145} strong /><InventoryCell value="Returning stock" width={140} strong /><InventoryCell value="Stock value" width={150} strong /><InventoryCell value="Purchase cost" width={150} strong /><InventoryCell value="Shortage qty" width={130} strong /></View>{overview.inventory.map((item) => <View key={item.variant_id} style={styles.inventoryRow}><InventoryCell value={item.sku} width={110} strong /><InventoryCell value={item.name} width={250} /><InventoryCell value={`${trimQuantity(item.available_quantity)} ${item.unit}`} width={145} /><InventoryCell value={item.returning_quantity ?? '—'} width={140} /><InventoryCell value={item.stock_value === null ? '—' : formatBdt(item.stock_value)} width={150} /><InventoryCell value={formatBdt(item.purchase_cost)} width={150} /><InventoryCell value={item.shortage_quantity ?? '—'} width={130} /></View>)}</View></ScrollView>}
-          </> : <Text style={styles.emptyInventory}>No products stocked here yet.</Text>)}
-        </View></>}
+        </View>}
       <View style={styles.detailActionGrid}>
         {(session?.account?.role === 'owner' || session?.account?.can_manage_purchases) &&
           <DetailAction label="Purchase from Supplier" icon="purchase" color={palette.orange} background={palette.orangeSoft}
@@ -267,6 +257,19 @@ export function LocationDetailsScreen() {
           </View>
         </View>}
       </>}
+      {overview && <View style={styles.inventoryPanel}>
+          <View style={styles.inventoryHeading}>
+            <Pressable accessibilityRole="button" accessibilityLabel={`${location.type === 'warehouse' ? 'Warehouse' : 'Shop'} inventory`} accessibilityState={{ expanded: inventoryOpen }} onPress={() => setInventoryOpen(!inventoryOpen)} style={styles.inventoryToggle}>
+              <AppSymbol name="products" size={20} color={palette.primaryDeep} /><Text style={styles.inventoryTitle}>{location.type === 'warehouse' ? 'Warehouse' : 'Shop'} inventory</Text><Text style={styles.listCount}>{overview.inventory.length}</Text>
+              <AppSymbol name={inventoryOpen ? 'up' : 'down'} size={22} color={palette.secondary} />
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="About inventory columns" accessibilityState={{ expanded: inventoryHelpOpen }} onPress={() => setInventoryHelpOpen(!inventoryHelpOpen)} style={styles.inventoryHelpButton}><AppSymbol name="info" size={21} color={palette.secondary} /></Pressable>
+          </View>
+          {inventoryHelpOpen && <View style={styles.inventoryHelp}><Text style={styles.inventoryHelpText}>{compactTable ? 'Mobile view presents every stock field in a compact card. “—” means unavailable.' : 'Swipe sideways for all columns. Stock value uses the current selling price; purchase cost uses remaining cost layers. “—” means unavailable.'}</Text></View>}
+          {inventoryOpen && (overview.inventory.length ? <>
+            {compactTable ? <View style={styles.compactCards}>{overview.inventory.map((item) => <InventoryCard key={item.variant_id} item={item} />)}</View> : <ScrollView horizontal nestedScrollEnabled showsHorizontalScrollIndicator style={styles.inventoryScroll} contentContainerStyle={styles.inventoryTable}><View style={styles.inventoryTableContent}><View style={styles.inventoryHeaderRow}><InventoryCell value="SKU" width={110} strong /><InventoryCell value="Product name" width={250} strong /><InventoryCell value="Available qty" width={145} strong /><InventoryCell value="Returning stock" width={140} strong /><InventoryCell value="Stock value" width={150} strong /><InventoryCell value="Purchase cost" width={150} strong /><InventoryCell value="Shortage qty" width={130} strong /></View>{overview.inventory.map((item) => <View key={item.variant_id} style={styles.inventoryRow}><InventoryCell value={item.sku} width={110} strong /><InventoryCell value={item.name} width={250} /><InventoryCell value={`${trimQuantity(item.available_quantity)} ${item.unit}`} width={145} /><InventoryCell value={item.returning_quantity ?? '—'} width={140} /><InventoryCell value={item.stock_value === null ? '—' : formatBdt(item.stock_value)} width={150} /><InventoryCell value={formatBdt(item.purchase_cost)} width={150} /><InventoryCell value={item.shortage_quantity ?? '—'} width={130} /></View>)}</View></ScrollView>}
+          </> : <Text style={styles.emptyInventory}>No products stocked here yet.</Text>)}
+        </View>}
       {!!error && <Message title="Could not update storage unit" detail={error} />}
       <View style={styles.logsPanel}><Text style={styles.logsTitle}>Recent stock logs</Text>
         {movements.length ? movements.map((movement) => <View key={movement.id} style={styles.logRow}>

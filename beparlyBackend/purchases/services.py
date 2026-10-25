@@ -28,6 +28,7 @@ def supplier_data(supplier):
             'notes': supplier.notes, 'payment_terms': supplier.payment_terms,
             'image_url': default_storage.url(supplier.image_key) if supplier.image_key else None,
             'is_customer': supplier.is_customer, 'is_supplier': supplier.is_supplier,
+            'supplier_ledger_id': supplier.payable_account.code if supplier.payable_account_id else None,
             **contact_position(supplier)}
 
 
@@ -37,7 +38,8 @@ def purchase_data(purchase, details=False):
               'location_id': purchase.location_id, 'location_name': purchase.location_name or purchase.location.name,
               'total': str(purchase.total), 'paid': str(purchase.paid),
               'due': str(purchase.total - purchase.paid if purchase.status == 'completed' else 0),
-              'notes': purchase.notes, 'created_at': purchase.created_at.isoformat(),
+              'notes': purchase.notes, 'due_date': purchase.due_date.isoformat() if purchase.due_date else None,
+              'created_at': purchase.created_at.isoformat(),
               'completed_at': purchase.completed_at.isoformat() if purchase.completed_at else None,
               'cancellation_reason': purchase.cancellation_reason}
     if details:
@@ -197,7 +199,7 @@ def save_draft(business, actor, command_id, data, purchase=None):
 
 
 @transaction.atomic
-def complete_purchase(purchase, actor, command_id, paid=0, account=None):
+def complete_purchase(purchase, actor, command_id, paid=0, account=None, due_date=None):
     business = purchase.business
     Business.objects.select_for_update().get(pk=business.pk)
     purchase = Purchase.objects.select_for_update().get(pk=purchase.pk)
@@ -217,6 +219,10 @@ def complete_purchase(purchase, actor, command_id, paid=0, account=None):
     paid = amount(paid, positive=False)
     if paid > purchase.total:
         raise PurchaseError('Payment exceeds purchase total.')
+    if paid < purchase.total and not due_date:
+        raise PurchaseError('Choose a due date for this credit purchase.')
+    if due_date and not hasattr(due_date, 'isoformat'):
+        raise PurchaseError('Choose a valid due date.')
     if paid and (not account or account.business_id != business.pk or not account.is_active):
         raise PurchaseError('Choose an active money account.')
     setup_business(business)
@@ -254,8 +260,9 @@ def complete_purchase(purchase, actor, command_id, paid=0, account=None):
     post(business, 'purchase', purchase.pk, f'Purchase {purchase.number}',
         [dr(ledger(business, 'INVENTORY'), total), cr(ensure_party_accounts(supplier).payable_account, total, supplier)], actor=actor)
     purchase.status, purchase.completed_at, purchase.completion_command_id = 'completed', timezone.now(), command_id
+    purchase.due_date = due_date if paid < purchase.total else None
     purchase.save(update_fields=['status', 'completed_at', 'completion_command_id', 'number',
-        'supplier_name', 'supplier_phone', 'supplier_address', 'location_name'])
+        'supplier_name', 'supplier_phone', 'supplier_address', 'location_name', 'due_date'])
     if paid:
         supplier_operation(business, supplier, actor, uuid4(), 'payment', paid,
             purchase=purchase, account=account)

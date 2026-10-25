@@ -7,19 +7,20 @@ import { FlatList, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } f
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
+import { RecordAttachments, uploadPendingAttachments } from '@/features/attachments/record-attachments';
 import { AppText as Text } from '@/components/app-text';
 import { useAuth } from '@/features/auth/auth-context';
 import { cachePurchaseCatalog, clearPurchaseDraft, loadPurchaseDraft, savePurchaseDraft,
   searchCachedPurchaseCatalog } from '@/features/purchases/purchase-draft';
 import { lineAmountCents, purchaseAmountCents } from '@/features/purchases/purchase-rules';
 import { api, resolveAssetUrl, type PurchasePaymentAccount, type ProductUnit, type PurchaseCatalogItem,
-  type PurchaseInput, type StockBatch, type StockLocation, type Supplier } from '@/services/api';
+  type PurchaseInput, type StockBatch, type StockLocation, type Supplier, type PendingAttachment, type RecordAttachment } from '@/services/api';
 
 type Stage = 'picker' | 'cart' | 'review';
 type Line = { id: string; item: PurchaseCatalogItem; quantity: string; unitCost: string; unitId?: string;
   unitName?: string; batchId?: string; batchLabel?: string };
 type Stored = { lines: Line[]; supplier: string; location: string; notes: string; paid: string;
-  payment: 'full' | 'partial' | 'due'; accountId: string; serverId?: string };
+  payment: 'full' | 'partial' | 'due'; accountId: string; dueDate: string; serverId?: string };
 const uid = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
   const n = Math.floor(Math.random() * 16); return (c === 'x' ? n : (n & 3) | 8).toString(16);
 });
@@ -35,7 +36,7 @@ const stepQuantity = (value: string, step: 1 | -1) => {
   const remainder = next % 1000n;
   return `${next / 1000n}${remainder ? `.${String(remainder).padStart(3, '0').replace(/0+$/, '')}` : ''}`;
 };
-const initial: Stored = { lines: [], supplier: '', location: '', notes: '', paid: '', payment: 'due', accountId: '' };
+const initial: Stored = { lines: [], supplier: '', location: '', notes: '', paid: '', payment: 'due', accountId: '', dueDate: '' };
 const err = (cause: unknown) => cause instanceof Error ? cause.message : 'Please try again.';
 
 export function PurchaseFlowScreen() {
@@ -74,6 +75,8 @@ export function PurchaseFlowScreen() {
   const [supplierImage, setSupplierImage] = useState<string | null>(null);
   const [previewItem, setPreviewItem] = useState<PurchaseCatalogItem | null>(null);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const [existingAttachments, setExistingAttachments] = useState<RecordAttachment[]>([]);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -82,6 +85,7 @@ export function PurchaseFlowScreen() {
   const supplierPaging = useRef(false);
   const queryRef = useRef('');
   const draftCommand = useRef(uid());
+  const savedInput = useRef('');
   const completeCommand = useRef(uid());
   const supplierCommand = useRef(uid());
   const preserveForProduct = useRef(false);
@@ -108,6 +112,8 @@ export function PurchaseFlowScreen() {
         let restored = saved ? JSON.parse(saved) as Stored : { ...initial };
         if (id && session) {
           const record = (await api.purchase(session.token, business, id)).purchase;
+          const documents = await api.recordAttachments(session.token, business, 'purchase', id);
+          if (live) setExistingAttachments(documents.attachments);
           if (record.status !== 'draft') { router.replace(`/purchases/${id}` as Href); return; }
           if (!saved) restored = {
             ...initial, serverId: id, supplier: record.supplier_id, location: String(record.location_id), notes: record.notes,
@@ -137,8 +143,8 @@ export function PurchaseFlowScreen() {
       setSupplierPickerOpen(false); setSupplierQuery(''); setLoadedSupplier(null);
       setSupplierAdd(false); setSupplierName(''); setSupplierPhone(''); setSupplierAddress('');
       setSupplierArea(''); setSupplierDistrict(''); setSupplierTerms(''); setSupplierNotes('');
-      setSupplierImage(null); setEditing(null); setNotesOpen(false); setPreviewItem(null); setError('');
-      draftCommand.current = uid(); completeCommand.current = uid(); supplierCommand.current = uid();
+      setSupplierImage(null); setEditing(null); setNotesOpen(false); setAttachments([]); setExistingAttachments([]); setPreviewItem(null); setError('');
+      draftCommand.current = uid(); completeCommand.current = uid(); supplierCommand.current = uid(); savedInput.current = '';
     };
   }, [id]));
 
@@ -328,6 +334,7 @@ export function PurchaseFlowScreen() {
       setError('Enter a valid payment no greater than the purchase total.'); return;
     }
     if (complete && numeric(paid) > 0 && !draft.accountId) { setError('Choose a money account.'); return; }
+    if (complete && numeric(paid) < total && !/^\d{4}-\d{2}-\d{2}$/.test(draft.dueDate || '')) { setError('Enter a due date as YYYY-MM-DD.'); return; }
     setBusy(true); setError('');
     try {
       let serverId = draft.serverId;
@@ -335,21 +342,33 @@ export function PurchaseFlowScreen() {
       if (serverId) {
         const server = (await api.purchase(session.token, business, serverId)).purchase;
         if (server.status === 'completed') {
+          await uploadPendingAttachments(session.token, business, 'purchase', serverId, attachments);
           await clearPurchaseDraft(business, draftKey).catch(() => {});
           router.replace(`/purchases/${serverId}` as Href);
           return;
         }
-        await api.updatePurchase(session.token, business, serverId, input, draftCommand.current);
+        if (savedInput.current !== JSON.stringify(input)) {
+          await api.updatePurchase(session.token, business, serverId, input, draftCommand.current);
+          savedInput.current = JSON.stringify(input);
+        }
       }
       else {
         const saved = await api.createPurchase(session.token, business, input, draftCommand.current);
         serverId = saved.purchase.id;
+        savedInput.current = JSON.stringify(input);
         change({ serverId });
         if (id) await savePurchaseDraft(business, draftKey, JSON.stringify({ ...draft, serverId }));
       }
+      await uploadPendingAttachments(session.token, business, 'purchase', serverId, attachments);
+      setAttachments([]);
+      if (attachments.length) {
+        const documents = await api.recordAttachments(session.token, business, 'purchase', serverId);
+        setExistingAttachments(documents.attachments);
+      }
       if (complete) {
         await api.completePurchase(session.token, business, serverId,
-          { paid, ...(numeric(paid) > 0 && { account_id: draft.accountId }) }, completeCommand.current);
+          { paid, ...(numeric(paid) > 0 && { account_id: draft.accountId }),
+            ...(numeric(paid) < total && { due_date: draft.dueDate }) }, completeCommand.current);
       }
       await clearPurchaseDraft(business, draftKey).catch(() => {});
       router.replace(`/purchases/${serverId}` as Href);
@@ -446,15 +465,19 @@ export function PurchaseFlowScreen() {
             onPress={() => change({ payment: value })}><Text style={styles.pillText}>{label}</Text></Pressable>)}</View>
       {draft.payment === 'partial' && <View><Text style={styles.fieldLabel}>Paid now ৳</Text><TextInput style={styles.input} value={draft.paid}
         onChangeText={value => change({ paid: value })} keyboardType="decimal-pad" placeholder="0.00" /></View>}
+      {draft.payment !== 'full' && <View><Text style={styles.fieldLabel}>Due date *</Text><TextInput style={styles.input} value={draft.dueDate || ''} onChangeText={dueDate => change({ dueDate })} keyboardType="numbers-and-punctuation" placeholder="YYYY-MM-DD" accessibilityLabel="Supplier due date" /></View>}
       {draft.payment !== 'due' && <><Text style={styles.fieldLabel}>Money account *</Text><View style={styles.optionsRow}>
         {accounts.filter(row => row.is_active).map(row => <Pressable key={row.id}
           style={[styles.pill, draft.accountId === row.id && styles.selected]} onPress={() => change({ accountId: row.id })}>
           <Text style={styles.pillText}>{row.name}</Text></Pressable>)}</View></>}
       <View style={styles.summaryRow}><Text style={styles.meta}>Supplier due after completion</Text><Text style={styles.lineTotal}>{money(Math.max(0, total - numeric(paid)))}</Text></View>
-      <Pressable onPress={() => setNotesOpen(current => !current)} style={styles.summaryRow}><Text style={styles.fieldLabel}>Notes and more details</Text>
+      <Pressable onPress={() => setNotesOpen(current => !current)} style={styles.summaryRow}><Text style={styles.fieldLabel}>Notes & documents</Text>
         <AppSymbol name={notesOpen ? 'up' : 'down'} size={20} color="#607770" /></Pressable>
-      {notesOpen && <TextInput multiline style={[styles.input, { minHeight: 85 }]} value={draft.notes} onChangeText={notes => change({ notes })}
-        placeholder="Optional purchase note" />}
+      {notesOpen && <View style={{ gap: 14 }}><TextInput multiline style={[styles.input, { minHeight: 85 }]} value={draft.notes} onChangeText={notes => change({ notes })}
+        placeholder="Optional purchase note" />
+        <RecordAttachments kind="purchase" pending={attachments} onChange={setAttachments} existing={existingAttachments}
+          token={session?.token} businessId={business} recordId={draft.serverId} showUploadButton={false} />
+      </View>}
       <Text style={styles.hint}>Stock and supplier balances change only after online completion.</Text>
     </ScrollView>}
     <View style={styles.footer}><View><Text style={styles.meta}>{selectedCount} products · {draft.lines.length} lines</Text>

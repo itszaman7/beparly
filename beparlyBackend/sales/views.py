@@ -1,4 +1,10 @@
+import uuid
+from datetime import timedelta
+from decimal import Decimal
+
 from django.db import IntegrityError
+from django.db.models import DecimalField, Sum, Value
+from django.db.models.functions import Coalesce
 from django.core.exceptions import ValidationError
 from django.http import JsonResponse
 from django.http import HttpResponse
@@ -8,7 +14,7 @@ from accounting.models import Contact, IncomeCategory, MoneyAccount, normalize_c
 from accounting.services import balance, create_financial_category
 from accounts.models import BusinessMember
 from accounts.views import body, current_member, current_session, error
-from stockkeeper.services import StockError
+from stockkeeper.services import StockError, business_today
 
 from .models import Sale
 from .services import SaleError, cancel_sale, collect_sale, create_sale, return_sale, serialize_sale
@@ -35,7 +41,14 @@ def sales(request, business_id):
     if problem:
         return problem
     if request.method == 'GET':
-        rows = Sale.objects.filter(business=member.business).select_related('customer', 'location').prefetch_related(
+        rows = Sale.objects.filter(business=member.business)
+        if request.GET.get('customer_id'):
+            try:
+                customer_id = uuid.UUID(request.GET['customer_id'])
+            except (ValueError, AttributeError):
+                return error('invalid_input', 'Choose a valid customer.')
+            rows = rows.filter(customer_id=customer_id)
+        rows = rows.select_related('customer', 'location').prefetch_related(
             'lines', 'payments__account', 'returns__lines', 'returns__refund_account').order_by('-created_at')[:100]
         return JsonResponse({'sales': [serialize_sale(row, include_lines=True) for row in rows]})
     try:
@@ -46,6 +59,34 @@ def sales(request, business_id):
         return error('invalid_input', str(exc))
     except IntegrityError:
         return error('conflict', 'This sale conflicts with a posted transaction. Retry with the original command ID.', 409)
+
+
+def sales_hub_summary(request, business_id):
+    if request.method != 'GET':
+        return error('method_not_allowed', 'Use GET.', 405)
+    member, session, problem = member_for(request, business_id)
+    if problem:
+        return problem
+    today = business_today(member.business)
+    start = today - timedelta(days=6)
+    amounts = {start + timedelta(days=day): {'amount': Decimal('0'), 'count': 0} for day in range(7)}
+    returned = Coalesce(Sum('returns__amount'), Value(Decimal('0.00')),
+                        output_field=DecimalField(max_digits=18, decimal_places=2))
+    rows = (Sale.objects.filter(business=member.business, status='completed')
+            .values('id', 'invoice_date', 'total', 'paid').annotate(returned=returned))
+    count, collected, due = 0, Decimal('0'), Decimal('0')
+    for sale in rows:
+        net = sale['total'] - sale['returned']
+        count += 1
+        collected += sale['paid']
+        due += net - sale['paid']
+        if sale['invoice_date'] in amounts:
+            amounts[sale['invoice_date']]['amount'] += net
+            amounts[sale['invoice_date']]['count'] += 1
+    return JsonResponse({'completed_sales': count, 'collected_against_sales': str(collected),
+                         'customer_due': str(due), 'last_seven_days': [
+                             {'date': day.isoformat(), 'amount': str(value['amount']), 'count': value['count']}
+                             for day, value in amounts.items()]})
 
 
 @csrf_exempt
@@ -186,7 +227,7 @@ def sale_returns(request, business_id, sale_id):
 def sale_document(request, business_id, sale_id, kind):
     if request.method != 'GET':
         return error('method_not_allowed', 'Use GET.', 405)
-    if kind not in ('invoice', 'receipt'):
+    if kind not in ('invoice', 'receipt', 'label'):
         return error('not_found', 'Document not found.', 404)
     member, session, problem = member_for(request, business_id)
     if problem:

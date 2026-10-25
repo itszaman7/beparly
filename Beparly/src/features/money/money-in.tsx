@@ -59,6 +59,7 @@ export function MoneyInScreen() {
   const [newAccountName, setNewAccountName] = useState('');
   const [newAccountKind, setNewAccountKind] = useState<MoneyAccount['kind']>('cash');
   const [newAccountReference, setNewAccountReference] = useState('');
+  const [newAccountOpening, setNewAccountOpening] = useState('');
   const [accountCommand, setAccountCommand] = useState(commandId());
   const [accountBusy, setAccountBusy] = useState(false);
   const [accountError, setAccountError] = useState('');
@@ -119,11 +120,12 @@ export function MoneyInScreen() {
     try {
       const result = await api.createMoneyAccount(token, businessId, {
         name: newAccountName.trim(), kind: newAccountKind, masked_reference: newAccountReference.trim(),
+        opening_balance: newAccountOpening.trim() || '0',
       }, accountCommand);
       setAccounts((current) => current.some((item) => item.id === result.account.id) ? current : [...current, result.account]);
       setAccountId(result.account.id);
       setCommand(commandId());
-      setNewAccountName(''); setNewAccountKind('cash'); setNewAccountReference('');
+      setNewAccountName(''); setNewAccountKind('cash'); setNewAccountReference(''); setNewAccountOpening('');
       setAccountCommand(commandId()); setAddingAccount(false); setPicker(null);
     } catch (cause) { setAccountError(cause instanceof Error ? cause.message : 'Could not add receiving account.'); }
     finally { setAccountBusy(false); }
@@ -217,7 +219,11 @@ export function MoneyInScreen() {
                   placeholder="Last four digits" aria-label="Account reference" height={52} backgroundColor={palette.surface}
                   borderColor={palette.border} color={palette.ink} style={{ borderRadius: 12, paddingHorizontal: 14 }} />
               </YStack>
-              <Text color={palette.secondary} fontSize={12}>The new account starts at zero.</Text>
+              <YStack gap={7}><Text color={palette.secondary} fontSize={12} fontWeight="700">Opening balance (optional)</Text>
+                <Input value={newAccountOpening} onChangeText={(value) => { setNewAccountOpening(value); setAccountCommand(commandId()); setAccountError(''); }}
+                  keyboardType="decimal-pad" placeholder="0.00" aria-label="Opening balance" height={52} backgroundColor={palette.surface}
+                  borderColor={palette.border} color={palette.ink} style={{ borderRadius: 12, paddingHorizontal: 14 }} />
+              </YStack>
               {accountError ? <Text accessibilityRole="alert" color="#A62925" fontSize={13}>{accountError}</Text> : null}
               <Button height={52} backgroundColor={palette.primaryDeep} disabled={accountBusy || !newAccountName.trim()} onPress={() => void addReceivingAccount()}>
                 <Text color="white" fontWeight="800">{accountBusy ? 'Saving…' : 'Save and select account'}</Text>

@@ -237,14 +237,20 @@ MONEY_RULES = {
 
 
 @transaction.atomic
-def create_money_account(business, name, kind, reference='', command_id=None):
+def create_money_account(business, name, kind, reference='', command_id=None, *, opening_balance='0', actor=None):
     Business.objects.select_for_update().get(pk=business.pk)
+    opening = amount(opening_balance, positive=False)
     if command_id:
         prior = MoneyAccount.objects.filter(business=business, create_command_id=command_id).first()
         if prior:
             if (prior.name, prior.kind, prior.masked_reference) != (name, kind, reference):
                 raise AccountingError('Retry this account command with its original details.')
+            posted = MoneyTransaction.objects.filter(account=prior, kind='opening_balance').first()
+            if (posted.amount if posted else Decimal('0')) != opening:
+                raise AccountingError('Retry this account command with its original opening balance.')
             return prior
+        if JournalEntry.objects.filter(business=business, command_id=command_id).exists():
+            raise AccountingError('Command ID has already been used.')
     if kind not in dict(MoneyAccount.KINDS):
         raise AccountingError('Choose a valid money account type.')
     if not name or len(name) > 120 or len(reference) > 40:
@@ -252,15 +258,20 @@ def create_money_account(business, name, kind, reference='', command_id=None):
     identifier = uuid4()
     ledger_account = LedgerAccount.objects.create(business=business, code=f'MONEY-{identifier.hex[:16]}',
         name=name, type='asset', system_managed=True)
-    return MoneyAccount.objects.create(id=identifier, business=business, ledger_account=ledger_account,
-                                       name=name, kind=kind, masked_reference=reference, create_command_id=command_id)
+    account = MoneyAccount.objects.create(id=identifier, business=business, ledger_account=ledger_account,
+                                          name=name, kind=kind, masked_reference=reference, create_command_id=command_id)
+    if opening:
+        money_operation(business, actor, command_id or uuid4(), 'opening_balance', opening, account,
+                        allow_opening=True)
+    return account
 
 
 @transaction.atomic
 def money_operation(business, actor, command_id, kind, value, account, *, destination=None,
-                    contact=None, note='', event_date=None, category=None, income_category=None, allow_opening=False):
+                    contact=None, note='', event_date=None, category=None, income_category=None,
+                    reference='', allow_opening=False):
     if kind == 'opening_balance' and not allow_opening:
-        raise AccountingError('Opening cash can only be set when creating a business.')
+        raise AccountingError('Opening balance can only be set while creating a business or money account.')
     Business.objects.select_for_update().get(pk=business.pk)
     prior = JournalEntry.objects.filter(business=business, command_id=command_id).first()
     if prior:
@@ -271,13 +282,18 @@ def money_operation(business, actor, command_id, kind, value, account, *, destin
                 previous.contact_id, previous.note) != (kind, amount(value), account.pk,
                 destination.pk if destination else None, contact.pk if contact else None, note):
             raise AccountingError('Retry this command with its original details.')
-        if kind == 'expense' and (not category or previous.expense.category_id != category.pk):
+        if kind == 'expense' and (not category or previous.expense.category_id != category.pk
+                                  or previous.expense.reference != reference):
             raise AccountingError('Retry this expense command with its original category.')
+        if event_date and previous.event_date != event_date:
+            raise AccountingError('Retry this command with its original date.')
         if kind == 'other_income' and (not income_category or previous.income_category_id != income_category.pk):
             raise AccountingError('Retry this income command with its original category.')
         return previous
     if account.business_id != business.pk or not account.is_active:
         raise AccountingError('Choose an active money account.')
+    if reference and (kind != 'expense' or len(reference) > 80):
+        raise AccountingError('Expense reference must be at most 80 characters.')
     value = amount(value)
     event_date = event_date or business_today(business)
     if event_date > business_today(business):
@@ -323,7 +339,7 @@ def money_operation(business, actor, command_id, kind, value, account, *, destin
         account=account, destination=destination, contact=contact, note=note,
         event_date=event_date, journal=entry, income_category=income_category)
     if kind == 'expense':
-        Expense.objects.create(business=business, category=category, money_transaction=txn)
+        Expense.objects.create(business=business, category=category, money_transaction=txn, reference=reference)
     return txn
 
 

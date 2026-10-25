@@ -18,7 +18,7 @@ export default function QuotationDetail() {
   const [accountId, setAccountId] = useState(''); const [customerId, setCustomerId] = useState(''); const [customerName, setCustomerName] = useState('');
   const [customerSearch, setCustomerSearch] = useState(''); const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
   const [customerNextPage, setCustomerNextPage] = useState<number | null>(null); const [customerLoading, setCustomerLoading] = useState(false);
-  const customerRequest = useRef(0); const [paid, setPaid] = useState('');
+  const customerRequest = useRef(0); const [paid, setPaid] = useState(''); const [dueDate, setDueDate] = useState('');
   const [prices, setPrices] = useState<string[]>([]); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   const checkoutCommand = useRef(uuid());
   useFocusEffect(useCallback(() => { if (!session || !businessId || !id) return; let active = true;
@@ -70,10 +70,12 @@ export default function QuotationDetail() {
     finally { setBusy(false); }
   }
   async function checkout() {
+    if (quote && Number(paid || 0) < Number(quote.total) && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) { setError('Enter a due date as YYYY-MM-DD.'); return; }
     if (!session || !businessId || !draft) return;
     setBusy(true); setError('');
     try { const result = await api.quotationCheckout(session.token, businessId, draft.id, {
       paid: paid || '0', ...(Number(paid) > 0 ? { account_id: accountId } : {}),
+      ...(quote && Number(paid || 0) < Number(quote.total) ? { due_date: dueDate } : {}),
       ...(customerId ? { customer_id: customerId } : {}),
       ...(session.account?.role === 'owner' && prices.some((value, index) => value !== quote?.lines?.[index]?.unit_price) ? { prices } : {}),
     }, checkoutCommand.current);
@@ -102,6 +104,7 @@ export default function QuotationDetail() {
         </Pressable>
         {session.account.role === 'owner' && quote.lines?.map((line, index) => <View key={line.id}><Text style={styles.label}>{line.product_name} price (owner)</Text><TextInput style={styles.input} keyboardType="decimal-pad" value={prices[index] ?? line.unit_price} onChangeText={value => setPrices(old => old.map((price, position) => position === index ? value : price))} /></View>)}
         <Text style={styles.label}>Amount received now (৳)</Text><TextInput style={styles.input} keyboardType="decimal-pad" value={paid} onChangeText={setPaid} placeholder={quote.total} />
+        {Number(paid || 0) < Number(quote.total) && <><Text style={styles.label}>Due date *</Text><TextInput style={styles.input} value={dueDate} onChangeText={setDueDate} placeholder="YYYY-MM-DD" keyboardType="numbers-and-punctuation" accessibilityLabel="Customer due date" /></>}
         {Number(paid) > 0 && <View style={styles.wrap}>{accounts.map(account => <Button key={account.id} label={`${account.name}${accountId === account.id ? ' ✓' : ''}`} onPress={() => setAccountId(account.id)} />)}</View>}
         <Button label="Complete sale" onPress={() => void checkout()} />
       </View>}

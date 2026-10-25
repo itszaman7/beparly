@@ -6,11 +6,13 @@ The UI records money, contacts and expenses. Only `accounting.services.post` cre
 
 `setup_business` provisions the hidden chart and a zero-balance Cash in Shop account idempotently. User-created bank and wallet accounts each map to a dedicated asset ledger account. Customer and supplier statements use contact-tagged journal lines against shared receivable, payable and advance control accounts. A contact with both roles keeps the two positions separate.
 
-An optional opening cash amount is accepted only in the business-creation request and posted atomically to Cash in Shop against Opening Equity. Later money accounts start at zero; existing money reaches them through a recorded transfer or another classified money event. The public Money transaction endpoint rejects new opening-balance commands. Existing opening journals remain in the audit history.
+An optional opening cash amount is accepted in the business-creation request. A newly created money account may also receive an optional opening balance, posted atomically on the business day against Opening Equity under its account-creation command ID. An omitted balance starts at zero. Later changes to an existing account use recorded transfers or classified money events. The public Money transaction endpoint rejects new opening-balance commands. Existing opening journals remain in the audit history.
 
 Ledger accounts carry a unique, stable business-scoped `code` and a separate `type` (asset, liability, equity, income, expense). The code drives posting rules; the type drives classification. Codes are currently mnemonic rather than display numbers. A future numbered chart can add a separate per-business number without changing posted journal references or these machine codes. Bank and wallet accounts remain assets, so their eventual numbers belong in the asset range.
 
 Money input uses two decimal places. Inventory-derived postings retain up to seven places. Negative money-account balances are allowed and displayed. Posting dates use the current business date; entered event dates remain on source records. The backend never treats a receipt as revenue without a selected source reason.
+
+Expenses and purchases can have up to ten append-only supporting documents each (JPG, PNG, WebP or PDF, maximum 10 MB per file). Uploads are separate idempotent commands and do not change posted amounts or stock. File downloads require record-level business authorization. In development, files live under `private_attachments` outside the public media route; include this directory in backups. Production requires `ATTACHMENT_STORAGE_BUCKET`, a separate private bucket without a CDN or public access. Include it in backup and restoration procedures. The API never returns a direct object URL.
 
 ## Existing inventory rollout
 

@@ -6,8 +6,10 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.utils.dateparse import parse_date
 
 from accounting.models import Contact, JournalLine, MoneyAccount
 from accounting.services import AccountingError, balance, command_uuid, contact_position
@@ -76,10 +78,10 @@ def suppliers(request, business_id):
         return problem
     try:
         if request.method == 'GET':
-            rows = Contact.objects.filter(business=member.business, is_supplier=True, is_active=True).order_by('name', 'id')
-            search = request.GET.get('search', '').strip()
+            rows = Contact.objects.filter(business=member.business, is_supplier=True, is_active=True).select_related('payable_account').order_by('name', 'id')
+            search = request.GET.get('search', '').strip()[:100]
             if search:
-                rows = rows.filter(name__icontains=search) if not search.isdigit() else rows.filter(phone__icontains=search)
+                rows = rows.filter(Q(name__icontains=search) | Q(phone__icontains=search))
             items, next_page = page(rows, page_number(request))
             return JsonResponse({'suppliers': [supplier_data(item) for item in items], 'next_page': next_page})
         supplier = create_supplier(member.business, session.user, body(request), command_uuid(request.headers.get('X-Command-ID')))
@@ -97,7 +99,7 @@ def supplier_detail(request, business_id, supplier_id):
     member, session, problem = access(request, business_id)
     if problem:
         return problem
-    supplier = Contact.objects.filter(business=member.business, pk=supplier_id, is_supplier=True).first()
+    supplier = Contact.objects.select_related('payable_account').filter(business=member.business, pk=supplier_id, is_supplier=True).first()
     if not supplier:
         return error('not_found', 'Supplier not found.', 404)
     try:
@@ -258,7 +260,8 @@ def purchase_complete(request, business_id, purchase_id):
         data = body(request)
         account = MoneyAccount.objects.filter(business=member.business, pk=data.get('account_id'), is_active=True).first() if data.get('account_id') else None
         purchase = complete_purchase(purchase, session.user,
-            command_uuid(request.headers.get('X-Command-ID')), data.get('paid', '0'), account)
+            command_uuid(request.headers.get('X-Command-ID')), data.get('paid', '0'), account,
+            parse_date(data.get('due_date')) if data.get('due_date') else None)
         return JsonResponse({'purchase': purchase_data(purchase, True)})
     except (ValueError, StockError, AccountingError, ValidationError) as exc:
         return invalid(exc)

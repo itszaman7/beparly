@@ -10,6 +10,7 @@ export default function More() {
   const { session } = useAuth();
   const items = [
     ['Business settings', '/business-settings', 'edit'] as const,
+    ['Print settings', '/print-settings', 'reports'] as const,
     ...(session?.account?.role === 'owner' ? [['Income categories', '/money/income-categories', 'category'] as const] : []),
     ['Account & team', '/explore', 'account'] as const,
   ];

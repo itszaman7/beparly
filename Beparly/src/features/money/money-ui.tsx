@@ -132,6 +132,7 @@ export function MoneyHome() {
       <Text color={ink} fontSize={18} fontWeight="700" marginTop={8}>Recent transactions</Text>
       <XStack flexWrap="wrap" gap={7}>{(['all', 'in', 'out', 'transfer', 'expense'] as const).map((value) => <Choice key={value} label={value === 'all' ? 'All' : value === 'expense' ? 'Expenses' : value === 'transfer' ? 'Transfers' : value === 'in' ? 'Money In' : 'Money Out'} selected={historyFilter === value} onPress={() => setHistoryFilter(value)} />)}</XStack>
       {visibleTransactions.length ? visibleTransactions.slice(0, 5).map((item) => <Card key={item.id}><XStack justifyContent="space-between"><YStack flex={1}><Text color={ink} fontWeight="700">{item.kind.replaceAll('_', ' ')}</Text><Text color={muted} fontSize={12}>{item.event_date}{item.reversed ? ' · Reversed' : ''}</Text></YStack><Text color={ink} fontWeight="700">{bdt(item.amount)}</Text></XStack>
+        {item.kind === 'expense' && <Button backgroundColor={palette.primarySoft} onPress={() => router.push(`/money/expense/${item.id}` as Href)}><Text color={green}>View expense and documents</Text></Button>}
         {!item.reversed && !item.kind.startsWith('asset_') && !item.kind.endsWith('_reversal') && <Button backgroundColor="#FFF5E1" onPress={() => { setReverseId(item.id); setReverseReason(''); setReverseCommand(id()); }}><Text color="#8B5E15">Correct this transaction</Text></Button>}
       </Card>) : <Card><Text color={muted}>No money movements yet.</Text></Card>}
       <Modal visible={Boolean(reverseId)} transparent animationType="fade" onRequestClose={() => setReverseId('')}>
@@ -153,22 +154,24 @@ export function MoneyAccountForm() {
   const { token, businessId } = useBusiness();
   const [name, setName] = useState(''); const [kind, setKind] = useState<MoneyAccount['kind']>('bank');
   const [reference, setReference] = useState('');
+  const [openingBalance, setOpeningBalance] = useState('');
   const [showAccountInfo, setShowAccountInfo] = useState(false);
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
-  const [createCommand] = useState(id());
+  const [createCommand, setCreateCommand] = useState(id());
   async function save() {
     if (!token || !businessId || busy) return;
     setBusy(true); setError('');
     try {
-      await api.createMoneyAccount(token, businessId, { name: name.trim(), kind, masked_reference: reference.trim() }, createCommand);
+      await api.createMoneyAccount(token, businessId, { name: name.trim(), kind, masked_reference: reference.trim(), opening_balance: openingBalance.trim() || '0' }, createCommand);
       router.replace('/money' as Href);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not save account.'); }
     finally { setBusy(false); }
   }
   return <Page title="Add money account"><XStack alignItems="center" gap={6}><Text color={ink} fontSize={13} fontWeight="700">Account setup</Text><Pressable accessibilityRole="button" accessibilityLabel="Account setup information" onPress={() => setShowAccountInfo((open) => !open)}><AppSymbol name="info" size={18} color={green} /></Pressable></XStack>{showAccountInfo && <Card><Text color={muted}>Cash, bank and wallets each have their own balance. Move existing money with Transfer.</Text></Card>}
-      <Field label="Account name" value={name} onChangeText={setName} placeholder="Enter a name for this account" />
-      <Text color={ink} fontSize={13} fontWeight="700">Account type</Text><XStack flexWrap="wrap" gap={8}>{(['cash', 'bank', 'wallet', 'other'] as const).map((option) => <Choice key={option} label={option === 'wallet' ? 'Mobile wallet' : option === 'cash' ? 'Cash' : option === 'bank' ? 'Bank' : 'Other'} selected={kind === option} onPress={() => setKind(option)} />)}</XStack>
-      <Field label="Masked reference (optional)" value={reference} onChangeText={setReference} placeholder="Last four digits" />
+      <Field label="Account name" value={name} onChangeText={(value) => { setName(value); setCreateCommand(id()); }} placeholder="Enter a name for this account" />
+      <Text color={ink} fontSize={13} fontWeight="700">Account type</Text><XStack flexWrap="wrap" gap={8}>{(['cash', 'bank', 'wallet', 'other'] as const).map((option) => <Choice key={option} label={option === 'wallet' ? 'Mobile wallet' : option === 'cash' ? 'Cash' : option === 'bank' ? 'Bank' : 'Other'} selected={kind === option} onPress={() => { setKind(option); setCreateCommand(id()); }} />)}</XStack>
+      <Field label="Masked reference (optional)" value={reference} onChangeText={(value) => { setReference(value); setCreateCommand(id()); }} placeholder="Last four digits" />
+      <Field label="Opening balance (optional)" value={openingBalance} onChangeText={(value) => { setOpeningBalance(value); setCreateCommand(id()); }} placeholder="0.00" numeric />
     <ErrorText message={error} /><Button backgroundColor={green} height={52} disabled={busy} onPress={() => void save()}><Text color="white" fontWeight="700">{busy ? 'Saving…' : 'Save account'}</Text></Button>
   </Page>;
 }
@@ -281,44 +284,5 @@ export function MoneyForm() {
     <Field label="Note (optional)" value={note} onChangeText={(value) => changed(() => setNote(value))} />
     {mode === 'transfer' && reviewing && <Card><Text color={ink} fontWeight="700">Review transfer</Text><Text color={ink}>{accounts.find((item) => item.id === accountId)?.name} → {accounts.find((item) => item.id === destinationId)?.name}</Text><Text color={ink}>{bdt(amount || '0')}</Text></Card>}
     <ErrorText message={error} /><Button backgroundColor={green} height={54} disabled={busy || kind === 'other_income' && (!selectedMoneyAccount || !selectedIncomeAccount)} onPress={() => mode === 'transfer' && !reviewing ? setReviewing(true) : void submit()}><Text color="white" fontWeight="700">{busy ? 'Saving…' : mode === 'transfer' && !reviewing ? 'Review transfer' : 'Confirm'}</Text></Button>
-  </Page>;
-}
-
-export function ContactsScreen() {
-  const { token, businessId } = useBusiness(); const [items, setItems] = useState<Contact[]>([]);
-  const [name, setName] = useState(''); const [phone, setPhone] = useState('');
-  const [customer, setCustomer] = useState(true); const [supplier, setSupplier] = useState(false);
-  const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
-  const load = useCallback(async () => { if (token && businessId) try { setItems((await api.contacts(token, businessId)).contacts); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load contacts.'); } }, [token, businessId]);
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
-  async function save() { if (!token || !businessId) return; setBusy(true); setError('');
-    try { await api.createContact(token, businessId, { name, phone, is_customer: customer, is_supplier: supplier }); setName(''); setPhone(''); await load(); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not add contact.'); } finally { setBusy(false); } }
-  return <Page title="Contacts"><Card><Text color={ink} fontWeight="700">Add customer or supplier</Text><Field label="Name" value={name} onChangeText={setName} /><Field label="Phone (optional)" value={phone} onChangeText={setPhone} />
-    <XStack gap={8}><Choice label="Customer" selected={customer} onPress={() => setCustomer(!customer)} /><Choice label="Supplier" selected={supplier} onPress={() => setSupplier(!supplier)} /></XStack>
-    <ErrorText message={error} /><Button backgroundColor={green} disabled={busy} onPress={() => void save()}><Text color="white">{busy ? 'Saving…' : 'Add contact'}</Text></Button></Card>
-    {items.map((item) => <Card key={item.id}><Text color={ink} fontWeight="700">{item.name}</Text><Text color={muted} fontSize={12}>{item.is_customer ? 'Customer' : ''}{item.is_customer && item.is_supplier ? ' · ' : ''}{item.is_supplier ? 'Supplier' : ''}</Text>
-      {item.is_customer && <Text color={ink}>Customer advance {bdt(item.customer_advance)}</Text>}{item.is_supplier && <Text color={ink}>Supplier advance {bdt(item.supplier_advance)}</Text>}
-      <Text color={muted} fontSize={12}>To collect {bdt(item.to_collect)} · To pay {bdt(item.to_pay)}</Text>
-      <Button backgroundColor="#E5F8F4" onPress={() => router.push(`/contacts/${item.id}` as Href)}><Text color={green}>View statement</Text></Button></Card>)}
-  </Page>;
-}
-
-export function ContactDetailsScreen() {
-  const { id: contactId } = useLocalSearchParams<{ id: string }>();
-  const { token, businessId } = useBusiness();
-  const [contact, setContact] = useState<Contact | null>(null);
-  const [statement, setStatement] = useState<{ date: string; description: string; kind: string; debit: string; credit: string }[]>([]);
-  const [error, setError] = useState('');
-  useFocusEffect(useCallback(() => {
-    if (!token || !businessId || !contactId) return;
-    void api.contact(token, businessId, contactId).then((result) => { setContact(result.contact); setStatement(result.statement); setError(''); })
-      .catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load statement.'));
-  }, [token, businessId, contactId]));
-  return <Page title={contact?.name ?? 'Contact statement'}><ErrorText message={error} />
-    {contact && <Card><Text color={ink}>To collect {bdt(contact.to_collect)}</Text><Text color={ink}>To pay {bdt(contact.to_pay)}</Text>
-      <Text color={ink}>Customer advance {bdt(contact.customer_advance)}</Text><Text color={ink}>Supplier advance {bdt(contact.supplier_advance)}</Text></Card>}
-    <Text color={ink} fontWeight="700" fontSize={18}>Transactions</Text>
-    {statement.length ? statement.map((row, index) => <Card key={`${row.date}-${index}`}><Text color={ink} fontWeight="700">{row.description}</Text><Text color={muted} fontSize={12}>{row.date}</Text><Text color={ink}>{bdt(Number(row.debit) > 0 ? row.debit : row.credit)}</Text></Card>) : <Card><Text color={muted}>No transactions yet.</Text></Card>}
   </Page>;
 }

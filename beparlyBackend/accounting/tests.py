@@ -1,20 +1,27 @@
 import json
+import tempfile
 import uuid
+from io import BytesIO
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 from decimal import Decimal
 from unittest import skipUnless
+from unittest.mock import patch
 
 from django.db import close_old_connections, connection
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
+from django.core.files.uploadedfile import SimpleUploadedFile
+from PIL import Image
 
 from accounts.models import Business, BusinessMember, User
 from audit.models import AuditEvent
 from products.models import Product, StockBatch
 from stockkeeper.models import CostLayer, StockBalance, StockLocation, StockMovement
 from stockkeeper.services import post_adjustment, post_transfer, post_waste, receive
+from stockkeeper.services import business_today
 
-from .models import BusinessAsset, Contact, ExpenseCategory, IncomeCategory, InventoryAccountingCutoff, JournalEntry, JournalLine, MoneyAccount, MoneyTransaction
+from .models import BusinessAsset, Contact, Expense, ExpenseCategory, IncomeCategory, InventoryAccountingCutoff, JournalEntry, JournalLine, MoneyAccount, MoneyTransaction, RecordAttachment
 from .services import (AccountingError, balance, contact_position, depreciate, dr,
                        create_money_account, ensure_inventory_cutoff, ledger, money_operation, post, purchase_asset,
                        create_financial_category, reverse, sell_asset, setup_business)
@@ -29,6 +36,70 @@ class AccountingTests(TestCase):
         setup_business(self.business)
         self.cash = MoneyAccount.objects.get(business=self.business, is_default=True)
         self.assertEqual(ExpenseCategory.objects.filter(business=self.business).count(), 0)
+
+    def test_contact_exposes_its_own_customer_and_supplier_ledgers(self):
+        from accounts.models import AuthSession
+        from purchases.services import supplier_data
+        from .services import ensure_party_accounts
+
+        contact = Contact.objects.create(business=self.business, name='Shared party',
+                                         is_customer=True, is_supplier=True, created_by=self.owner)
+        contact = ensure_party_accounts(contact)
+        token = AuthSession.issue(self.owner)
+        headers = {'HTTP_AUTHORIZATION': f'Bearer {token}'}
+        listing = self.client.get(f'/api/v1/businesses/{self.business.pk}/contacts/', **headers)
+        row = next(item for item in listing.json()['contacts'] if item['id'] == str(contact.pk))
+        self.assertEqual(row['customer_ledger_id'], contact.receivable_account.code)
+        self.assertEqual(row['supplier_ledger_id'], contact.payable_account.code)
+        self.assertEqual(supplier_data(contact)['supplier_ledger_id'], contact.payable_account.code)
+        ledger = self.client.get(f'/api/v1/businesses/{self.business.pk}/money/accounts/{row["customer_ledger_id"]}/ledger/', **headers)
+        self.assertEqual(ledger.status_code, 200, ledger.content)
+        self.assertEqual(ledger.json()['account']['id'], row['customer_ledger_id'])
+
+    def test_party_ledger_uses_full_balance_when_recent_entries_are_limited(self):
+        from accounts.models import AuthSession
+        from .services import cr, ensure_party_accounts
+
+        contact = ensure_party_accounts(Contact.objects.create(
+            business=self.business, name='Busy customer', is_customer=True, created_by=self.owner))
+        opening = ledger(self.business, 'OPENING')
+        for index in range(501):
+            post(self.business, 'test_sale', str(index), f'Invoice {index}',
+                 [dr(contact.receivable_account, 1, contact), cr(opening, 1)], actor=self.owner)
+        token = AuthSession.issue(self.owner)
+        response = self.client.get(
+            f'/api/v1/businesses/{self.business.pk}/money/accounts/{contact.receivable_account.code}/ledger/',
+            HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(response.status_code, 200, response.content)
+        result = response.json()
+        self.assertTrue(result['truncated'])
+        self.assertEqual(result['closing_balance'], '501')
+        self.assertEqual(result['total_in'], '501')
+        self.assertEqual(len(result['transactions']), 500)
+        self.assertEqual(result['transactions'][0]['note'], 'Invoice 1')
+        self.assertEqual(result['transactions'][-1]['note'], 'Invoice 500')
+
+    def test_contacts_search_roles_and_pagination(self):
+        from accounts.models import AuthSession
+
+        Contact.objects.bulk_create([
+            Contact(business=self.business, name=f'Customer {index:03}', is_customer=True)
+            for index in range(101)
+        ])
+        Contact.objects.create(business=self.business, name='Only supplier', is_supplier=True)
+        token = AuthSession.issue(self.owner)
+        path = f'/api/v1/businesses/{self.business.pk}/contacts/'
+        headers = {'HTTP_AUTHORIZATION': f'Bearer {token}'}
+        first = self.client.get(path, **headers).json()
+        self.assertEqual(len(first['contacts']), 100)
+        self.assertEqual(first['next_page'], 2)
+        second = self.client.get(path + '?page=2', **headers).json()
+        self.assertEqual(len(second['contacts']), 2)
+        self.assertIsNone(second['next_page'])
+        supplier = self.client.get(path + '?role=supplier', **headers).json()
+        self.assertEqual([item['name'] for item in supplier['contacts']], ['Only supplier'])
+        searched = self.client.get(path + '?search=Customer%20100&role=customer', **headers).json()
+        self.assertEqual([item['name'] for item in searched['contacts']], ['Customer 100'])
 
     def test_setup_and_balanced_idempotent_posting(self):
         setup_business(self.business)
@@ -101,6 +172,130 @@ class AccountingTests(TestCase):
         self.assertEqual(balance(category.ledger_account), 40)
         with self.assertRaises(AccountingError):
             money_operation(self.business, self.owner, uuid.uuid4(), 'opening_balance', 20, self.cash, allow_opening=True)
+
+    def test_new_account_opening_balance_is_atomic_and_idempotent(self):
+        command = uuid.uuid4()
+        account = create_money_account(self.business, 'Wallet', 'wallet', command_id=command,
+                                       opening_balance='125.50', actor=self.owner)
+        self.assertEqual(balance(account.ledger_account), Decimal('125.50'))
+        self.assertEqual(balance(ledger(self.business, 'OPENING')), Decimal('-125.50'))
+        opening = MoneyTransaction.objects.get(account=account, kind='opening_balance')
+        self.assertEqual(opening.journal.command_id, command)
+        self.assertEqual(opening.journal.posting_date, opening.event_date)
+        self.assertEqual(create_money_account(self.business, 'Wallet', 'wallet', command_id=command,
+            opening_balance='125.50', actor=self.owner).pk, account.pk)
+        self.assertEqual(MoneyTransaction.objects.filter(account=account).count(), 1)
+        with self.assertRaises(AccountingError):
+            create_money_account(self.business, 'Wallet', 'wallet', command_id=command, opening_balance='10')
+        zero = create_money_account(self.business, 'Zero', 'bank', command_id=uuid.uuid4())
+        self.assertEqual(balance(zero.ledger_account), 0)
+        self.assertFalse(MoneyTransaction.objects.filter(account=zero).exists())
+        before = MoneyAccount.objects.count()
+        with self.assertRaises(AccountingError):
+            create_money_account(self.business, 'Invalid', 'bank', command_id=uuid.uuid4(), opening_balance='-1')
+        self.assertEqual(MoneyAccount.objects.count(), before)
+        failed_command = uuid.uuid4()
+        with patch('accounting.services.post', side_effect=AccountingError('Posting failed')):
+            with self.assertRaises(AccountingError):
+                create_money_account(self.business, 'Retry', 'wallet', command_id=failed_command,
+                                     opening_balance='5', actor=self.owner)
+        self.assertFalse(MoneyAccount.objects.filter(create_command_id=failed_command).exists())
+        self.assertFalse(JournalEntry.objects.filter(command_id=failed_command).exists())
+        self.assertEqual(create_money_account(self.business, 'Retry', 'wallet', command_id=failed_command,
+            opening_balance='5', actor=self.owner).name, 'Retry')
+
+    def test_expense_reference_and_backdated_idempotency(self):
+        category = create_financial_category(self.business, self.owner, 'Rent', 'expense')
+        command = uuid.uuid4()
+        event_date = date(2025, 1, 3)
+        transaction = money_operation(self.business, self.owner, command, 'expense', '42.50', self.cash,
+            category=category, event_date=event_date, reference='V-103', note='January rent')
+        self.assertEqual(Expense.objects.get(money_transaction=transaction).reference, 'V-103')
+        self.assertEqual(transaction.note, 'January rent')
+        self.assertEqual(transaction.journal.event_date, event_date)
+        self.assertEqual(transaction.journal.posting_date, business_today(self.business))
+        self.assertEqual(balance(category.ledger_account), Decimal('42.50'))
+        self.assertEqual(balance(self.cash.ledger_account), Decimal('-42.50'))
+        self.assertEqual(money_operation(self.business, self.owner, command, 'expense', '42.50', self.cash,
+            category=category, event_date=event_date, reference='V-103', note='January rent').pk, transaction.pk)
+        for override in ({'reference': 'Changed'}, {'event_date': date(2025, 1, 4)}):
+            with self.assertRaises(AccountingError):
+                money_operation(self.business, self.owner, command, 'expense', '42.50', self.cash,
+                    category=category, event_date=override.get('event_date', event_date),
+                    reference=override.get('reference', 'V-103'), note='January rent')
+        with self.assertRaises(AccountingError):
+            money_operation(self.business, self.owner, uuid.uuid4(), 'expense', '0', self.cash, category=category)
+        other = Business.objects.create(name='Other expense business')
+        setup_business(other)
+        with self.assertRaises(AccountingError):
+            money_operation(self.business, self.owner, uuid.uuid4(), 'expense', '1', self.cash,
+                category=create_financial_category(other, None, 'Other rent', 'expense'))
+
+    def test_expense_and_purchase_attachments_are_private_and_retry_safe(self):
+        from accounts.models import AuthSession
+        from purchases.models import Purchase
+
+        category = create_financial_category(self.business, self.owner, 'Rent', 'expense')
+        expense = money_operation(self.business, self.owner, uuid.uuid4(), 'expense', '10', self.cash,
+                                  category=category)
+        supplier = Contact.objects.create(business=self.business, name='Supplier', is_supplier=True)
+        location = StockLocation.objects.get(business=self.business, is_default=True)
+        purchase = Purchase.objects.create(business=self.business, supplier=supplier, location=location,
+            actor=self.owner, create_command_id=uuid.uuid4())
+        headers = {'HTTP_AUTHORIZATION': f'Bearer {AuthSession.issue(self.owner)}'}
+        expense_path = f'/api/v1/businesses/{self.business.pk}/attachments/expense/{expense.pk}/'
+        purchase_path = f'/api/v1/businesses/{self.business.pk}/attachments/purchase/{purchase.pk}/'
+        image_bytes = BytesIO()
+        Image.new('RGB', (2, 2), 'red').save(image_bytes, format='PNG')
+        with tempfile.TemporaryDirectory() as private_root, override_settings(DEBUG=True, ATTACHMENT_ROOT=private_root):
+            command = str(uuid.uuid4())
+            def image_file():
+                return SimpleUploadedFile('receipt.png', image_bytes.getvalue(), content_type='image/png')
+            first = self.client.post(expense_path, {'file': image_file()},
+                HTTP_X_COMMAND_ID=command, **headers)
+            self.assertEqual(first.status_code, 201, first.content)
+            attachment_id = first.json()['attachment']['id']
+            self.assertTrue((Path(private_root) / RecordAttachment.objects.get(pk=attachment_id).file_key).is_file())
+            retry = self.client.post(expense_path, {'file': image_file()},
+                HTTP_X_COMMAND_ID=command, **headers)
+            self.assertEqual(retry.status_code, 200, retry.content)
+            self.assertEqual(retry.json()['attachment']['id'], attachment_id)
+            self.assertEqual(RecordAttachment.objects.count(), 1)
+            mismatch = self.client.post(purchase_path, {'file': image_file()},
+                HTTP_X_COMMAND_ID=command, **headers)
+            self.assertEqual(mismatch.status_code, 400)
+            bad = self.client.post(expense_path, {'file': SimpleUploadedFile('fake.pdf', b'not a PDF')},
+                HTTP_X_COMMAND_ID=str(uuid.uuid4()), **headers)
+            self.assertEqual(bad.status_code, 400)
+            too_large = self.client.post(expense_path,
+                {'file': SimpleUploadedFile('huge.pdf', b'%PDF-' + b'X' * (10 * 1024 * 1024) + b'%%EOF')},
+                HTTP_X_COMMAND_ID=str(uuid.uuid4()), **headers)
+            self.assertEqual(too_large.status_code, 400)
+            pdf = b'%PDF-1.4\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n'
+            purchase_response = self.client.post(purchase_path,
+                {'file': SimpleUploadedFile('bill.pdf', pdf, content_type='application/pdf')},
+                HTTP_X_COMMAND_ID=str(uuid.uuid4()), **headers)
+            self.assertEqual(purchase_response.status_code, 201, purchase_response.content)
+            file_response = self.client.get(expense_path + attachment_id + '/', **headers)
+            self.assertEqual(file_response.status_code, 200)
+            self.assertEqual(b''.join(file_response.streaming_content), image_bytes.getvalue())
+            self.assertEqual(file_response['Cache-Control'], 'private, no-store')
+            detail = self.client.get(f'/api/v1/businesses/{self.business.pk}/money/expenses/{expense.pk}/', **headers)
+            self.assertEqual(detail.status_code, 200)
+            self.assertEqual(detail.json()['transaction']['category_name'], 'Rent')
+            other = Business.objects.create(name='Other documents')
+            setup_business(other)
+            self.assertEqual(self.client.get(f'/api/v1/businesses/{other.pk}/attachments/expense/{expense.pk}/',
+                **headers).status_code, 404)
+            employee = User.objects.create_user(phone='01712345679', password='StaffPass#83')
+            BusinessMember.objects.create(user=employee, business=self.business, role=BusinessMember.EMPLOYEE)
+            staff = {'HTTP_AUTHORIZATION': f'Bearer {AuthSession.issue(employee)}'}
+            self.assertEqual(self.client.get(expense_path, **staff).status_code, 403)
+            self.assertEqual(self.client.get(purchase_path, **staff).status_code, 403)
+            member = BusinessMember.objects.get(user=employee, business=self.business)
+            member.can_manage_purchases = True
+            member.save(update_fields=['can_manage_purchases'])
+            self.assertEqual(self.client.get(purchase_path, **staff).status_code, 200)
 
     def test_asset_depreciation_and_sale(self):
         asset = purchase_asset(self.business, self.owner, uuid.uuid4(), 'Table', 1200, 0, 12,
@@ -223,6 +418,50 @@ class AccountingTests(TestCase):
         other = Business.objects.create(name='Other')
         denied = self.client.get(f'/api/v1/businesses/{other.pk}/money/accounts/', HTTP_AUTHORIZATION=f'Bearer {token}')
         self.assertEqual(denied.status_code, 404)
+
+    def test_expense_api_reference_account_opening_and_owner_scope(self):
+        from accounts.models import AuthSession
+        token = AuthSession.issue(self.owner)
+        headers = {'HTTP_AUTHORIZATION': f'Bearer {token}'}
+        account_path = f'/api/v1/businesses/{self.business.pk}/money/accounts/'
+        account_command = str(uuid.uuid4())
+        created = self.client.post(account_path, json.dumps({'name': 'bKash', 'kind': 'wallet',
+            'opening_balance': '75.25'}), content_type='application/json', HTTP_X_COMMAND_ID=account_command, **headers)
+        self.assertEqual(created.status_code, 201, created.content)
+        self.assertEqual(Decimal(created.json()['account']['balance']), Decimal('75.25'))
+        repeat = self.client.post(account_path, json.dumps({'name': 'bKash', 'kind': 'wallet',
+            'opening_balance': '75.25'}), content_type='application/json', HTTP_X_COMMAND_ID=account_command, **headers)
+        self.assertEqual(repeat.json()['account']['id'], created.json()['account']['id'])
+        category_path = f'/api/v1/businesses/{self.business.pk}/money/expense-categories/'
+        category_response = self.client.post(category_path, json.dumps({'name': 'Transport'}),
+            content_type='application/json', **headers)
+        self.assertEqual(category_response.status_code, 201, category_response.content)
+        category = ExpenseCategory.objects.get(pk=category_response.json()['category']['id'])
+        self.assertEqual(category.ledger_account.type, 'expense')
+        command = str(uuid.uuid4())
+        path = f'/api/v1/businesses/{self.business.pk}/money/transactions/'
+        payload = {'kind': 'expense', 'amount': '10.50', 'account_id': created.json()['account']['id'],
+            'category_id': category.pk, 'reference': 'INV-7', 'note': 'Rickshaw', 'event_date': '2025-01-03'}
+        response = self.client.post(path, json.dumps(payload), content_type='application/json',
+            HTTP_X_COMMAND_ID=command, **headers)
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()['transaction']['reference'], 'INV-7')
+        self.assertEqual(response.json()['transaction']['note'], 'Rickshaw')
+        repeated = self.client.post(path, json.dumps(payload), content_type='application/json',
+            HTTP_X_COMMAND_ID=command, **headers)
+        self.assertEqual(repeated.json()['transaction']['id'], response.json()['transaction']['id'])
+        changed = self.client.post(path, json.dumps({**payload, 'reference': 'INV-8'}),
+            content_type='application/json', HTTP_X_COMMAND_ID=command, **headers)
+        self.assertEqual(changed.status_code, 400)
+        other = Business.objects.create(name='Other business')
+        setup_business(other)
+        forbidden = self.client.post(f'/api/v1/businesses/{other.pk}/money/transactions/', json.dumps(payload),
+            content_type='application/json', HTTP_X_COMMAND_ID=str(uuid.uuid4()), **headers)
+        self.assertEqual(forbidden.status_code, 404)
+        staff = User.objects.create_user(phone='01712345679', password='StaffPass#83')
+        BusinessMember.objects.create(user=staff, business=self.business, role=BusinessMember.EMPLOYEE)
+        staff_headers = {'HTTP_AUTHORIZATION': f'Bearer {AuthSession.issue(staff)}'}
+        self.assertEqual(self.client.get(account_path, **staff_headers).status_code, 403)
 
     def test_historical_inventory_cutoff_keeps_rows_and_cost(self):
         product = Product.objects.create(business=self.business, name='Soap', sku='SOAP-CUTOFF')
