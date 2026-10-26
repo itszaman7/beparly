@@ -1,2 +1,3 @@
 import { Stack } from 'expo-router';
-export default function ProductLayout() { return <Stack screenOptions={{ headerShown: false }} />; }
+import { blurWebFocus } from '@/utils/web-focus';
+export default function ProductLayout() { return <Stack screenOptions={{ headerShown: false }} screenListeners={{ transitionStart: blurWebFocus, blur: blurWebFocus }} />; }

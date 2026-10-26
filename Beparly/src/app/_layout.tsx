@@ -8,6 +8,7 @@ import { Toast } from 'tamagui/toast';
 import { AppText } from '@/components/app-text';
 import { AuthProvider, useAuth } from '@/features/auth/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { blurWebFocus } from '@/utils/web-focus';
 import { tamaguiConfig } from '../../tamagui.config';
 
 export function SuspenseFallback() {
@@ -48,7 +49,7 @@ function Navigation() {
       <Toast position="top-center" duration={4000}>
         <Toast.Viewport offset={64}><Toast.List /></Toast.Viewport>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <Stack screenOptions={{ headerShown: false }}>
+          <Stack screenOptions={{ headerShown: false }} screenListeners={{ transitionStart: blurWebFocus, blur: blurWebFocus }}>
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="businesses/new" />
             <Stack.Screen name="stock" />

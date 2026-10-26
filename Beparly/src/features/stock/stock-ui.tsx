@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol, type symbols } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { Entrance, PressScale } from '@/components/motion';
 import { appFontFamily, elevation, palette, radius, spacing, typography } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
@@ -38,7 +39,8 @@ function useLocation() {
   return { session, businessId, token, locationId, state, loading, error, setError, refresh };
 }
 
-function Page({ title, subtitle, children, floatingAction, root = false }: { title: string; subtitle?: string; children: React.ReactNode; floatingAction?: React.ReactNode; root?: boolean }) {
+function Page({ title, subtitle, children, floatingAction, root = false, onRefresh }: { title: string; subtitle?: string; children: React.ReactNode; floatingAction?: React.ReactNode; root?: boolean; onRefresh?: () => Promise<unknown> | void }) {
+  const Scroller = onRefresh ? RefreshableScrollView : ScrollView;
   return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
     <View style={styles.pageHeader}>
       <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.canGoBack() ? router.back() : router.replace(root ? '/' : '/stock' as Href)} style={styles.back}>
@@ -46,12 +48,12 @@ function Page({ title, subtitle, children, floatingAction, root = false }: { tit
       </Pressable>
       <Text style={styles.headerTitle}>{title}</Text>
     </View>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
+    <Scroller onRefresh={onRefresh!} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
       <View style={styles.content}>
         {subtitle && <Entrance><Text style={styles.subtitle}>{subtitle}</Text></Entrance>}
         <View style={styles.body}>{children}</View>
       </View>
-    </ScrollView>
+    </Scroller>
     {floatingAction && <View style={styles.floatingWrap}>{floatingAction}</View>}
   </SafeAreaView>;
 }
@@ -137,7 +139,7 @@ export function LocationsScreen() {
   const inactive = locations.filter((location) => !location.is_active).length;
   const visibleLocations = locationType ? locations.filter((location) => location.type === locationType) : locations;
   const compactKpis = width < 480;
-  return <Page title={locationType === 'shop' ? 'Shops' : locationType === 'warehouse' ? 'Warehouses' : 'My storage units'} root floatingAction={canManage && !loading && !error ?
+  return <Page title={locationType === 'shop' ? 'Shops' : locationType === 'warehouse' ? 'Warehouses' : 'My storage units'} root onRefresh={refresh} floatingAction={canManage && !loading && !error ?
     <PressScale accessibilityRole="button" accessibilityLabel="Add storage unit" onPress={() => router.push('/stock/new')} style={styles.floatingAdd}>
       <View style={styles.floatingFace}><AppSymbol name="plus" size={27} color={palette.surface} /></View>
     </PressScale> : null}>
@@ -218,7 +220,7 @@ export function LocationDetailsScreen() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not update location.'); }
     finally { setBusy(false); }
   }
-  return <Page title={location?.name ?? 'Storage unit'}>
+  return <Page title={location?.name ?? 'Storage unit'} onRefresh={async () => { await Promise.all([refresh(), loadOverview()]); }}>
     {loading ? <ActivityIndicator color={palette.primary} /> : error && !location ? <Message title="Location unavailable" detail={error} retry={() => void refresh()} /> : location && <>
       <View style={styles.locationIdentity}>
         <View style={[styles.icon, location.type === 'warehouse' && { backgroundColor: palette.purpleSoft }]}><AppSymbol name={location.type === 'warehouse' ? 'stock' : 'home'} size={24} color={location.type === 'warehouse' ? palette.purple : palette.primary} /></View>
@@ -349,7 +351,7 @@ const pendingCopy = {
 export function PendingStockScreen({ kind }: { kind: keyof typeof pendingCopy }) {
   const { state, loading, error, refresh } = useLocation();
   const [title, detail] = pendingCopy[kind];
-  return <Page title={title} subtitle={state?.location.name}>
+  return <Page title={title} subtitle={state?.location.name} onRefresh={refresh}>
     {loading ? <ActivityIndicator color={palette.primary} /> : error ? <Message title="Location unavailable" detail={error} retry={() => void refresh()} /> : <>
       <Message title={kind === 'location-stock' || kind === 'movements' ? 'No stock records yet' : 'This action is not available yet'} detail={detail} />
       {kind !== 'location-stock' && kind !== 'movements' && <Action label="Confirm" disabled onPress={() => {}} />}

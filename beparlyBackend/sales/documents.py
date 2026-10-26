@@ -1,9 +1,9 @@
-"""Sale invoices and receipts, laid out for A4 and 80 mm paper."""
+"""Sale invoices and receipts, laid out for A4/A5 and 58/80 mm paper."""
 from decimal import Decimal
 from io import BytesIO
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, A5
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
@@ -54,17 +54,30 @@ def _address(value):
     return ', '.join(str(part) for part in value.values() if part) if isinstance(value, dict) else str(value or '')
 
 
-def render_sale_document(sale, kind):
+def render_sale_document(sale, kind, paper=None):
     if kind == 'label':
         from .thermal_label import render_thermal_label
         return render_thermal_label(sale)
     font = _font()
     receipt = kind == 'receipt'
-    width, height = (80 * mm, 220 * mm) if receipt else A4
+    paper = paper or ('80mm' if receipt else 'A4')
+    if paper not in (('58mm', '80mm') if receipt else ('A4', 'A5')):
+        raise ValueError('Choose a supported paper size for this document.')
+    width, height = ((58 if paper == '58mm' else 80) * mm, 220 * mm) if receipt else (A5 if paper == 'A5' else A4)
+    if receipt:
+        inner_width = width - (10 if paper == '58mm' else 14) * mm
+        estimated_rows = sum((len(_wrap(line.product_name + (f' / {line.variant_name}' if line.variant_name else ''),
+            font, 8, inner_width)) + 2) * 5 for line in sale.lines.all())
+        footer_rows = len(_wrap(sale.business.invoice_footer_text, font, 8, inner_width))
+        height = max(140 * mm, min(500 * mm, (95 + estimated_rows + footer_rows * 5) * mm))
     stream = BytesIO()
     pdf = canvas.Canvas(stream, pagesize=(width, height), pageCompression=1)
     pdf.setTitle(f'{sale.invoice_number} - {"Receipt" if receipt else "Invoice"}')
-    left, right = (7 * mm if receipt else 16 * mm), width - (7 * mm if receipt else 16 * mm)
+    margin = (5 if paper == '58mm' else 7) * mm if receipt else (12 if paper == 'A5' else 16) * mm
+    left, right = margin, width - margin
+    qty_edge = left + (18 if paper == 'A5' else 22) * mm
+    desc_edge = left + (74 if paper == 'A5' else 113) * mm
+    price_edge = left + (98 if paper == 'A5' else 142) * mm
     y = height - (9 * mm if receipt else 16 * mm)
     money = lambda value: _money(value, sale.business.show_currency_symbol)
     returned = sum((row.amount for row in sale.returns.all()), Decimal('0'))
@@ -87,11 +100,11 @@ def render_sale_document(sale, kind):
         pdf.rect(left, y - 9 * mm, right - left, 9 * mm, fill=1, stroke=0)
         pdf.setStrokeColor(LINE)
         pdf.rect(left, y - 9 * mm, right - left, 9 * mm, fill=0, stroke=1)
-        for edge in (left + 22 * mm, left + 113 * mm, left + 142 * mm):
+        for edge in (qty_edge, desc_edge, price_edge):
             pdf.line(edge, y, edge, y - 9 * mm)
-        draw('Quantity', left + 11 * mm, y - 5.5 * mm, 7.5, MUTED, 'center')
-        draw('Description', left + 25 * mm, y - 5.5 * mm, 8, MUTED)
-        draw('Unit price', left + 139 * mm, y - 5.5 * mm, 7.5, MUTED, 'right')
+        draw('Quantity', (left + qty_edge) / 2, y - 5.5 * mm, 7.5, MUTED, 'center')
+        draw('Description', qty_edge + 3 * mm, y - 5.5 * mm, 8, MUTED)
+        draw('Unit price', price_edge - 3 * mm, y - 5.5 * mm, 7.5, MUTED, 'right')
         draw('Line total', right - 3 * mm, y - 5.5 * mm, 7.5, MUTED, 'right')
         y -= 9 * mm
 
@@ -123,7 +136,7 @@ def render_sale_document(sale, kind):
             finally:
                 sale.business.logo.close()
             box = (width / 2 - 12 * mm, y - 13 * mm, 24 * mm, 13 * mm) if receipt else (
-                left, y - 34 * mm, 27 * mm, 20 * mm)
+                left, y - 34 * mm, 22 * mm if paper == 'A5' else 27 * mm, 17 * mm if paper == 'A5' else 20 * mm)
             pdf.drawImage(logo, *box, preserveAspectRatio=True,
                           anchor='c', mask='auto')
             has_logo = True
@@ -147,14 +160,15 @@ def render_sale_document(sale, kind):
     else:
         draw('SALES INVOICE', width / 2, y, 17, INK, 'center')
         y -= 13 * mm
-        name_x = left + (32 * mm if has_logo else 0)
+        name_x = left + ((25 if paper == 'A5' else 32) * mm if has_logo else 0)
         name_y = y - 4 * mm
-        for part in _wrap(sale.business.name, font, 12, 85 * mm - (name_x - left)):
+        company_width = (55 if paper == 'A5' else 85) * mm
+        for part in _wrap(sale.business.name, font, 12, company_width - (name_x - left)):
             draw(part, name_x, name_y, 12)
             name_y -= 5 * mm
         for detail in (sale.business.phone, sale.business.address):
             if detail:
-                for part in _wrap(detail, font, 8, 85 * mm - (name_x - left)):
+                for part in _wrap(detail, font, 8, company_width - (name_x - left)):
                     draw(part, name_x, name_y, 8, MUTED)
                     name_y -= 4 * mm
         meta_y = y - 4 * mm
@@ -197,24 +211,25 @@ def render_sale_document(sale, kind):
             draw(money(item.line_total), right, y, 8.5, INK, 'right')
             y -= 7 * mm
         else:
-            lines = _wrap(name, font, 8.5, 84 * mm)
-            sku_lines = _wrap(f'SKU: {item.sku}', font, 7.5, 84 * mm) if item.sku else []
+            description_width = desc_edge - qty_edge - 6 * mm
+            lines = _wrap(name, font, 8.5, description_width)
+            sku_lines = _wrap(f'SKU: {item.sku}', font, 7.5, description_width) if item.sku else []
             row_height = max(11 * mm, (len(lines) + len(sku_lines)) * 4.5 * mm + 3 * mm)
             ensure(row_height + (75 * mm if index == len(items) else 2 * mm), table=True)
             top = y
-            draw(quantity, left + 11 * mm, top - 5 * mm, 7.5, INK, 'center')
+            draw(quantity, (left + qty_edge) / 2, top - 5 * mm, 7.5, INK, 'center')
             for part in lines:
-                draw(part, left + 25 * mm, y - 4 * mm, 8.5)
+                draw(part, qty_edge + 3 * mm, y - 4 * mm, 8.5)
                 y -= 4.5 * mm
             for part in sku_lines:
-                draw(part, left + 25 * mm, y - 2 * mm, 7.5, MUTED)
+                draw(part, qty_edge + 3 * mm, y - 2 * mm, 7.5, MUTED)
                 y -= 4.5 * mm
-            draw(money(item.unit_price), left + 139 * mm, top - 5 * mm, 8, INK, 'right')
+            draw(money(item.unit_price), price_edge - 3 * mm, top - 5 * mm, 8, INK, 'right')
             draw(money(item.line_total), right - 3 * mm, top - 5 * mm, 8, INK, 'right')
             y = top - row_height
             pdf.setStrokeColor(LINE)
             pdf.line(left, y, right, y)
-            for edge in (left, left + 22 * mm, left + 113 * mm, left + 142 * mm, right):
+            for edge in (left, qty_edge, desc_edge, price_edge, right):
                 pdf.line(edge, top, edge, y)
 
     if not receipt:
@@ -224,7 +239,7 @@ def render_sale_document(sale, kind):
             y -= 10 * mm
             pdf.setStrokeColor(LINE)
             pdf.line(left, y, right, y)
-            for edge in (left, left + 22 * mm, left + 113 * mm, left + 142 * mm, right):
+            for edge in (left, qty_edge, desc_edge, price_edge, right):
                 pdf.line(edge, top, edge, y)
 
     ensure(75 * mm if not receipt else 55 * mm)

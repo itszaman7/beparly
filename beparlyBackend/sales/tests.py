@@ -1,21 +1,23 @@
 import uuid
 import json
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.test import TestCase
 
 from accounting.models import Contact, DueDateChange, IncomeCategory, MoneyAccount
 from accounting.due_views import effective_date
 from accounts.models import AuthSession
-from datetime import date
+from datetime import date, timedelta
 from accounting.services import balance, contact_position, create_financial_category, setup_business
 from accounts.models import Business, BusinessMember, User
-from products.models import Product
+from products.models import Product, ProductUnit
 from stockkeeper.models import StockBalance, StockLocation, StockMovement
 from stockkeeper.services import receive
 
 from .models import Sale, SalePayment, SaleReturn
 from .services import SaleError, cancel_sale, create_sale, collect_sale, return_sale, serialize_sale
+from .return_workflow import receive_credited_goods, refund_credited_sale
 
 
 class SalePostingTests(TestCase):
@@ -52,6 +54,39 @@ class SalePostingTests(TestCase):
         self.assertEqual(SalePayment.objects.filter(sale=sale).count(), 1)
         self.assertEqual(StockMovement.objects.filter(reference_id=sale.pk, type='sale').count(), 1)
         self.assertEqual(create_sale(self.business, self.owner, command, self.payload()).pk, sale.pk)
+
+    def test_command_replay_rejects_changed_payload_without_second_posting(self):
+        command = uuid.uuid4()
+        original = create_sale(self.business, self.owner, command, self.payload())
+        with self.assertRaisesMessage(SaleError, 'different sale details'):
+            create_sale(self.business, self.owner, command, self.payload(discount='1.00'))
+        self.assertEqual(Sale.objects.filter(business=self.business).count(), 1)
+        self.assertEqual(StockMovement.objects.filter(reference_id=original.pk, type='sale').count(), 1)
+        self.assertEqual(SalePayment.objects.filter(sale=original).count(), 1)
+
+    def test_scanned_package_sale_uses_factor_price_and_base_stock(self):
+        unit = ProductUnit.objects.create(product=self.product, variant=self.product.variants.get(is_default=True),
+            name='Carton', factor=Decimal('3'), selling_price=Decimal('25.00'), barcode='SOAP-CARTON')
+        sale = create_sale(self.business, self.owner, uuid.uuid4(), self.payload(
+            lines=[{'product_id': str(self.product.pk), 'unit_id': str(unit.pk), 'quantity': '2'}], paid='50.00'))
+        line = sale.lines.get()
+        self.assertEqual((line.quantity, line.conversion_factor, line.line_total),
+                         (Decimal('2'), Decimal('3'), Decimal('50.00')))
+        self.assertEqual(StockBalance.objects.get(variant=unit.variant, location=self.location).quantity, Decimal('4'))
+        self.assertEqual(StockMovement.objects.get(reference_id=sale.pk, type='sale').quantity_change, Decimal('-6'))
+
+    def test_authorized_command_status_recovers_lost_response(self):
+        command = uuid.uuid4()
+        sale = create_sale(self.business, self.owner, command, self.payload())
+        auth = {'HTTP_AUTHORIZATION': f'Bearer {AuthSession.issue(self.owner)}'}
+        path = f'/api/v1/businesses/{self.business.pk}/sales/commands/{command}/'
+        response = self.client.get(path, **auth)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['sale']['id'], str(sale.pk))
+        self.assertEqual(response.json()['request_hash'], sale.request_hash)
+        self.assertEqual(self.client.get(path.replace(f'/{self.business.pk}/', '/999999/'), **auth).status_code, 404)
+        self.assertEqual(self.client.get(path.replace(str(command), str(uuid.uuid4())), **auth).status_code, 404)
+        self.assertEqual(self.client.get(path).status_code, 401)
 
     def test_stock_sold_and_best_sellers_use_base_units_and_recorded_cost(self):
         sale = create_sale(self.business, self.owner, uuid.uuid4(), self.payload())
@@ -112,28 +147,32 @@ class SalePostingTests(TestCase):
         self.assertEqual(Decimal(contact_position(customer)['to_collect']), Decimal('0'))
 
     def test_credit_due_date_aging_and_owner_rescheduling(self):
+        from stockkeeper.services import business_today
+        today = business_today(self.business)
+        overdue_date = today - timedelta(days=5)
+        extended_date = today + timedelta(days=35)
         customer = Contact.objects.create(business=self.business, name='Due buyer', phone='01712345679', is_customer=True)
         with self.assertRaisesMessage(SaleError, 'due date'):
             create_sale(self.business, self.owner, uuid.uuid4(), self.payload(customer_id=str(customer.pk), paid='0', due_date=None))
         sale = create_sale(self.business, self.owner, uuid.uuid4(), self.payload(
-            customer_id=str(customer.pk), paid='5.00', due_date='2026-10-20'))
+            customer_id=str(customer.pk), paid='5.00', due_date=overdue_date.isoformat()))
         auth = {'HTTP_AUTHORIZATION': f'Bearer {AuthSession.issue(self.owner)}'}
         root = f'/api/v1/businesses/{self.business.pk}/'
-        report = self.client.get(root + 'reports/customer-dues/?as_of=2026-10-25', **auth)
+        report = self.client.get(root + f'reports/customer-dues/?as_of={today.isoformat()}', **auth)
         self.assertEqual(report.status_code, 200, report.content)
         self.assertEqual(report.json()['buckets']['overdue'], '15.00')
         command_id = str(uuid.uuid4())
         route = root + f'dues/sale/{sale.pk}/reschedule/'
-        payload = json.dumps({'due_date': '2026-11-30', 'reason': 'Agreed extension'})
+        payload = json.dumps({'due_date': extended_date.isoformat(), 'reason': 'Agreed extension'})
         response = self.client.post(route, data=payload, content_type='application/json',
             HTTP_X_COMMAND_ID=command_id, **auth)
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(self.client.post(route, data=payload, content_type='application/json',
             HTTP_X_COMMAND_ID=command_id, **auth).json()['change_id'], response.json()['change_id'])
         self.assertEqual(DueDateChange.objects.filter(sale=sale).count(), 1)
-        self.assertEqual(effective_date(sale, date(2026, 10, 24), 'sale'), date(2026, 10, 20))
-        self.assertEqual(effective_date(sale, date(2026, 10, 25), 'sale'), date(2026, 11, 30))
-        report = self.client.get(root + 'reports/customer-dues/?as_of=2026-10-25', **auth).json()
+        self.assertEqual(effective_date(sale, today - timedelta(days=1), 'sale'), overdue_date)
+        self.assertEqual(effective_date(sale, today, 'sale'), extended_date)
+        report = self.client.get(root + f'reports/customer-dues/?as_of={today.isoformat()}', **auth).json()
         self.assertEqual(report['buckets']['overdue'], '0')
         self.assertEqual(report['buckets']['upcoming'], '15.00')
 
@@ -148,6 +187,22 @@ class SalePostingTests(TestCase):
         response = self.client.get(path, HTTP_AUTHORIZATION=f"Bearer {login.json()['token']}")
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual([row['id'] for row in response.json()['sales']], [str(expected.pk)])
+
+    def test_sales_list_pages_through_history(self):
+        first = create_sale(self.business, self.owner, uuid.uuid4(), self.payload())
+        second = create_sale(self.business, self.owner, uuid.uuid4(), self.payload())
+        auth = {'HTTP_AUTHORIZATION': f'Bearer {AuthSession.issue(self.owner)}'}
+        path = f'/api/v1/businesses/{self.business.pk}/sales/'
+        with patch('sales.views.SALES_PAGE_SIZE', 1):
+            newest = self.client.get(path, **auth)
+            older = self.client.get(path + '?page=2', **auth)
+            invalid = self.client.get(path + '?page=0', **auth)
+        self.assertEqual(newest.status_code, 200, newest.content)
+        self.assertEqual([row['id'] for row in newest.json()['sales']], [str(second.pk)])
+        self.assertEqual(newest.json()['next_page'], 2)
+        self.assertEqual([row['id'] for row in older.json()['sales']], [str(first.pk)])
+        self.assertIsNone(older.json()['next_page'])
+        self.assertEqual(invalid.status_code, 400)
 
     def test_sales_label_requires_business_access(self):
         sale = create_sale(self.business, self.owner, uuid.uuid4(), self.payload())
@@ -216,17 +271,17 @@ class SalePostingTests(TestCase):
         with self.assertRaises(SaleError):
             create_sale(self.business, self.owner, uuid.uuid4(), {**self.payload(), 'income_category_id': miscellaneous.pk})
 
-    def test_cancellation_restores_stock_fifo_value_and_refunds_original_account(self):
+    def test_completed_cancellation_cannot_restore_stock_or_refund(self):
         sale = create_sale(self.business, self.owner, uuid.uuid4(), self.payload())
         self.assertEqual(balance(self.cash.ledger_account), Decimal('20'))
         command = uuid.uuid4()
-        cancel_sale(sale, self.owner, command, 'Entered incorrectly')
+        with self.assertRaises(SaleError):
+            cancel_sale(sale, self.owner, command, 'Entered incorrectly')
         sale.refresh_from_db()
-        self.assertEqual(sale.status, 'cancelled')
-        self.assertEqual(StockBalance.objects.get(variant=self.product.variants.get(), location=self.location).quantity, Decimal('10'))
-        self.assertEqual(balance(self.cash.ledger_account), Decimal('0'))
-        self.assertEqual(StockMovement.objects.filter(reference_id=sale.pk).count(), 2)
-        self.assertEqual(cancel_sale(sale, self.owner, command, 'Entered incorrectly').pk, sale.pk)
+        self.assertEqual(sale.status, 'completed')
+        self.assertEqual(StockBalance.objects.get(variant=self.product.variants.get(), location=self.location).quantity, Decimal('8'))
+        self.assertEqual(balance(self.cash.ledger_account), Decimal('20'))
+        self.assertEqual(StockMovement.objects.filter(reference_id=sale.pk).count(), 1)
 
     def test_delivery_charge_posts_separately_and_requires_address(self):
         with self.assertRaises(SaleError):
@@ -244,30 +299,34 @@ class SalePostingTests(TestCase):
             customer_id=str(customer.pk), paid='15.00', delivery_fee='5.00', delivery_address='Dhaka'))
         line = sale.lines.get()
         first = return_sale(sale, self.owner, uuid.uuid4(), {'reason': 'Wrong size',
-            'lines': [{'line_id': line.pk, 'quantity': '1', 'condition': 'sellable'}]})
+            'lines': [{'line_id': line.pk, 'quantity': '1'}]})
         sale.refresh_from_db()
         self.assertEqual(first.amount, Decimal('10.00'))
         self.assertEqual(first.due_reduction, Decimal('10.00'))
         self.assertEqual(first.refund_amount, Decimal('0.00'))
-        self.assertEqual(serialize_sale(sale)['due'], '0.00')
+        self.assertEqual(Decimal(serialize_sale(sale)['due']), Decimal('0.00'))
         self.assertEqual(Decimal(contact_position(customer)['to_collect']), Decimal('0'))
-        self.assertEqual(StockBalance.objects.get(variant=line.variant, location=self.location).quantity, Decimal('9'))
+        self.assertEqual(StockBalance.objects.get(variant=line.variant, location=self.location).quantity, Decimal('8'))
         command = uuid.uuid4()
-        second = return_sale(sale, self.owner, command, {'reason': 'Damaged', 'refund_account_id': str(self.cash.pk),
-            'lines': [{'line_id': line.pk, 'quantity': '1', 'condition': 'damaged'}]})
-        self.assertEqual(return_sale(sale, self.owner, command, {}) .pk, second.pk)
+        data = {'reason': 'Damaged', 'lines': [{'line_id': line.pk, 'quantity': '1'}]}
+        second = return_sale(sale, self.owner, command, data)
+        self.assertEqual(return_sale(sale, self.owner, command, data).pk, second.pk)
+        with self.assertRaises(SaleError):
+            return_sale(sale, self.owner, command, {})
         sale.refresh_from_db()
-        self.assertEqual(second.refund_amount, Decimal('10.00'))
-        self.assertEqual(sale.paid, Decimal('5.00'))
+        self.assertEqual(second.refund_amount, Decimal('0'))
+        self.assertEqual(serialize_sale(sale)['refund_outstanding'], '10.00')
+        self.assertEqual(sale.paid, Decimal('15.00'))
         self.assertEqual(serialize_sale(sale)['net_total'], '5.00')
-        self.assertEqual(balance(self.cash.ledger_account), Decimal('5'))
+        self.assertEqual(balance(self.cash.ledger_account), Decimal('15'))
         self.assertEqual(Decimal(contact_position(customer)['to_collect']), Decimal('0'))
-        self.assertEqual(balance(self.business.ledgeraccount_set.get(code='INVENTORY_LOSS')), Decimal('4'))
-        self.assertEqual(serialize_sale(sale)['profit'], '1.0000000')
-        self.assertEqual(StockBalance.objects.get(variant=line.variant, location=self.location).quantity, Decimal('9'))
+        self.assertEqual(balance(self.business.ledgeraccount_set.get(code='INVENTORY_LOSS')), Decimal('0'))
+        self.assertEqual(StockBalance.objects.get(variant=line.variant, location=self.location).quantity, Decimal('8'))
         self.assertEqual(SaleReturn.objects.filter(sale=sale).count(), 2)
+        refund = refund_credited_sale(second, self.owner, uuid.uuid4(), {'amount': '10.00',
+            'account_id': str(self.cash.pk), 'refund_confirmed': True, 'confirmation_reference': 'REF-1'})
         from accounting.sale_reports import entry_sale_ids
-        related = entry_sale_ids(self.business, [first.journal, second.journal, second.refund_journal])
+        related = entry_sale_ids(self.business, [first.journal, second.journal, refund.journal])
         self.assertEqual(set(related.values()), {str(sale.pk)})
         self.assertEqual(len(related), 3)
         with self.assertRaises(SaleError):
@@ -278,15 +337,17 @@ class SalePostingTests(TestCase):
         line = sale.lines.get()
         with self.assertRaises(SaleError):
             return_sale(sale, self.owner, uuid.uuid4(), {'reason': 'Invalid',
-                'lines': [{'line_id': line.pk, 'quantity': '3', 'condition': 'sellable'}]})
+                'lines': [{'line_id': line.pk, 'quantity': '3'}]})
         other = Business.objects.create(name='Other business')
         setup_business(other)
         other_cash = MoneyAccount.objects.get(business=other, is_default=True)
+        credit = return_sale(sale, self.owner, uuid.uuid4(), {'reason': 'Wrong item',
+            'lines': [{'line_id': line.pk, 'quantity': '1'}]})
         with self.assertRaises(SaleError):
-            return_sale(sale, self.owner, uuid.uuid4(), {'reason': 'Invalid account',
-                'refund_account_id': str(other_cash.pk),
-                'lines': [{'line_id': line.pk, 'quantity': '1', 'condition': 'sellable'}]})
-        self.assertFalse(SaleReturn.objects.filter(sale=sale).exists())
+            refund_credited_sale(credit, self.owner, uuid.uuid4(), {'amount': '10.00',
+                'account_id': str(other_cash.pk), 'refund_confirmed': True,
+                'confirmation_reference': 'INVALID'})
+        self.assertEqual(SaleReturn.objects.filter(sale=sale).count(), 1)
 
     def test_return_rounding_across_three_partial_returns_reconciles(self):
         sale = create_sale(self.business, self.owner, uuid.uuid4(), self.payload(
@@ -296,40 +357,42 @@ class SalePostingTests(TestCase):
         amounts = []
         for _ in range(3):
             row = return_sale(sale, self.owner, uuid.uuid4(), {'reason': 'Wrong item',
-                'refund_account_id': str(self.cash.pk),
-                'lines': [{'line_id': line.pk, 'quantity': '1', 'condition': 'sellable'}]})
+                'lines': [{'line_id': line.pk, 'quantity': '1'}]})
             amounts.append(row.amount)
         sale.refresh_from_db()
         self.assertEqual(sum(amounts), Decimal('29.00'))
-        self.assertEqual(sale.paid, Decimal('0'))
-        self.assertEqual(balance(self.cash.ledger_account), Decimal('0'))
-        self.assertEqual(StockBalance.objects.get(variant=line.variant, location=self.location).quantity, Decimal('10'))
+        self.assertEqual(sale.paid, Decimal('29'))
+        self.assertEqual(balance(self.cash.ledger_account), Decimal('29'))
+        self.assertEqual(StockBalance.objects.get(variant=line.variant, location=self.location).quantity, Decimal('7'))
 
-    def test_return_api_requires_member_and_active_refund_account(self):
+    def test_credit_api_requires_member_and_refund_requires_active_account(self):
         sale = create_sale(self.business, self.owner, uuid.uuid4(), self.payload())
         line = sale.lines.get()
         path = f'/api/v1/businesses/{self.business.pk}/sales/{sale.pk}/returns/'
-        payload = {'reason': 'Customer returned it', 'refund_account_id': str(self.cash.pk),
-                   'lines': [{'line_id': line.pk, 'quantity': '1', 'condition': 'sellable'}]}
+        payload = {'reason': 'Customer credit',
+                   'lines': [{'line_id': line.pk, 'quantity': '1'}]}
         command = str(uuid.uuid4())
         self.assertEqual(self.client.post(path, data=json.dumps(payload), content_type='application/json',
             HTTP_X_COMMAND_ID=command).status_code, 401)
         login = self.client.post('/api/v1/auth/login/', data=json.dumps(
             {'phone': self.owner.phone, 'password': 'OwnerPass#83'}), content_type='application/json')
         token = login.json()['token']
-        self.cash.is_active = False
-        self.cash.save(update_fields=['is_active'])
-        rejected = self.client.post(path, data=json.dumps(payload), content_type='application/json',
-            HTTP_AUTHORIZATION=f'Bearer {token}', HTTP_X_COMMAND_ID=command)
-        self.assertEqual(rejected.status_code, 400, rejected.content)
-        self.cash.is_active = True
-        self.cash.save(update_fields=['is_active'])
         posted = self.client.post(path, data=json.dumps(payload), content_type='application/json',
             HTTP_AUTHORIZATION=f'Bearer {token}', HTTP_X_COMMAND_ID=command)
         self.assertEqual(posted.status_code, 201, posted.content)
         replay = self.client.post(path, data=json.dumps(payload), content_type='application/json',
             HTTP_AUTHORIZATION=f'Bearer {token}', HTTP_X_COMMAND_ID=command)
         self.assertEqual(replay.json()['return_id'], posted.json()['return_id'])
+        refund_path = f'{path}{posted.json()["return_id"]}/refunds/'
+        refund = {'amount': '10.00', 'account_id': str(self.cash.pk),
+            'refund_confirmed': True, 'confirmation_reference': 'EXEC-1'}
+        self.cash.is_active = False
+        self.cash.save(update_fields=['is_active'])
+        self.assertEqual(self.client.post(refund_path, data=json.dumps(refund),
+            content_type='application/json', HTTP_AUTHORIZATION=f'Bearer {token}',
+            HTTP_X_COMMAND_ID=str(uuid.uuid4())).status_code, 400)
+        self.cash.is_active = True
+        self.cash.save(update_fields=['is_active'])
         other = Business.objects.create(name='No membership')
         self.assertEqual(self.client.post(path.replace(str(self.business.pk), str(other.pk), 1),
             data=json.dumps(payload), content_type='application/json',
@@ -386,7 +449,7 @@ class SalePostingTests(TestCase):
             customer_id=str(customer.pk), paid='15.00', delivery_fee='5.00', delivery_address='Dhaka'))
         line = sale.lines.get()
         return_sale(sale, self.owner, uuid.uuid4(), {'reason': 'Wrong size',
-            'lines': [{'line_id': line.pk, 'quantity': '1', 'condition': 'sellable'}]})
+            'lines': [{'line_id': line.pk, 'quantity': '1'}]})
         token = AuthSession.issue(self.owner)
         response = self.client.get(f'/api/v1/businesses/{self.business.pk}/sales/hub-summary/',
                                    HTTP_AUTHORIZATION=f'Bearer {token}')
@@ -407,7 +470,7 @@ class SalePostingTests(TestCase):
         sale = create_sale(self.business, self.owner, uuid.uuid4(), self.payload(
             customer_id=str(customer.pk), paid='15.00', delivery_fee='5.00', delivery_address='Dhaka'))
         return_sale(sale, self.owner, uuid.uuid4(), {'reason': 'Wrong size',
-            'lines': [{'line_id': sale.lines.get().pk, 'quantity': '1', 'condition': 'sellable'}]})
+            'lines': [{'line_id': sale.lines.get().pk, 'quantity': '1'}]})
         Purchase.objects.create(business=self.business, supplier=supplier, location=self.location,
             supplier_name=supplier.name, location_name=self.location.name, number='PUR-1', status='completed',
             total=Decimal('33.00'), create_command_id=uuid.uuid4(), actor=self.owner, completed_at=timezone.now())

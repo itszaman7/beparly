@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Input, Text, XStack, YStack } from 'tamagui';
 
 import { AppSymbol } from '@/components/app-symbol';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { elevation, palette } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
 import { currencySymbol, formatBdt } from '@/features/products/product-rules';
@@ -23,7 +24,8 @@ const id = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => 
 
 const bdt = (value: string | number) => formatBdt(String(value));
 
-function Page({ title, children }: { title: string; children: React.ReactNode }) {
+function Page({ title, children, onRefresh }: { title: string; children: React.ReactNode; onRefresh?: () => Promise<unknown> | void }) {
+  const Scroller = onRefresh ? RefreshableScrollView : ScrollView;
   return <SafeAreaView style={{ flex: 1, backgroundColor: background }}>
     <XStack alignItems="center" gap={10} padding={16} backgroundColor="white">
       <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => { blurWebFocus(); if (router.canGoBack()) router.back(); else router.replace('/more' as Href); }} style={{ width: 42, height: 42, justifyContent: 'center' }}>
@@ -31,9 +33,9 @@ function Page({ title, children }: { title: string; children: React.ReactNode })
       </Pressable>
       <Text color={ink} fontSize={22} fontWeight="700">{title}</Text>
     </XStack>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, paddingBottom: 110, alignItems: 'center' }}>
+    <Scroller onRefresh={onRefresh!} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, paddingBottom: 110, alignItems: 'center' }}>
       <YStack width="100%" maxWidth={560} gap={14}>{children}</YStack>
-    </ScrollView>
+    </Scroller>
   </SafeAreaView>;
 }
 
@@ -103,7 +105,7 @@ export function MoneyHome() {
   });
   const visibleAccounts = accounts.slice(0, 5);
   const visibleLedgerAccounts = ledgerAccounts.filter((account) => !account.system_managed && !accounts.some((money) => money.name === account.name) || account.code === 'SALES').slice(0, Math.max(0, 5 - visibleAccounts.length));
-  return <Page title="Money">
+  return <Page title="Money" onRefresh={refresh}>
     {!owner ? <Card><Text color={muted}>Only the business owner can manage money right now.</Text></Card> : loading ? <ActivityIndicator color={green} /> : <>
       <ErrorText message={error} />
       <Card><Text color={muted} fontSize={13}>Available money · Across your money accounts</Text><Text color={Number(available) < 0 ? '#A62925' : ink} fontSize={32} fontWeight="700">{bdt(available)}</Text>{Number(available) < 0 && <Text color="#A62925" fontSize={12}>Below zero</Text>}</Card>
@@ -183,14 +185,15 @@ export function MoneyAccountsList() {
   const [partyAccounts, setPartyAccounts] = useState<{ id: string; name: string; balance: string; contact_id: string; contact_name: string; party_type: 'customer' | 'supplier' }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  useFocusEffect(useCallback(() => {
+  const refresh = useCallback(async () => {
     if (!token || !businessId || !owner) { setLoading(false); return; }
     setLoading(true);
-    void api.moneyAccounts(token, businessId).then((result) => { setAccounts(result.accounts); setLedgerAccounts(result.ledger_accounts); setPartyAccounts(result.party_accounts); setError(''); })
-      .catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load accounts.'))
-      .finally(() => setLoading(false));
-  }, [token, businessId, owner]));
-  return <Page title="All accounts">
+    try { const result = await api.moneyAccounts(token, businessId); setAccounts(result.accounts); setLedgerAccounts(result.ledger_accounts); setPartyAccounts(result.party_accounts); setError(''); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load accounts.'); }
+    finally { setLoading(false); }
+  }, [token, businessId, owner]);
+  useFocusEffect(useCallback(() => { void refresh(); }, [refresh]));
+  return <Page title="All accounts" onRefresh={refresh}>
     {!owner ? <Card><Text color={muted}>Only the business owner can view money accounts.</Text></Card> : <>
       <Button height={50} backgroundColor={green} onPress={() => router.push('/money/accounts' as Href)}><AppSymbol name="plus" size={18} color="white" /><Text color="white" fontWeight="700">Add account</Text></Button>
       <ErrorText message={error} />
@@ -227,13 +230,16 @@ export function MoneyForm() {
   const [eventDate, setEventDate] = useState(new Date().toISOString().slice(0, 10));
   const [command, setCommand] = useState(id());
   const [reviewing, setReviewing] = useState(false);
-  useFocusEffect(useCallback(() => {
+  const refreshChoices = useCallback(async () => {
     if (!token || !businessId) return;
-    void Promise.all([api.moneyAccounts(token, businessId), api.contacts(token, businessId), api.expenseCategories(token, businessId), api.incomeCategories(token, businessId)])
-      .then(([money, parties, expenses, incomes]) => { setAccounts(money.accounts.filter((item) => item.is_active)); setContacts(parties.contacts); setCategories(expenses.categories); setIncomeCategories(incomes.categories);
-        setAccountId((current) => current || money.accounts[0]?.id || ''); setCategoryId((current) => current ?? (reason === 'other_income' ? incomes.categories[0]?.id : expenses.categories[0]?.id) ?? null); })
-      .catch((cause) => setError(cause instanceof Error ? cause.message : 'Could not load form choices.'));
-  }, [token, businessId, reason]));
+    try { const [money, parties, expenses, incomes] = await Promise.all([api.moneyAccounts(token, businessId), api.contacts(token, businessId), api.expenseCategories(token, businessId), api.incomeCategories(token, businessId)]);
+      setAccounts(money.accounts.filter((item) => item.is_active)); setContacts(parties.contacts); setCategories(expenses.categories); setIncomeCategories(incomes.categories);
+      setAccountId((current) => money.accounts.some((item) => item.is_active && item.id === current) ? current : money.accounts.find((item) => item.is_active)?.id || '');
+      setCategoryId((current) => (reason === 'other_income' ? incomes.categories : expenses.categories).some((item) => item.id === current) ? current : (reason === 'other_income' ? incomes.categories[0]?.id : expenses.categories[0]?.id) ?? null);
+      setError('');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load form choices.'); }
+  }, [token, businessId, reason]);
+  useFocusEffect(useCallback(() => { void refreshChoices(); }, [refreshChoices]));
   function changed(update: () => void) { update(); setCommand(id()); setReviewing(false); }
   async function addCategory(type: 'expense' | 'income') {
     if (!token || !businessId || !newCategory.trim()) return;
@@ -263,7 +269,7 @@ export function MoneyForm() {
   }
   const selectedMoneyAccount = accounts.find((item) => item.id === accountId);
   const selectedIncomeAccount = incomeCategories.find((item) => item.id === categoryId);
-  return <Page title={kind === 'other_income' ? 'Other income' : mode === 'in' ? 'Money In' : mode === 'out' ? 'Money Out' : mode === 'transfer' ? 'Transfer money' : 'Expense'}>
+  return <Page title={kind === 'other_income' ? 'Other income' : mode === 'in' ? 'Money In' : mode === 'out' ? 'Money Out' : mode === 'transfer' ? 'Transfer money' : 'Expense'} onRefresh={refreshChoices}>
     <Text color={muted} fontSize={13}>The amount is confirmed by the server before it changes your balance.</Text>
     <Field label={`Amount${currencySymbol() ? ` (${currencySymbol()})` : ''}`} value={amount} onChangeText={(value) => changed(() => setAmount(value))} numeric />
     <Text color={ink} fontWeight="700">Reason</Text><XStack flexWrap="wrap" gap={8}>{reasons[mode].map(([value, label]) => <Choice key={value} label={label} selected={kind === value} onPress={() => changed(() => { setKind(value); if (value === 'expense') setCategoryId(categories[0]?.id ?? null); if (value === 'other_income') setCategoryId(incomeCategories[0]?.id ?? null); })} />)}</XStack>

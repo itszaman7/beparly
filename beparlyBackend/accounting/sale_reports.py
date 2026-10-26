@@ -7,7 +7,7 @@ from django.db.models.functions import Cast, Replace
 from django.http import JsonResponse
 
 from accounts.views import error
-from sales.models import Sale, SalePayment, SaleReturn
+from sales.models import Sale, SalePayment, SaleReturn, SaleReturnReceipt, SaleReturnDisposition
 from stockkeeper.services import business_today
 
 from .models import JournalEntry
@@ -30,7 +30,15 @@ def sale_preview(sale):
 
 
 def previews(business, sale_ids):
-    ids = [value for value in sale_ids if value]
+    from uuid import UUID
+
+    ids = []
+    for value in sale_ids:
+        try:
+            ids.append(UUID(str(value)))
+        except (ValueError, TypeError, AttributeError):
+            # Historic/custom journal source IDs need not be sale UUIDs.
+            continue
     return {str(sale.pk): sale_preview(sale) for sale in
             Sale.objects.filter(business=business, pk__in=ids).select_related('customer').prefetch_related('lines')}
 
@@ -40,12 +48,18 @@ def entry_sale_ids(business, entries):
     result = {}
     returns = {}
     payments = []
+    receipts = {}
+    dispositions = {}
     for entry in entries:
         original = entry.reverses if entry.reverses_id else entry
         if original.source_type == 'sale':
             result[str(entry.pk)] = original.source_id
         elif original.source_type == 'sale_return':
             returns[str(entry.pk)] = original.source_id
+        elif original.source_type == 'sale_return_receipt':
+            receipts[str(entry.pk)] = original.source_id
+        elif original.source_type == 'sale_return_disposition':
+            dispositions[str(entry.pk)] = original.source_id
         elif original.source_type in ('sale_collection', 'sale_refund', 'sale_return_refund'):
             payments.append((str(entry.pk), original.pk))
     if returns:
@@ -61,6 +75,18 @@ def entry_sale_ids(business, entries):
                                                   refund_journal_id__in=[journal_id for _, journal_id in payments])})
         result.update({entry_id: mapping[str(journal_id)] for entry_id, journal_id in payments
                        if str(journal_id) in mapping})
+    if receipts:
+        mapping = {str(row.pk): str(row.return_line.sale_return.sale_id) for row in
+                   SaleReturnReceipt.objects.filter(business=business, pk__in=receipts.values())
+                   .select_related('return_line__sale_return')}
+        result.update({entry_id: mapping[receipt_id] for entry_id, receipt_id in receipts.items()
+                       if receipt_id in mapping})
+    if dispositions:
+        mapping = {str(row.pk): str(row.receipt.return_line.sale_return.sale_id) for row in
+                   SaleReturnDisposition.objects.filter(business=business, pk__in=dispositions.values())
+                   .select_related('receipt__return_line__sale_return')}
+        result.update({entry_id: mapping[decision_id] for entry_id, decision_id in dispositions.items()
+                       if decision_id in mapping})
     return result
 
 
@@ -84,6 +110,12 @@ def add_sale_previews_to_movements(rows, movements, business):
     if return_refs:
         mapping = {str(row.pk): str(row.sale_id) for row in
                    SaleReturn.objects.filter(sale__business=business, pk__in=return_refs.values())}
+        mapping.update({str(row.pk): str(row.return_line.sale_return.sale_id) for row in
+            SaleReturnReceipt.objects.filter(business=business, pk__in=return_refs.values())
+            .select_related('return_line__sale_return')})
+        mapping.update({str(row.pk): str(row.receipt.return_line.sale_return.sale_id) for row in
+            SaleReturnDisposition.objects.filter(business=business, pk__in=return_refs.values())
+            .select_related('receipt__return_line__sale_return')})
         by_movement.update({movement_id: mapping[return_id] for movement_id, return_id in return_refs.items()
                             if return_id in mapping})
     by_sale = previews(business, by_movement.values())

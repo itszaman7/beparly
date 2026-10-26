@@ -1,21 +1,22 @@
 import { router, type Href } from 'expo-router';
-import { ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Text, YStack } from 'tamagui';
 
 import { AppSymbol, type AppSymbolName } from '@/components/app-symbol';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { useAuth } from '@/features/auth/auth-context';
 
 export default function More() {
-  const { session } = useAuth();
+  const { session, refreshBusinesses } = useAuth();
   const items = [
+    ['Quotations', '/sales/quotations', 'duplicate'] as const,
     ['Business settings', '/business-settings', 'edit'] as const,
     ['Print settings', '/print-settings', 'reports'] as const,
     ...(session?.account?.role === 'owner' ? [['Income categories', '/money/income-categories', 'category'] as const] : []),
     ['Account & team', '/explore', 'account'] as const,
   ];
 
-  return <SafeAreaView style={{ flex: 1, backgroundColor: '#F6F8F7' }}><ScrollView contentContainerStyle={{ alignItems: 'center', padding: 20 }}>
+  return <SafeAreaView style={{ flex: 1, backgroundColor: '#F6F8F7' }}><RefreshableScrollView onRefresh={refreshBusinesses} contentContainerStyle={{ alignItems: 'center', padding: 20 }}>
     <YStack width="100%" maxWidth={560} gap={12}>
       <Text color="#15211F" fontSize={27} fontWeight="700">Settings</Text>
       <Text color="#52635E" fontSize={13}>{session?.account?.business.name}</Text>
@@ -24,5 +25,5 @@ export default function More() {
           <AppSymbol name={icon as AppSymbolName} size={22} color="#006D64" /><Text color="#15211F" fontSize={16} fontWeight="700">{label}</Text>
         </Button>)}
     </YStack>
-  </ScrollView></SafeAreaView>;
+  </RefreshableScrollView></SafeAreaView>;
 }

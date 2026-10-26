@@ -7,6 +7,7 @@ import { FlatList, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } f
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { RecordAttachments, uploadPendingAttachments } from '@/features/attachments/record-attachments';
 import { AppText as Text } from '@/components/app-text';
 import { useAuth } from '@/features/auth/auth-context';
@@ -221,8 +222,8 @@ export function PurchaseFlowScreen() {
     return () => { active = false; };
   }, [business, draft.supplier, session, suppliers]);
 
-  const add = (item: PurchaseCatalogItem) => {
-    const existing = draft.lines.find(line => line.item.variant_id === item.variant_id && !line.unitId && !line.batchId);
+  const add = (item: PurchaseCatalogItem, unitId?: string, unitName?: string) => {
+    const existing = draft.lines.find(line => line.item.variant_id === item.variant_id && line.unitId === unitId && !line.batchId);
     if (existing) {
       const quantity = stepQuantity(existing.quantity, 1);
       if (quantity === null) { setError('Finish editing this quantity before using + or −.'); return; }
@@ -231,7 +232,7 @@ export function PurchaseFlowScreen() {
     }
     if (draft.lines.length >= 1000) { setError('A purchase can contain at most 1,000 lines.'); return; }
     setDraft(current => ({ ...current, lines: [...current.lines, { id: uid(), item, quantity: '1',
-      unitCost: item.last_purchase_cost ?? item.default_purchase_cost ?? '' }] }));
+      unitId, unitName, unitCost: unitId ? '' : item.last_purchase_cost ?? item.default_purchase_cost ?? '' }] }));
   };
   const removeOne = (item: PurchaseCatalogItem) => {
     const matches = draft.lines.filter(line => line.item.variant_id === item.variant_id);
@@ -247,9 +248,10 @@ export function PurchaseFlowScreen() {
     setScannerOpen(false);
     queryRef.current = barcode; setQuery(barcode);
     try {
-      const found = await api.purchaseCatalog(session.token, session.account.business.id, barcode);
-      const exact = found.items.find(row => row.barcode === barcode || row.sku === barcode || row.package_barcode_match);
-      if (exact) add(exact);
+      const { target } = await api.barcodeLookup(session.token, session.account.business.id, barcode);
+      const found = await api.purchaseCatalog(session.token, session.account.business.id, target.sku);
+      const exact = found.items.find(row => row.variant_id === target.variant_id);
+      if (exact) add(exact, target.unit_id ?? undefined, target.unit_id ? target.unit_name : undefined);
       else setError('No product has this barcode. You can search or add a new product.');
     } catch (cause) { setError(`Barcode lookup failed: ${err(cause)}`); }
   };
@@ -415,6 +417,7 @@ export function PurchaseFlowScreen() {
         <AppSymbol name="barcode" size={21} color="#006D64" /></Pressable>
       {!!query && <Pressable onPress={() => { queryRef.current = ''; setQuery(''); }}><AppSymbol name="close" size={18} color="#678077" /></Pressable>}</View>
       <FlatList data={results} extraData={draft.lines} keyExtractor={item => item.variant_id} renderItem={listRow} style={styles.list}
+        refreshing={loading} onRefresh={() => { void loadCatalog(query.trim()); }}
         contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="handled"
         onEndReached={() => { if (nextPage && !loading) void loadCatalog(query.trim(), nextPage); }} onEndReachedThreshold={0.4}
         ListHeaderComponent={<View style={styles.listHeading}><Text style={styles.sectionTitle}>Products</Text>
@@ -422,6 +425,7 @@ export function PurchaseFlowScreen() {
         ListEmptyComponent={<Text style={styles.empty}>{loading ? 'Searching products…' : 'No matching products. Search again or add a product.'}</Text>}
         ListFooterComponent={loading && results.length ? <Text style={styles.empty}>Loading more…</Text> : undefined} /></>}
     {stage === 'cart' && <FlatList data={draft.lines} keyExtractor={line => line.id} style={styles.list}
+      refreshing={loading} onRefresh={() => { void loadCatalog(query.trim()); }}
       contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="handled"
       ListHeaderComponent={<View style={styles.listHeading}><Text style={styles.sectionTitle}>{selectedCount} products · {draft.lines.length} lines</Text>
         <Pressable onPress={() => setStage('picker')}><Text style={styles.link}>+ Add products</Text></Pressable></View>}
@@ -438,7 +442,7 @@ export function PurchaseFlowScreen() {
             {line.batchLabel ? ` · Batch ${line.batchLabel}` : ''}</Text></View>
         <View style={{ alignItems: 'flex-end', gap: 6 }}><Text style={styles.lineTotal}>{money(numeric(line.quantity) * numeric(line.unitCost))}</Text>
           <Text style={styles.link}>Edit</Text></View></Pressable>} />}
-    {stage === 'review' && <ScrollView style={styles.list} contentContainerStyle={styles.reviewContent} keyboardShouldPersistTaps="handled">
+    {stage === 'review' && <RefreshableScrollView onRefresh={async () => { await Promise.all([loadCatalog(query.trim()), loadSuppliers()]); }} style={styles.list} contentContainerStyle={styles.reviewContent} keyboardShouldPersistTaps="handled">
       <Text style={styles.sectionTitle}>Supplier *</Text>
       <Pressable style={[styles.option, !!chosenSupplier && styles.selected]} onPress={() => setSupplierPickerOpen(true)}>
         {!!chosenSupplier?.image_url && <Image source={{ uri: resolveAssetUrl(chosenSupplier.image_url) || '' }}
@@ -479,7 +483,7 @@ export function PurchaseFlowScreen() {
           token={session?.token} businessId={business} recordId={draft.serverId} showUploadButton={false} />
       </View>}
       <Text style={styles.hint}>Stock and supplier balances change only after online completion.</Text>
-    </ScrollView>}
+    </RefreshableScrollView>}
     <View style={styles.footer}><View><Text style={styles.meta}>{selectedCount} products · {draft.lines.length} lines</Text>
       <Text style={styles.footerTotal}>{money(total)}</Text></View><Pressable disabled={busy || !ready || stage !== 'review' && !draft.lines.length}
       onPress={() => stage === 'picker' ? setStage('cart') : stage === 'cart' ? (setStage('review'), !draft.supplier && setSupplierPickerOpen(true)) : void submit(true)}

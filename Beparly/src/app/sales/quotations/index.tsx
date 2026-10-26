@@ -1,6 +1,6 @@
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
 import { AppSymbol } from '@/components/app-symbol';
@@ -15,6 +15,7 @@ export default function Quotations() {
   const [showTypePicker, setShowTypePicker] = useState(false);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1); const [next, setNext] = useState<number | null>(null); const [error, setError] = useState('');
+  const [refreshCount, setRefreshCount] = useState(0);
   const businessId = session?.account?.business.id;
   useFocusEffect(useCallback(() => {
     if (!session || !businessId) return;
@@ -23,8 +24,10 @@ export default function Quotations() {
     void listQuotationDrafts(businessId).then(value => { if (active) setLocals(value.filter(row => row.state !== 'synced')); });
     void api.quotations(session.token, businessId, search, page).then(value => { if (active) { setRows(value.quotations); setNext(value.next_page); setError(''); setLoading(false); } }).catch(problem => { if (active) { setError(problem.message); setLoading(false); } });
     return () => { active = false; };
-  }, [session, businessId, search, page]));
-  return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}><ScrollView contentContainerStyle={styles.page}>
+  // Pull-to-refresh changes this generation to rerun the focused request.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, businessId, search, page, refreshCount]));
+  return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}><ScrollView contentContainerStyle={styles.page} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefreshCount((count) => count + 1)} />}>
     <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/sales' as Href)}><Text style={styles.link}>‹ Sales</Text></Pressable>
     <View style={styles.heading}><Text style={styles.title}>Quotations</Text><Pressable accessibilityRole="button" accessibilityLabel="Create quotation" style={styles.primary} onPress={() => setShowTypePicker(true)}><AppSymbol name="plus" size={20} color="#fff" /></Pressable></View>
     <Text style={styles.hint}>Offers do not reserve stock or create customer dues.</Text>

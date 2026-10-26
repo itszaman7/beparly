@@ -38,6 +38,7 @@ export const symbols = {
   close: { ios: 'xmark', android: 'close', web: 'close' },
   category: { ios: 'tag', android: 'category', web: 'category' },
   price: { ios: 'tag.fill', android: 'sell', web: 'sell' },
+  percent: { ios: 'percent', android: 'percent', web: 'percent' },
   package: { ios: 'shippingbox', android: 'package_2', web: 'package_2' },
   batch: { ios: 'square.stack', android: 'layers', web: 'layers' },
   barcode: { ios: 'barcode.viewfinder', android: 'barcode_scanner', web: 'qr_code_scanner' },

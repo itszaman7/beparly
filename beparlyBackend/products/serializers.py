@@ -43,7 +43,8 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         if self.instance and attrs.get('sku') == '':
             attrs['sku'] = 'V-' + self.instance.id.hex[:12].upper()
         if self.instance and attrs.get('barcode') == '':
-            attrs['barcode'] = 'B-' + self.instance.id.hex[:16].upper()
+            from .barcodes import generated_barcode
+            attrs['barcode'] = generated_barcode(self.instance.id)
         for field in ('purchase_price', 'retail_price', 'wholesale_price', 'minimum_stock'):
             if attrs.get(field) is not None and attrs[field] < 0:
                 raise serializers.ValidationError({field: 'Cannot be negative.'})
@@ -121,7 +122,8 @@ class ProductSerializer(serializers.ModelSerializer):
         if self.instance and attrs.get('sku') == '':
             attrs['sku'] = 'P-' + self.instance.id.hex[:12].upper()
         if self.instance and attrs.get('barcode') == '':
-            attrs['barcode'] = 'B-' + self.instance.id.hex[:16].upper()
+            from .barcodes import generated_barcode
+            attrs['barcode'] = generated_barcode(self.instance.id)
         if self.instance and self.instance.product_type == 'variant':
             restricted = set(attrs) - {'name', 'description', 'category', 'specifications', 'is_active'}
             if restricted:
@@ -147,7 +149,8 @@ class ProductSerializer(serializers.ModelSerializer):
         if not validated_data.get('sku'):
             validated_data['sku'] = 'P-' + validated_data['id'].hex[:12].upper()
         if not validated_data.get('barcode'):
-            validated_data['barcode'] = 'B-' + validated_data['id'].hex[:16].upper()
+            from .barcodes import generated_barcode
+            validated_data['barcode'] = generated_barcode(validated_data['id'])
         return super().create(validated_data)
 
 
@@ -210,6 +213,22 @@ class ProductUnitSerializer(serializers.ModelSerializer):
         if not value:
             raise serializers.ValidationError('Enter a package name.')
         return value
+
+    def validate_barcode(self, value):
+        return value.strip()
+
+    def create(self, validated_data):
+        validated_data['id'] = uuid.uuid4()
+        if not validated_data.get('barcode'):
+            from .barcodes import generated_barcode
+            validated_data['barcode'] = generated_barcode(validated_data['id'])
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        if validated_data.get('barcode') == '':
+            from .barcodes import generated_barcode
+            validated_data['barcode'] = generated_barcode(instance.id)
+        return super().update(instance, validated_data)
 
     def validate(self, attrs):
         if attrs.get('factor', self.instance.factor if self.instance else 0) <= 0:

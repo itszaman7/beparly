@@ -2,7 +2,7 @@ import { Platform } from 'react-native';
 
 export type Account = {
   user: { id: number; name: string; phone: string };
-  business: { id: number; name: string; phone?: string; address?: string; logo_url?: string | null; show_currency_symbol?: boolean; invoice_footer_text?: string; label_print_settings?: LabelPrintSettings; timezone?: string };
+  business: { id: number; name: string; phone?: string; address?: string; logo_url?: string | null; show_currency_symbol?: boolean; invoice_footer_text?: string; label_print_settings?: LabelPrintSettings; invoice_paper?: 'A4' | 'A5'; receipt_paper?: '58mm' | '80mm'; timezone?: string };
   role: 'owner' | 'employee';
   can_manage_purchases?: boolean;
 };
@@ -17,9 +17,10 @@ export type AuthResult = { token: string; user: Account['user']; businesses: Bus
 export type Employee = { id: number; name: string; phone: string; can_manage_locations: boolean; can_post_stock: boolean; can_manage_purchases: boolean };
 export type Supplier = { id: string; name: string; phone: string; address: string; area: string; district: string; notes: string; payment_terms: string; image_url: string | null; to_pay: string; supplier_advance: string; supplier_ledger_id?: string | null; opening_payables?: { id: string; amount: string; paid: string; due: string }[] };
 export type PurchaseLineInput = { product_id: string; variant_id?: string; unit_id?: string; batch_id?: string; quantity: string; unit_cost: string };
+export type AddedRecordNote = { text: string; actor: string; created_at: string };
 export type PurchaseCatalogItem = { product_id: string; variant_id: string; name: string; variant_label: string; sku: string; barcode: string; package_barcode_match?: boolean; base_unit: string; tracking_mode: Product['tracking_mode']; image_url: string | null; stock: string; last_purchase_cost: string | null; default_purchase_cost: string | null };
 export type PurchaseInput = { supplier_id: string; location_id: number; notes?: string; lines: PurchaseLineInput[] };
-export type PurchaseRecord = { id: string; number: string; status: 'draft' | 'completed' | 'cancelled'; supplier_id: string; supplier_name: string; location_id: number; location_name: string; total: string; paid: string; due: string; due_date?: string | null; notes: string; created_at: string; completed_at: string | null; cancellation_reason: string; lines?: (PurchaseLineInput & { id: number; product_name: string; variant_name: string; sku: string; image_url: string | null; base_unit: string; tracking_mode: Product['tracking_mode']; unit_name: string; lot_code: string; base_quantity: string; line_total: string })[]; operations?: { id: string; kind: string; amount: string; created_at: string }[] };
+export type PurchaseRecord = { added_notes?: AddedRecordNote[]; id: string; number: string; status: 'draft' | 'completed' | 'cancelled'; supplier_id: string; supplier_name: string; location_id: number; location_name: string; total: string; paid: string; due: string; due_date?: string | null; notes: string; created_at: string; completed_at: string | null; cancellation_reason: string; lines?: (PurchaseLineInput & { id: number; product_name: string; variant_name: string; sku: string; image_url: string | null; base_unit: string; tracking_mode: Product['tracking_mode']; unit_name: string; lot_code: string; base_quantity: string; line_total: string })[]; operations?: { id: string; kind: string; amount: string; created_at: string }[] };
 export type RecordAttachment = { id: string; name: string; content_type: string; size: number; created_at: string };
 export type PendingAttachment = { commandId: string; uri: string; name: string; contentType: string; size?: number; file?: File };
 export type AttachmentKind = 'expense' | 'purchase';
@@ -48,6 +49,9 @@ export type Variant = { id: string; label: string; sku: string; barcode: string;
   purchase_price: string | null; retail_price: string | null; wholesale_price: string | null;
   minimum_stock: string; tracking_mode: Product['tracking_mode']; is_active: boolean; sellable_stock?: string; out_of_stock?: boolean;
   selections: Record<string, string> };
+export type BarcodeTarget = { product_id: string; variant_id: string; product_name: string; variant_name: string;
+  product_type: 'simple' | 'variant'; sellable_stock: string; sku: string; barcode: string; base_unit: string; unit_id: string | null; unit_name: string; factor: string;
+  retail_price: string | null; wholesale_price: string | null };
 export type VariantInput = { id: string; sku: string; barcode?: string; base_unit: string;
   purchase_price?: string | null; retail_price?: string | null; wholesale_price?: string | null;
   minimum_stock?: string; tracking_mode?: Product['tracking_mode']; selections: Record<string, string>;
@@ -90,7 +94,8 @@ export type SalesHubSummary = { completed_sales: number; collected_against_sales
 export type DashboardActivityRecord = { id: string; kind: 'sale' | 'purchase'; number: string; party_name: string;
   amount: string; created_at: string };
 export type Contact = { id: string; name: string; phone: string; customer_type?: 'regular' | 'wholesale'; address?: string; district?: string; area?: string; notes?: string; is_customer: boolean; is_supplier: boolean; customer_ledger_id?: string | null; supplier_ledger_id?: string | null; customer_advance: string; supplier_advance: string; to_collect: string; to_pay: string };
-export type SaleRecord = { id: string; invoice_number: string; quotation_id?: string | null; customer_id: string | null; customer_name: string; customer_phone?: string; customer_address?: Record<string, string>; location_id: number; mode: 'quick' | 'manual'; price_tier: 'retail' | 'wholesale'; status: string; payment_status: string; due_date?: string | null; cancellation_reason?: string; subtotal: string; discount: string; delivery_fee?: string; total: string; net_total?: string; returned_amount?: string; paid: string; due: string; purchase_cost?: string; profit?: string; item_count?: number; item_quantity?: string; created_at: string; invoice_date?: string; billing_address?: Record<string, string>; delivery_address?: Record<string, string>; source?: string; notes?: string; payment_account_names?: string[]; lines?: { id: number; product_id: string; variant_id: string; name: string; variant: string; sku: string; unit: string; quantity: string; returned_quantity?: string; unit_price: string; inventory_cost?: string; image_url?: string; line_total: string }[]; payments?: { id: string; amount: string; account_id: string; account_name?: string; kind: string; created_at: string }[]; returns?: { id: string; reason: string; amount: string; due_reduction: string; refund_amount: string; refund_account_name: string | null; created_at: string; lines: { line_id: number; quantity: string; condition: 'sellable' | 'damaged' }[] }[] };
+export type SaleReturnReceiptRecord = { id: string; quantity: string; condition: 'sellable' | 'damaged' | 'inspection'; status: 'inspection' | 'restocked' | 'written_off' | 'returned_to_supplier'; disposition_id: string | null; supplier_id: string | null; location_id: number; evidence_reference: string; created_at: string };
+export type SaleRecord = { added_notes?: AddedRecordNote[]; id: string; invoice_number: string; quotation_id?: string | null; customer_id: string | null; customer_name: string; customer_phone?: string; customer_address?: Record<string, string>; location_id: number; mode: 'quick' | 'manual'; price_tier: 'retail' | 'wholesale'; status: string; payment_status: string; due_date?: string | null; cancellation_reason?: string; subtotal: string; discount: string; delivery_fee?: string; total: string; net_total?: string; returned_amount?: string; refund_outstanding?: string; paid: string; due: string; purchase_cost?: string; profit?: string; item_count?: number; item_quantity?: string; created_at: string; invoice_date?: string; billing_address?: Record<string, string>; delivery_address?: Record<string, string>; source?: string; notes?: string; payment_account_names?: string[]; lines?: { id: number; product_id: string; variant_id: string; batch_id?: string | null; name: string; variant: string; sku: string; unit: string; quantity: string; returned_quantity?: string; unit_price: string; inventory_cost?: string; image_url?: string; line_total: string }[]; payments?: { id: string; amount: string; account_id: string; account_name?: string; kind: string; created_at: string }[]; returns?: { id: string; reason: string; amount: string; due_reduction: string; delivery_credit: string; refund_amount: string; refund_outstanding: string; refund_account_name: string | null; created_at: string; lines: { id: number; line_id: number; quantity: string; received_quantity: string; condition: 'pending' | 'sellable' | 'damaged'; receipts: SaleReturnReceiptRecord[] }[] }[] };
 export type QuotationLineInput = { product_id: string; variant_id?: string; unit_id?: string | null; quantity: string; unit_price?: string };
 export type QuotationInput = { version?: number; customer_id?: string | null; customer_name?: string; customer_phone?: string; customer_address?: string; location_id: number; price_tier: 'retail' | 'wholesale'; valid_until?: string | null; delivery_address?: string; notes?: string; discount: string; delivery_fee: string; lines: QuotationLineInput[] };
 export type QuotationRecord = { id: string; number: string; status: 'draft' | 'pending' | 'accepted' | 'rejected' | 'cancelled' | 'expired'; version: number; sale_id: string | null; customer_id: string | null; customer_name: string; customer_phone: string; customer_address: string; location_id: number; location_name?: string; price_tier: 'retail' | 'wholesale'; valid_until: string | null; issued_at: string | null; delivery_address: string; notes: string; subtotal: string; discount: string; delivery_fee: string; total: string; created_at: string; updated_at: string; lines?: (QuotationLineInput & { id: number; product_name: string; variant_name: string; image_url?: string; sku: string; unit_name: string; conversion_factor: string; base_quantity: string; line_total: string; unit_price: string })[] };
@@ -258,7 +263,7 @@ export const api = {
   dashboardActivity: (token: string, businessId: number) =>
     request<{ activity: DashboardActivityRecord[] }>(`businesses/${businessId}/dashboard-activity/`, 'GET', undefined, token),
   businessProfile: (token: string, businessId: number) => request<{ business: BusinessProfile }>(`businesses/${businessId}/profile/`, 'GET', undefined, token),
-  updateBusinessProfile: (token: string, businessId: number, data: { phone?: string; address?: string; show_currency_symbol?: boolean; invoice_footer_text?: string; label_print_settings?: LabelPrintSettings }) => request<{ business: BusinessProfile }>(`businesses/${businessId}/profile/`, 'PATCH', data, token),
+  updateBusinessProfile: (token: string, businessId: number, data: { phone?: string; address?: string; show_currency_symbol?: boolean; invoice_footer_text?: string; label_print_settings?: LabelPrintSettings; invoice_paper?: 'A4' | 'A5'; receipt_paper?: '58mm' | '80mm' }) => request<{ business: BusinessProfile }>(`businesses/${businessId}/profile/`, 'PATCH', data, token),
   labelCalibrationUrl: (businessId: number) => `${apiBaseUrl()}/api/v1/businesses/${businessId}/label-calibration/`,
   uploadBusinessLogo,
   removeBusinessLogo: (token: string, businessId: number) => request<{ logo_url: null }>(`businesses/${businessId}/logo/`, 'DELETE', undefined, token),
@@ -289,6 +294,8 @@ export const api = {
     request<{ operation: { id: string; kind: string; amount: string } }>(`businesses/${businessId}/suppliers/${id}/operations/`, 'POST', data, token, commandId),
   purchases: (token: string, businessId: number, page = 1, supplierId?: string) =>
     request<{ purchases: PurchaseRecord[]; next_page: number | null }>(`businesses/${businessId}/purchases/?page=${page}${supplierId ? `&supplier_id=${supplierId}` : ''}`, 'GET', undefined, token),
+  addPurchaseNotes: (token: string, businessId: number, ids: string[], note: string, commandId: string) =>
+    request<{ notes: (AddedRecordNote & { record_id: string })[] }>(`businesses/${businessId}/purchases/batch/notes/`, 'POST', { ids, note }, token, commandId),
   purchasePaymentAccounts: (token: string, businessId: number) =>
     request<{ accounts: PurchasePaymentAccount[] }>(`businesses/${businessId}/purchases/payment-accounts/`, 'GET', undefined, token),
   purchase: (token: string, businessId: number, id: string) =>
@@ -321,6 +328,16 @@ export const api = {
   },
   purchaseCatalog: (token: string, businessId: number, search = '', page = 1) =>
     request<{ items: PurchaseCatalogItem[]; next_page: number | null }>(`businesses/${businessId}/products/purchase-catalog/?search=${encodeURIComponent(search)}&page=${page}`, 'GET', undefined, token),
+  barcodeLookup: (token: string, businessId: number, code: string) =>
+    request<{ target: BarcodeTarget }>(`businesses/${businessId}/products/barcodes/lookup/?code=${encodeURIComponent(code)}`, 'GET', undefined, token),
+  productBarcodeLabelUrl: (businessId: number, productId: string, options: { variantId?: string; unitId?: string; paper: string; count: number }) => {
+    const query = new URLSearchParams({ paper: options.paper, count: String(options.count) });
+    if (options.variantId) query.set('variant_id', options.variantId);
+    if (options.unitId) query.set('unit_id', options.unitId);
+    return `${apiBaseUrl()}/api/v1/businesses/${businessId}/products/${productId}/barcode-labels/?${query}`;
+  },
+  ensureProductBarcode: (token: string, businessId: number, productId: string, options: { variant_id?: string; unit_id?: string }) =>
+    request<{ barcode: string }>(`businesses/${businessId}/products/${productId}/barcode-labels/`, 'POST', options, token),
   productSummary: (token: string, businessId: number) =>
     request<ProductSummary>(`businesses/${businessId}/products/summary/`, 'GET', undefined, token),
   product: (token: string, businessId: number, id: string) =>
@@ -341,9 +358,9 @@ export const api = {
   uploadProductImage: uploadImage,
   removeProductImage: (token: string, businessId: number, id: string) =>
     request<{ product: Product }>(`businesses/${businessId}/products/${id}/image/`, 'DELETE', undefined, token),
-  manualReceipt: (token: string, businessId: number, data: { product_id: string; variant_id?: string; location_id: number; quantity: string; unit_cost: string; reason: string; financial_reason?: 'owner_contribution' | 'count_gain'; batch_id?: string; unit_id?: string }, commandId: string) =>
+  manualReceipt: (token: string, businessId: number, data: { product_id: string; variant_id?: string; location_id: number; quantity: string; unit_cost: string; reason: string; financial_reason: 'owner_contribution' | 'count_gain'; batch_id?: string; unit_id?: string }, commandId: string) =>
     request<{ movement_id: string }>(`businesses/${businessId}/stock/receipts/`, 'POST', data, token, commandId),
-  adjustment: (token: string, businessId: number, data: { product_id: string; variant_id?: string; location_id: number; quantity: string; increase: boolean; unit_cost?: string; reason: string; financial_reason?: 'owner_contribution' | 'count_gain' | 'shortage' | 'opening_correction'; opening_movement_id?: string; batch_id?: string; unit_id?: string }, commandId: string) =>
+  adjustment: (token: string, businessId: number, data: { product_id: string; variant_id?: string; location_id: number; quantity: string; increase: boolean; unit_cost?: string; reason: string; financial_reason: 'owner_contribution' | 'count_gain' | 'shortage' | 'opening_correction'; opening_movement_id?: string; batch_id?: string; unit_id?: string }, commandId: string) =>
     request<{ movement_id: string }>(`businesses/${businessId}/stock/adjustments/`, 'POST', data, token, commandId),
   locationStock: (token: string, businessId: number, locationId: number) =>
     request<{ stock: { product_id: string; name: string; quantity: string; unit: string }[] }>(`businesses/${businessId}/locations/${locationId}/stock/`, 'GET', undefined, token),
@@ -413,8 +430,10 @@ export const api = {
     request<{ contact: Contact }>(`businesses/${businessId}/contacts/`, 'POST', data, token),
   contact: (token: string, businessId: number, id: string) =>
     request<{ contact: Contact; statement: { date: string; description: string; kind: string; debit: string; credit: string }[] }>(`businesses/${businessId}/contacts/${id}/`, 'GET', undefined, token),
-  sales: (token: string, businessId: number, customerId?: string) =>
-    request<{ sales: SaleRecord[] }>(`businesses/${businessId}/sales/${customerId ? `?customer_id=${encodeURIComponent(customerId)}` : ''}`, 'GET', undefined, token),
+  sales: (token: string, businessId: number, customerId?: string, page = 1) =>
+    request<{ sales: SaleRecord[]; next_page: number | null }>(`businesses/${businessId}/sales/?page=${page}${customerId ? `&customer_id=${encodeURIComponent(customerId)}` : ''}`, 'GET', undefined, token),
+  addSaleNotes: (token: string, businessId: number, ids: string[], note: string, commandId: string) =>
+    request<{ notes: (AddedRecordNote & { record_id: string })[] }>(`businesses/${businessId}/sales/batch/notes/`, 'POST', { ids, note }, token, commandId),
   salesHubSummary: (token: string, businessId: number) =>
     request<SalesHubSummary>(`businesses/${businessId}/sales/hub-summary/`, 'GET', undefined, token),
   salesOptions: (token: string, businessId: number, includeContacts = true) =>
@@ -425,15 +444,25 @@ export const api = {
     request<{ customer: Contact; existing: boolean }>(`businesses/${businessId}/sales/customers/`, 'POST', data, token),
   quotationCustomers: (token: string, businessId: number, search = '', page = 1) =>
     request<{ customers: Pick<Contact, 'id' | 'name' | 'phone' | 'address' | 'area' | 'district'>[]; next_page: number | null }>(`businesses/${businessId}/sales/customers/?search=${encodeURIComponent(search)}&page=${page}`, 'GET', undefined, token),
-  createSale: (token: string, businessId: number, data: { mode: 'quick' | 'manual'; price_tier: 'retail' | 'wholesale'; location_id: number; income_category_id?: number; customer_id?: string; paid: string; due_date?: string; account_id?: string; discount: string; discount_type: 'amount' | 'percent'; delivery_fee?: string; billing_address?: Record<string, string>; delivery_address?: string; source?: string; notes?: string; invoice_date?: string; lines: { product_id: string; quantity: string; variant_id?: string }[] }, commandId: string) =>
+  createSale: (token: string, businessId: number, data: { mode: 'quick' | 'manual'; price_tier: 'retail' | 'wholesale'; location_id: number; income_category_id?: number; customer_id?: string; paid: string; due_date?: string; account_id?: string; discount: string; discount_type: 'amount' | 'percent'; delivery_fee?: string; billing_address?: Record<string, string>; delivery_address?: string; source?: string; notes?: string; invoice_date?: string; lines: { product_id: string; quantity: string; variant_id?: string; unit_id?: string }[] }, commandId: string) =>
     request<{ sale: SaleRecord }>(`businesses/${businessId}/sales/`, 'POST', data, token, commandId),
+  saleCommandStatus: (token: string, businessId: number, commandId: string) =>
+    request<{ status: 'confirmed'; request_hash: string; sale: SaleRecord }>(`businesses/${businessId}/sales/commands/${commandId}/`, 'GET', undefined, token),
   sale: (token: string, businessId: number, saleId: string) =>
     request<{ sale: SaleRecord }>(`businesses/${businessId}/sales/${saleId}/payments/`, 'GET', undefined, token),
   collectSalePayment: (token: string, businessId: number, saleId: string, data: { amount: string; account_id: string }, commandId: string) =>
     request<{ sale: SaleRecord }>(`businesses/${businessId}/sales/${saleId}/payments/`, 'POST', data, token, commandId),
   cancelSale: (token: string, businessId: number, saleId: string, reason: string, commandId: string) =>
     request<{ sale: SaleRecord }>(`businesses/${businessId}/sales/${saleId}/cancel/`, 'POST', { reason }, token, commandId),
-  returnSale: (token: string, businessId: number, saleId: string, data: { reason: string; refund_account_id?: string; lines: { line_id: number; quantity: string; condition: 'sellable' | 'damaged' }[] }, commandId: string) =>
+  returnSale: (token: string, businessId: number, saleId: string, data: { reason: string; credit_delivery_fee?: boolean; lines: { line_id: number; quantity: string }[] }, commandId: string) =>
     request<{ sale: SaleRecord; return_id: string }>(`businesses/${businessId}/sales/${saleId}/returns/`, 'POST', data, token, commandId),
-  documentUrl: (businessId: number, saleId: string, kind: 'invoice' | 'receipt' | 'label') => `${apiBaseUrl()}/api/v1/businesses/${businessId}/sales/${saleId}/documents/${kind}/`,
+  receiveSaleReturn: (token: string, businessId: number, saleId: string, returnId: string, data: { return_line_id: number; product_id: string; variant_id: string; batch_id: string | null; quantity: string; location_id: number; condition: 'sellable' | 'damaged' | 'inspection'; received_confirmed: true; evidence_reference: string }, commandId: string) =>
+    request<{ sale: SaleRecord; receipt_id: string }>(`businesses/${businessId}/sales/${saleId}/returns/${returnId}/receipts/`, 'POST', data, token, commandId),
+  decideSaleReturn: (token: string, businessId: number, saleId: string, returnId: string, receiptId: string, data: { action: 'restocked' | 'written_off' | 'returned_to_supplier'; decision_confirmed: true; evidence_reference: string; supplier_id: string | null }, commandId: string) =>
+    request<{ sale: SaleRecord; disposition_id: string }>(`businesses/${businessId}/sales/${saleId}/returns/${returnId}/receipts/${receiptId}/dispositions/`, 'POST', data, token, commandId),
+  refundSaleReturn: (token: string, businessId: number, saleId: string, returnId: string, data: { amount: string; account_id: string; refund_confirmed: true; confirmation_reference: string }, commandId: string) =>
+    request<{ sale: SaleRecord; refund_id: string }>(`businesses/${businessId}/sales/${saleId}/returns/${returnId}/refunds/`, 'POST', data, token, commandId),
+  documentUrl: (businessId: number, saleId: string, kind: 'invoice' | 'receipt' | 'label', paper?: string) => `${apiBaseUrl()}/api/v1/businesses/${businessId}/sales/${saleId}/documents/${kind}/${paper ? `?paper=${encodeURIComponent(paper)}` : ''}`,
+  batchDocumentUrl: (businessId: number, type: 'sale' | 'purchase', kind: 'invoice' | 'label' | 'summary', ids: string[]) =>
+    `${apiBaseUrl()}/api/v1/businesses/${businessId}/${type === 'sale' ? 'sales' : 'purchases'}/batch/documents/${kind}/?${ids.map(id => `id=${encodeURIComponent(id)}`).join('&')}`,
 };

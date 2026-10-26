@@ -1,6 +1,6 @@
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, RefreshControl, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Input, Text, XStack, YStack } from 'tamagui';
 
@@ -68,6 +68,7 @@ export function MoneyInScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [command, setCommand] = useState(commandId());
+  const [refreshCount, setRefreshCount] = useState(0);
 
   useFocusEffect(useCallback(() => {
     if (!token || !businessId) return;
@@ -88,7 +89,9 @@ export function MoneyInScreen() {
       .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : 'Could not load Money In.'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [token, businessId]));
+  // Reload available choices while preserving the entered receipt.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, businessId, refreshCount]));
 
   function change(update: () => void) { update(); setCommand(commandId()); setError(''); }
   const selectedReason = reasons.find((item) => item.id === reason) ?? reasons[0];
@@ -145,7 +148,7 @@ export function MoneyInScreen() {
       </Pressable>
       <Text color={palette.ink} fontSize={22} fontWeight="800">Money In</Text>
     </XStack>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, paddingBottom: 28, alignItems: 'center' }}>
+    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, paddingBottom: 28, alignItems: 'center' }} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefreshCount((count) => count + 1)} />}>
       <YStack width="100%" maxWidth={560} gap={18}>
         <YStack backgroundColor={palette.surface} borderWidth={1} borderColor={focused === 'amount' ? palette.primaryDeep : palette.border} borderRadius={20} padding={20} gap={12} {...elevation.card}>
           <Text color={palette.secondary} fontSize={13} fontWeight="700">Amount received</Text>

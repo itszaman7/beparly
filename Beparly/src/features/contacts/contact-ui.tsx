@@ -4,6 +4,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, useWin
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
 import { AppSymbol } from '@/components/app-symbol';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { PartyAvatar, PartyButton, PartyInfo, PartyMetric } from '@/features/contacts/party-ui';
 import { useAuth } from '@/features/auth/auth-context';
 import { formatBdt } from '@/features/products/product-rules';
@@ -15,13 +16,14 @@ type Role = 'all' | 'customer' | 'supplier';
 type Tab = 'sales' | 'activity';
 type StatementRow = { date: string; description: string; kind: string; debit: string; credit: string };
 
-function Shell({ title, children }: { title: string; children: React.ReactNode }) {
+function Shell({ title, children, onRefresh }: { title: string; children: React.ReactNode; onRefresh?: () => Promise<unknown> | void }) {
+  const Scroller = onRefresh ? RefreshableScrollView : ScrollView;
   return <SafeAreaView style={styles.safe}>
     <View style={styles.header}><View style={styles.headerInner}>
       <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.canGoBack() ? router.back() : router.replace('/more' as Href)} style={styles.back}><AppSymbol name="back" size={20} color="#006D64" /></Pressable>
       <Text style={styles.title}>{title}</Text>
     </View></View>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}><View style={styles.content}>{children}</View></ScrollView>
+    <Scroller onRefresh={onRefresh!} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}><View style={styles.content}>{children}</View></Scroller>
   </SafeAreaView>;
 }
 
@@ -99,7 +101,7 @@ export function ContactsScreen() {
     }
   }
 
-  return <Shell title="Contacts">
+  return <Shell title="Contacts" onRefresh={() => load()}>
     <View style={styles.topRow}><View style={{ flex: 1, minWidth: 200 }}><Text style={styles.pageHeading}>Customers & suppliers</Text><Text style={styles.muted}>Find people, check dues, and open their account ledger.</Text></View><PartyButton label={adding ? 'Close form' : '+ Add contact'} primary onPress={() => setAdding(!adding)} /></View>
     <TextInput value={query} onChangeText={setQuery} placeholder="Search name, phone or location" placeholderTextColor="#83918B" style={styles.search} accessibilityLabel="Search contacts" />
     <View style={styles.chips}><Chip label="All" selected={role === 'all'} onPress={() => setRole('all')} /><Chip label="Customers" selected={role === 'customer'} onPress={() => setRole('customer')} /><Chip label="Suppliers" selected={role === 'supplier'} onPress={() => setRole('supplier')} /></View>
@@ -132,21 +134,18 @@ export function ContactDetailsScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  useFocusEffect(useCallback(() => {
+  const load = useCallback(async () => {
     if (!session || !businessId || !id) return;
-    let active = true;
-    void api.contact(session.token, businessId, id).then((detail) => {
-      if (!active) return;
-      setContact(detail.contact); setStatement(detail.statement); setError('');
-    }).catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : 'Could not load contact.'); })
-      .finally(() => { if (active) setLoading(false); });
-    if (id) void api.sales(session.token, businessId, id).then((recent) => {
-      if (active) setSales(recent.sales);
-    }).catch(() => {});
-    return () => { active = false; };
-  }, [session, businessId, id]));
+    setLoading(true);
+    try {
+      const [detail, recent] = await Promise.all([api.contact(session.token, businessId, id), api.sales(session.token, businessId, id).catch(() => null)]);
+      setContact(detail.contact); setStatement(detail.statement); if (recent) setSales(recent.sales); setError('');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load contact.'); }
+    finally { setLoading(false); }
+  }, [session, businessId, id]);
+  useFocusEffect(useCallback(() => { void load(); }, [load]));
 
-  return <Shell title="Contact details">
+  return <Shell title="Contact details" onRefresh={load}>
     {!!error && <Text style={styles.error}>{error}</Text>}
     {loading && !contact ? <ActivityIndicator color="#006D64" /> : contact ? <>
       <View style={styles.profileHeader}><PartyAvatar name={contact.name} size={62} /><View style={{ flex: 1, minWidth: 180, gap: 4 }}><Text style={styles.profileName}>{contact.name}</Text><RoleLabels contact={contact} /></View>

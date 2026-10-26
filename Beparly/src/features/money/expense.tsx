@@ -1,6 +1,6 @@
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, View } from 'react-native';
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Input, Text, XStack, YStack } from 'tamagui';
 
@@ -68,6 +68,7 @@ export function ExpenseScreen() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
   const [sheetError, setSheetError] = useState('');
+  const [refreshCount, setRefreshCount] = useState(0);
 
   useFocusEffect(useCallback(() => {
     if (!token || !businessId) { setLoading(false); return; }
@@ -84,7 +85,9 @@ export function ExpenseScreen() {
       }).catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : 'Could not load expense choices.'); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [token, businessId]));
+  // Reload available choices while preserving the entered expense.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, businessId, refreshCount]));
 
   const selectedCategory = categories.find((item) => item.id === categoryId);
   const selectedAccount = accounts.find((item) => item.id === accountId);
@@ -142,7 +145,7 @@ export function ExpenseScreen() {
         style={{ width: 42, height: 42, justifyContent: 'center' }}><AppSymbol name="back" size={23} color={palette.primaryDeep} /></Pressable>
       <Text color={palette.ink} fontSize={22} fontWeight="800">Add Expense</Text>
     </XStack>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, paddingBottom: 40, alignItems: 'center' }}>
+    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, paddingBottom: 40, alignItems: 'center' }} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefreshCount((count) => count + 1)} />}>
       <YStack width="100%" maxWidth={560} gap={18}>
         {postedId ? <Text color={palette.ink}>Expense saved. Retry the document upload below.</Text> : <YStack backgroundColor={palette.surface} borderWidth={1} borderColor={palette.border} borderRadius={20} padding={20} gap={12} {...elevation.card}>
           <Text color={palette.secondary} fontSize={13} fontWeight="700">Amount spent</Text>

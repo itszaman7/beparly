@@ -1,6 +1,6 @@
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
@@ -21,6 +21,7 @@ export default function DuesScreen() {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [refreshCount, setRefreshCount] = useState(0);
   const canViewPurchases = session?.account?.role === 'owner' || session?.account?.can_manage_purchases;
 
   useFocusEffect(useCallback(() => {
@@ -54,7 +55,9 @@ export default function DuesScreen() {
     };
     void load();
     return () => { active = false; };
-  }, [session, businessId, canViewPurchases]));
+  // Pull-to-refresh changes this generation to rerun the focused request.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, businessId, canViewPurchases, refreshCount]));
 
   const receivable = useMemo(() => sales.reduce((sum, item) => sum + Number(item.due), 0), [sales]);
   const payable = useMemo(() => purchases.reduce((sum, item) => sum + Number(item.due), 0), [purchases]);
@@ -71,7 +74,7 @@ export default function DuesScreen() {
       </Pressable>
       <View style={styles.headerCopy}><Text style={styles.eyebrow}>OUTSTANDING BALANCES</Text><Text style={styles.title}>Dues</Text></View>
     </View>
-    <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+    <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefreshCount((count) => count + 1)} tintColor={palette.primaryDeep} />}>
       <View style={styles.switcher}>
         <Pressable onPress={() => { setDirection('collect'); setQuery(''); }} style={[styles.switchButton, direction === 'collect' && styles.switchActive]}>
           <Text style={[styles.switchText, direction === 'collect' && styles.switchTextActive]}>To collect</Text>

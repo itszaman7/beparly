@@ -42,6 +42,23 @@ class SaleDocumentTests(TestCase):
                 self.assertTrue(pdf.startswith(b'%PDF-'))
                 self.assertGreater(len(pdf), 1000)
 
+    def test_paper_variants_have_expected_geometry(self):
+        import re
+        sale = self.sale()
+        for kind, paper, expected in (('invoice', 'A4', (595.28, 841.89)),
+                                      ('invoice', 'A5', (419.53, 595.28)),
+                                      ('receipt', '58mm', (58 * 72 / 25.4, None)),
+                                      ('receipt', '80mm', (80 * 72 / 25.4, None))):
+            with self.subTest(kind=kind, paper=paper):
+                pdf = render_sale_document(sale, kind, paper)
+                box = re.search(rb'/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]', pdf)
+                self.assertIsNotNone(box)
+                self.assertAlmostEqual(float(box[1]), expected[0], delta=0.2)
+                if expected[1]:
+                    self.assertAlmostEqual(float(box[2]), expected[1], delta=0.2)
+        with self.assertRaises(ValueError):
+            render_sale_document(sale, 'receipt', 'A4')
+
     def test_invoice_and_receipt_embed_logo_without_local_path(self):
         image = BytesIO()
         Image.new('RGB', (120, 60), '#256b5d').save(image, format='PNG')

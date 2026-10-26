@@ -8,6 +8,7 @@ import { toast } from 'tamagui/toast';
 
 import { AppSymbol } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { palette, spacing, radius, appFontFamily } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
 import { cancelProduct, cancelStock, correctStock, pendingProducts, pendingStock, queueProduct, stageProductImage, syncProducts, syncStock } from '@/features/products/product-outbox';
@@ -325,7 +326,14 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
     catch (cause) { toast.error(cause instanceof Error ? cause.message : 'Could not create category.'); }
   }
   return <Shell title={editing ? 'Edit Product' : duplicateId ? 'Duplicate Product' : 'Add Product'}><KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-    <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+    <RefreshableScrollView onRefresh={async () => {
+      if (!token || !businessId) return;
+      try {
+        const [categoryResult, locationResult] = await Promise.all([api.categories(token, businessId), api.locations(token, businessId)]);
+        setCategories(categoryResult.categories); setLocations(locationResult.locations.filter((item) => item.is_active));
+        setLocationId((current) => locationResult.locations.some((item) => item.is_active && item.id === current) ? current : locationResult.locations.find((item) => item.is_active && item.is_default)?.id ?? null);
+      } catch (cause) { toast.error(cause instanceof Error ? cause.message : 'Could not refresh product choices.'); }
+    }} contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
       {!!duplicateId && <View style={styles.duplicateNotice}><AppSymbol name="duplicate" size={20} color={palette.purple} /><Text style={styles.muted}>Review this copy before saving. It starts with new SKU and barcode codes, no photo, stock, batches, packaging, or history.</Text></View>}
       <View style={styles.formSection}><FormHeading icon="products" title="Product details" help="Add the shared photo and name used to find this product." />
       <View style={styles.photoSection}>
@@ -379,7 +387,7 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
         <TrackingPicker value={tracking} onChange={setTracking} /></>}
         <Field label="Description" value={description} onChangeText={setDescription} />
       </>}
-    </ScrollView><View style={styles.footer}><Action label={duplicateLoading ? 'Loading product…' : busy ? 'Saving…' : duplicateId ? 'Create copy' : 'Save product'} onPress={() => void save()} disabled={busy || !duplicateReady} /></View>
+    </RefreshableScrollView><View style={styles.footer}><Action label={duplicateLoading ? 'Loading product…' : busy ? 'Saving…' : duplicateId ? 'Create copy' : 'Save product'} onPress={() => void save()} disabled={busy || !duplicateReady} /></View>
   </KeyboardAvoidingView>
     <ChoiceModal visible={categoryPickerOpen} title="Choose category" onClose={() => setCategoryPickerOpen(false)}>
       <Pressable accessibilityRole="button" onPress={() => { setCategory(null); setCategoryPickerOpen(false); }} style={[styles.choiceRow, !category && styles.choiceSelected]}><Text style={styles.choiceText}>No category</Text></Pressable>

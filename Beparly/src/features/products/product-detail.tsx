@@ -6,6 +6,7 @@ import { toast } from 'tamagui/toast';
 
 import { AppSymbol, type AppSymbolName } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { PressScale } from '@/components/motion';
 import { appFontFamily, elevation, palette, radius, spacing, typography } from '@/constants/design-system';
 import { auditDetails, auditTitle } from '@/features/audit/audit-format';
@@ -171,7 +172,7 @@ export function ProductDetailScreen() {
     </View>
     {loading && !product ? <View style={styles.center}><ActivityIndicator color={palette.primary} /><Text style={styles.softText}>Loading product…</Text></View> : !product ?
       <View style={styles.center}><Text style={styles.softText}>{error || 'Product not found.'}</Text><Pressable accessibilityRole="button" onPress={() => void load()} style={styles.retry}><Text style={styles.link}>Try again</Text></Pressable></View> :
-      <ScrollView contentContainerStyle={styles.content}>
+      <RefreshableScrollView onRefresh={load} contentContainerStyle={styles.content}>
         <View style={styles.hero}>
           {product.image_url ? <Image source={{ uri: product.image_url }} style={styles.heroImage} resizeMode="cover" /> :
             <View style={styles.heroImage}><Text style={styles.heroInitials}>{product.name.trim().slice(0, 2).toUpperCase()}</Text><Text style={styles.photoCaption}>No photo</Text></View>}
@@ -186,6 +187,7 @@ export function ProductDetailScreen() {
           {product.product_type === 'simple' && <ActionTile icon="plus" label="Add stock" tone="teal" onPress={() => stockRoute('adjustment')} />}
           <ActionTile icon="edit" label="Edit product" tone="blue" onPress={() => router.push(`/products/${id}/edit` as Href)} />
           <ActionTile icon="duplicate" label="Duplicate" tone="purple" onPress={() => router.push({ pathname: '/products/new', params: { duplicateId: id } })} />
+          <ActionTile icon="barcode" label="Print barcode label" tone="blue" onPress={() => router.push(`/products/${id}/barcode-label` as Href)} />
           {product.product_type === 'simple' && <>
             <ActionTile icon="transfer" label="Transfer" tone="blue" onPress={() => stockRoute('transfer')} />
             <ActionTile icon="waste" label="Waste" tone="amber" onPress={() => stockRoute('waste')} />
@@ -295,7 +297,7 @@ export function ProductDetailScreen() {
         </Section>
 
         </>}
-      </ScrollView>}
+      </RefreshableScrollView>}
 
     <Modal transparent visible={!!help} animationType="fade" onRequestClose={() => setHelp(null)}><Pressable style={styles.modalBackdrop} onPress={() => setHelp(null)}>
       <View style={styles.helpCard}><View style={styles.helpTitleRow}><AppSymbol name="info" size={22} color={palette.primaryDeep} /><Text style={styles.helpTitle}>{help?.title}</Text></View><Text style={styles.helpText}>{help?.message}</Text><Pressable accessibilityRole="button" onPress={() => setHelp(null)} style={styles.modalDone}><Text style={styles.link}>Got it</Text></Pressable></View>

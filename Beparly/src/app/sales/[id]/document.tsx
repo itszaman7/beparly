@@ -1,7 +1,8 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { File, Paths } from 'expo-file-system';
+import { fetch as expoFetch } from 'expo/fetch';
 import * as Print from 'expo-print';
-import { createElement, useEffect, useRef, useState } from 'react';
+import { createElement, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
@@ -11,10 +12,13 @@ import { api } from '@/services/api';
 
 export default function SaleDocument() {
   const { session } = useAuth();
-  const { id, kind } = useLocalSearchParams<{ id: string; kind?: string }>();
-  const format = kind === 'receipt' ? 'receipt' : kind === 'label' ? 'label' : 'invoice';
+  const { id, kind, batch, entity } = useLocalSearchParams<{ id: string; kind?: string; batch?: string; entity?: string }>();
+  const format = kind === 'summary' ? 'summary' : kind === 'receipt' ? 'receipt' : kind === 'label' ? 'label' : 'invoice';
+  const batchIds = useMemo(() => batch?.split(',').filter(Boolean) ?? [], [batch]);
+  const batchType = entity === 'purchase' ? 'purchase' : 'sale';
   const businessId = session?.account?.business.id;
-  const documentKey = `${businessId}:${id}:${format}`;
+  const [paper, setPaper] = useState<'A4' | 'A5' | '58mm' | '80mm'>(format === 'receipt' ? '80mm' : 'A4');
+  const documentKey = `${businessId}:${id}:${format}:${paper}:${batch ?? ''}:${batchType}`;
   const [loaded, setLoaded] = useState({ key: '', uri: '' });
   const [issue, setIssue] = useState({ key: '', message: '' });
   const [busy, setBusy] = useState(false);
@@ -23,14 +27,27 @@ export default function SaleDocument() {
   const error = issue.key === documentKey ? issue.message : '';
 
   useEffect(() => {
+    if (!session || !businessId || batchIds.length || format === 'label' || format === 'summary') return;
+    let active = true;
+    void api.businessProfile(session.token, businessId).then(({ business }) => {
+      if (active) setPaper(format === 'receipt' ? business.receipt_paper ?? '80mm' : business.invoice_paper ?? 'A4');
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [session, businessId, batchIds.length, format]);
+
+  useEffect(() => {
     if (!session || !businessId || !id) return;
     let cancelled = false;
     let objectUrl = '';
     webBlob.current = null;
-    const url = api.documentUrl(businessId, id, format);
+    const url = batchIds.length ? api.batchDocumentUrl(businessId, batchType, format === 'summary' ? 'summary' : format === 'label' ? 'label' : 'invoice', batchIds)
+      : api.documentUrl(businessId, id, format === 'summary' ? 'invoice' : format, format === 'receipt' || format === 'invoice' ? paper : undefined);
     if (Platform.OS === 'web') {
       void fetch(url, { headers: { Authorization: `Bearer ${session.token}` } })
-        .then((response) => response.ok ? response.blob() : Promise.reject(new Error('Could not load document.')))
+        .then(async (response) => {
+          if (!response.ok) { const result = await response.json().catch(() => null); throw new Error(result?.error?.message ?? 'Could not load document.'); }
+          return response.blob();
+        })
         .then((blob) => {
           if (cancelled) return;
           webBlob.current = blob;
@@ -40,7 +57,12 @@ export default function SaleDocument() {
         .catch((problem) => { if (!cancelled) setIssue({ key: documentKey, message: problem instanceof Error ? problem.message : 'Could not load document.' }); });
     } else {
       const file = new File(Paths.cache, `${id}-${format}-${Date.now()}.pdf`);
-      void File.downloadFileAsync(url, file, { headers: { Authorization: `Bearer ${session.token}` } })
+      void (batchIds.length ? expoFetch(url, { headers: { Authorization: `Bearer ${session.token}` } })
+        .then(async (response) => {
+          if (!response.ok) { const result = await response.json().catch(() => null); throw new Error(result?.error?.message ?? 'Could not load document.'); }
+          await file.write(await response.bytes());
+          return file;
+        }) : File.downloadFileAsync(url, file, { headers: { Authorization: `Bearer ${session.token}` } }))
         .then((downloaded) => { if (!cancelled) setLoaded({ key: documentKey, uri: downloaded.uri }); })
         .catch((problem) => { if (!cancelled) setIssue({ key: documentKey, message: problem instanceof Error ? problem.message : 'Could not load document.' }); });
     }
@@ -49,7 +71,7 @@ export default function SaleDocument() {
       webBlob.current = null;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [session, businessId, id, format, documentKey]);
+  }, [session, businessId, id, format, paper, documentKey, batchType, batchIds]);
 
   function downloadWeb() {
     if (!source) return;
@@ -107,8 +129,13 @@ export default function SaleDocument() {
   return <SafeAreaView style={styles.safe}><View style={styles.screen}>
     <View style={styles.header}>
       <Pressable onPress={() => router.back()}><Text style={styles.back}>‹</Text></Pressable>
-      <View><Text style={styles.eyebrow}>{format === 'invoice' ? 'SALES INVOICE' : format === 'receipt' ? 'POS RECEIPT' : 'SALES LABEL'}</Text><Text style={styles.title}>Printable document</Text></View>
+      <View><Text style={styles.eyebrow}>{format === 'summary' ? 'INTERNAL PURCHASE SUMMARY' : format === 'invoice' ? 'SALES INVOICE' : format === 'receipt' ? 'POS RECEIPT' : 'SALES LABEL'}</Text><Text style={styles.title}>{batchIds.length ? `${batchIds.length} printable documents` : 'Printable document'}</Text></View>
     </View>
+    {!batchIds.length && (format === 'invoice' || format === 'receipt') ? <View style={styles.actions}>
+      {(format === 'invoice' ? ['A4', 'A5'] : ['58mm', '80mm']).map(value => <Pressable key={value} accessibilityRole="button"
+        accessibilityState={{ selected: paper === value }} onPress={() => setPaper(value as typeof paper)}
+        style={[styles.secondary, paper === value && { backgroundColor: '#AEE6D9' }]}><Text style={styles.secondaryText}>{value}</Text></Pressable>)}
+    </View> : null}
     {error ? <Text style={styles.error}>{error}</Text> : null}
     {source ? Platform.OS === 'web'
       ? <View style={styles.preview}>{createElement('iframe', { title: 'Printable document', src: source, style: { width: '100%', height: '100%', border: 0 } })}</View>

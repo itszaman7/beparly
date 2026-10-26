@@ -56,6 +56,8 @@ class Business(models.Model):
     show_currency_symbol = models.BooleanField(default=True)
     invoice_footer_text = models.CharField(max_length=500, default='Thank you for your business.', blank=True)
     label_print_settings = models.JSONField(default=dict, blank=True)
+    invoice_paper = models.CharField(max_length=2, default='A4')
+    receipt_paper = models.CharField(max_length=4, default='80mm')
     logo = models.ImageField(upload_to='business_logos/', blank=True, null=True)
     timezone = models.CharField(max_length=64, default='Asia/Dhaka')
     expiry_warning_days = models.PositiveSmallIntegerField(default=30)

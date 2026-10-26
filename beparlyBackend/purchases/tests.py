@@ -153,7 +153,7 @@ class PurchaseTests(TestCase):
                 '32', purchase=purchase, account=self.cash)
         before = Purchase.objects.count()
         post_adjustment(self.product, self.location, Decimal('1'), True, self.owner,
-            uuid.uuid4(), 'Count gain', unit_cost=Decimal('8'))
+        uuid.uuid4(), 'Count gain', unit_cost=Decimal('8'), financial_reason='count_gain')
         self.assertEqual(Purchase.objects.count(), before)
         self.assertEqual(Contact.objects.filter(business=self.business, is_supplier=True).count(), 1)
 

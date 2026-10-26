@@ -1,9 +1,10 @@
 import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Switch, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { Image, Pressable, StyleSheet, Switch, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { useAuth } from '@/features/auth/auth-context';
 import { api, resolveAssetUrl } from '@/services/api';
 import { blurWebFocus } from '@/utils/web-focus';
@@ -16,18 +17,19 @@ export default function BusinessSettings() {
   const [address, setAddress] = useState('');
   const [showSymbol, setShowSymbol] = useState(true);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [saved, setSaved] = useState({ phone: '', address: '', showSymbol: true });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!session || !id) return;
-    void api.businessProfile(session.token, id).then(({ business }) => {
-      setPhone(business.phone ?? '');
-      setAddress(business.address ?? '');
-      setShowSymbol(business.show_currency_symbol ?? true);
-      setLogoUrl(resolveAssetUrl(business.logo_url));
-    }).catch((error) => setMessage(error instanceof Error ? error.message : 'Could not load business settings.'));
+    try { const { business } = await api.businessProfile(session.token, id);
+      const next = { phone: business.phone ?? '', address: business.address ?? '', showSymbol: business.show_currency_symbol ?? true };
+      setPhone(next.phone); setAddress(next.address); setShowSymbol(next.showSymbol); setSaved(next);
+      setLogoUrl(resolveAssetUrl(business.logo_url)); setMessage('');
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not load business settings.'); }
   }, [session, id]);
+  useEffect(() => { const timeout = setTimeout(() => { void load(); }, 0); return () => clearTimeout(timeout); }, [load]);
 
   async function chooseLogo() {
     if (!session || !id || busy) return;
@@ -69,6 +71,7 @@ export default function BusinessSettings() {
     setMessage('');
     try {
       await api.updateBusinessProfile(session.token, id, { phone, address, show_currency_symbol: showSymbol });
+      setSaved({ phone, address, showSymbol });
       await refreshBusinesses();
       setMessage('Business settings saved.');
     } catch (error) {
@@ -79,7 +82,7 @@ export default function BusinessSettings() {
   }
 
   if (!session?.account) return null;
-  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.screen}>
+  return <SafeAreaView style={styles.safe}><RefreshableScrollView onRefresh={() => { if (phone !== saved.phone || address !== saved.address || showSymbol !== saved.showSymbol) { setMessage('Save or discard your changes before refreshing.'); return; } return load(); }} contentContainerStyle={styles.screen}>
     <Pressable onPress={() => { blurWebFocus(); router.back(); }}><Text style={styles.back}>‹ Back</Text></Pressable>
     <Text style={styles.title}>Business settings</Text>
     <Text style={styles.muted}>These details appear on sales invoices and receipts. Currency display applies to everyone in this business.</Text>
@@ -101,7 +104,7 @@ export default function BusinessSettings() {
     <View style={styles.setting}><View style={styles.settingText}><Text style={styles.label}>Show ৳ currency symbol</Text><Text style={styles.muted}>Hides only the symbol; amounts remain in BDT.</Text></View><Switch value={showSymbol} onValueChange={setShowSymbol} disabled={!owner || busy} /></View>
     {owner && <Pressable onPress={() => void save()} disabled={busy} style={[styles.save, busy && styles.disabled]}><Text style={styles.saveText}>{busy ? 'Saving…' : 'Save changes'}</Text></Pressable>}
     {message ? <Text style={styles.message}>{message}</Text> : null}
-  </ScrollView></SafeAreaView>;
+  </RefreshableScrollView></SafeAreaView>;
 }
 
 const styles = StyleSheet.create({

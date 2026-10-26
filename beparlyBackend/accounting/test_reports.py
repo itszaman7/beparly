@@ -6,6 +6,7 @@ from django.test import TestCase
 from accounts.models import AuthSession, Business, BusinessMember, User
 from .models import MoneyAccount
 from .services import cr, dr, ledger, post, setup_business
+from .formatting import decimal_text
 from products.models import Product, StockBatch
 from stockkeeper.models import StockLocation
 from stockkeeper.services import receive, business_today, post_transfer, post_waste
@@ -13,6 +14,12 @@ from uuid import uuid4
 
 
 class FinancialSummaryTests(TestCase):
+    def test_report_decimal_contract_preserves_value_without_database_scale(self):
+        self.assertEqual([decimal_text(value) for value in (
+            Decimal('20.0000000'), Decimal('-40.0000000'), Decimal('3.000'),
+            Decimal('0E-7'), Decimal('1E-7'), Decimal('10.2500000'))],
+            ['20', '-40', '3', '0', '0.0000001', '10.25'])
+
     def setUp(self):
         self.user = User.objects.create_user(phone='01712345678', password='OwnerPass#83')
         self.business = Business.objects.create(name='Report Shop')

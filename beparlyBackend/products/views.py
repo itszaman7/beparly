@@ -8,7 +8,7 @@ from django.core.files.storage import default_storage
 from django.db import IntegrityError, transaction
 from django.db.models import Case, DecimalField, Exists, F, IntegerField, OuterRef, Q, Sum, Value, Subquery, ExpressionWrapper, When
 from django.db.models.functions import Coalesce
-from django.http import JsonResponse
+from django.http import JsonResponse, HttpResponse
 from PIL import Image, UnidentifiedImageError
 from rest_framework import serializers
 from rest_framework.parsers import MultiPartParser
@@ -20,6 +20,7 @@ from accounts.models import BusinessMember
 from .models import CatalogCommand, Category, Product, ProductAttribute, ProductAttributeValue, ProductVariant, ProductUnit, StockBatch
 from .serializers import CategorySerializer, ProductListSerializer, ProductSerializer, ProductVariantSerializer, ProductUnitSerializer, StockBatchSerializer
 from .variants import make_attributes, make_variant
+from .barcodes import BarcodeConflict, assert_barcode_available, exact_barcode_target, generated_barcode
 from stockkeeper.models import StockMovement
 from audit.services import differences, record, snapshot
 
@@ -30,6 +31,136 @@ PRODUCT_FIELDS = ('name', 'product_type', 'specifications', 'description', 'sku'
 CATEGORY_FIELDS = ('name', 'parent_id', 'is_active')
 PACKAGE_FIELDS = ('name', 'factor', 'selling_price', 'barcode', 'is_active')
 BATCH_FIELDS = ('lot_code', 'manufactured_on', 'expires_on')
+
+
+class BarcodeLookupView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def get(self, request, business_id):
+        _, problem = access(request, business_id)
+        if problem:
+            return problem
+        code = request.query_params.get('code', '').strip()
+        if not code or len(code) > 100:
+            return error('invalid_input', 'Scan a valid barcode.')
+        try:
+            target = exact_barcode_target(business_id, code)
+        except BarcodeConflict as exc:
+            return error('ambiguous_barcode', str(exc), 409)
+        if not target:
+            return error('not_found', 'No active product has this barcode.', 404)
+        variant, unit = target
+        from stockkeeper.models import StockBalance
+        available = StockBalance.objects.filter(variant=variant).aggregate(total=Sum('quantity'))['total'] or 0
+        return JsonResponse({'target': {
+            'product_id': str(variant.product_id), 'variant_id': str(variant.pk),
+            'product_type': variant.product.product_type, 'sellable_stock': str(available),
+            'product_name': variant.product.name, 'variant_name': variant.label,
+            'sku': variant.sku, 'barcode': code,
+            'base_unit': variant.base_unit, 'unit_id': str(unit.pk) if unit else None,
+            'unit_name': unit.name if unit else variant.base_unit,
+            'factor': str(unit.factor) if unit else '1',
+            'retail_price': str(unit.selling_price if unit and unit.selling_price is not None else variant.retail_price) if (unit and unit.selling_price is not None or variant.retail_price is not None) else None,
+            'wholesale_price': str(unit.selling_price if unit and unit.selling_price is not None else variant.wholesale_price) if (unit and unit.selling_price is not None or variant.wholesale_price is not None) else None,
+        }})
+
+
+class ProductBarcodeLabelView(APIView):
+    authentication_classes = []
+    permission_classes = []
+
+    def post(self, request, business_id, product_id):
+        """Assign a missing legacy barcode without changing an existing identity."""
+        _, problem = access(request, business_id)
+        if problem:
+            return problem
+        if not isinstance(request.data, dict):
+            return error('invalid_input', 'Choose a valid label item.')
+        try:
+            variant_id = uuid.UUID(str(request.data['variant_id'])) if request.data.get('variant_id') else None
+            unit_id = uuid.UUID(str(request.data['unit_id'])) if request.data.get('unit_id') else None
+        except (ValueError, TypeError):
+            return error('invalid_input', 'Choose a valid variant or package.')
+        try:
+            with transaction.atomic():
+                from accounts.models import Business
+                Business.objects.select_for_update().get(pk=business_id)
+                product = Product.objects.select_for_update().filter(business_id=business_id, pk=product_id).first()
+                if not product:
+                    return error('not_found', 'Product not found.', 404)
+                variant = product.variants.select_for_update().filter(pk=variant_id, is_default=False).first() if variant_id else product.variants.select_for_update().filter(is_default=True).first()
+                if not variant:
+                    return error('invalid_input', 'Choose a variant for this label.')
+                unit = variant.packages.select_for_update().filter(pk=unit_id, is_active=True).first() if unit_id else None
+                if unit_id and not unit:
+                    return error('invalid_input', 'Choose a package of this variant.')
+                if unit:
+                    if not unit.barcode.strip():
+                        code = generated_barcode(unit.pk)
+                        assert_barcode_available(business_id, code, unit_id=unit.pk)
+                        unit.barcode = code
+                        unit.save(update_fields=['barcode'])
+                        record(business_id=business_id, actor=current_session(request).user,
+                               entity_type='package', entity_id=unit.pk, subject=unit.name,
+                               product_id=product.pk, action='updated',
+                               changes={'barcode': {'before': '', 'after': code}})
+                    return JsonResponse({'barcode': unit.barcode})
+                if variant.is_default:
+                    code = product.barcode.strip() or variant.barcode.strip() or generated_barcode(product.pk)
+                    assert_barcode_available(business_id, code, product_id=product.pk, variant_id=variant.pk)
+                    if product.barcode != code:
+                        before = product.barcode
+                        product.barcode = code
+                        product.save(update_fields=['barcode', 'updated_at'])
+                        record(business_id=business_id, actor=current_session(request).user,
+                               entity_type='product', entity_id=product.pk, subject=product.name,
+                               product_id=product.pk, action='updated',
+                               changes={'barcode': {'before': before, 'after': code}})
+                    if variant.barcode != code:
+                        variant.barcode = code
+                        variant.save(update_fields=['barcode', 'updated_at'])
+                    return JsonResponse({'barcode': code})
+                if not variant.barcode.strip():
+                    code = generated_barcode(variant.pk)
+                    assert_barcode_available(business_id, code, variant_id=variant.pk)
+                    variant.barcode = code
+                    variant.save(update_fields=['barcode', 'updated_at'])
+                    record(business_id=business_id, actor=current_session(request).user,
+                           entity_type='variant', entity_id=variant.pk, subject=variant.label,
+                           product_id=product.pk, action='updated',
+                           changes={'barcode': {'before': '', 'after': code}})
+                return JsonResponse({'barcode': variant.barcode})
+        except BarcodeConflict as exc:
+            return error('duplicate_barcode', str(exc), 409)
+        except IntegrityError:
+            return error('duplicate_barcode', 'Generated barcode already exists.', 409)
+
+    def get(self, request, business_id, product_id):
+        _, problem = access(request, business_id)
+        if problem:
+            return problem
+        product = Product.objects.filter(business_id=business_id, pk=product_id).first()
+        if not product:
+            return error('not_found', 'Product not found.', 404)
+        variant_id = request.query_params.get('variant_id')
+        variant = product.variants.filter(pk=variant_id).first() if variant_id else product.variants.filter(is_default=True).first()
+        if not variant:
+            return error('invalid_input', 'Choose a variant for this label.')
+        unit_id = request.query_params.get('unit_id')
+        unit = variant.packages.filter(pk=unit_id, is_active=True).first() if unit_id else None
+        if unit_id and not unit:
+            return error('invalid_input', 'Choose a package of this variant.')
+        paper = request.query_params.get('paper', '50x30')
+        try:
+            count = int(request.query_params.get('count', '1'))
+            from .labels import render_product_labels
+            pdf = render_product_labels(product, variant, unit, paper=paper, count=count)
+        except (ValueError, ImportError) as exc:
+            return error('invalid_input', str(exc))
+        response = HttpResponse(pdf, content_type='application/pdf')
+        response['Content-Disposition'] = f'inline; filename="product-{product.pk}-barcode.pdf"'
+        return response
 
 
 class PurchaseCatalogView(APIView):
@@ -317,6 +448,9 @@ class CatalogView(APIView):
                     product.save(update_fields=['retail_price', 'updated_at'])
                 else:
                     default_variant = product.variants.get(is_default=True)
+                assert_barcode_available(business_id, product.barcode, product_id=product.pk)
+                for created_variant in product.variants.filter(is_default=False):
+                    assert_barcode_available(business_id, created_variant.barcode, variant_id=created_variant.pk)
                 record(business_id=business_id, actor=current_session(request).user,
                        entity_type='product', entity_id=product.pk, subject=product.name, product_id=product.pk,
                        action='created', changes={'after': snapshot(product, PRODUCT_FIELDS)},
@@ -335,6 +469,8 @@ class CatalogView(APIView):
                 CatalogCommand.objects.create(business_id=business_id, command_id=command_id, product=product)
         except serializers.ValidationError as exc:
             return JsonResponse({'error': {'code': 'invalid_input', 'message': 'Check variant fields.', 'fields': exc.detail}}, status=400)
+        except BarcodeConflict as exc:
+            return error('duplicate_barcode', str(exc), 409)
         except ValueError as exc:
             return error('invalid_stock', str(exc))
         except IntegrityError:
@@ -393,6 +529,7 @@ class ProductDetailView(APIView):
                     return invalid(serializer)
                 before = snapshot(product, PRODUCT_FIELDS)
                 product = serializer.save()
+                assert_barcode_available(business_id, product.barcode, product_id=product.pk)
                 if product.product_type == 'simple':
                     ProductVariant.objects.filter(product=product, is_default=True).update(**{
                         field: getattr(product, field) for field in ('sku', 'barcode', 'base_unit', 'purchase_price',
@@ -405,6 +542,8 @@ class ProductDetailView(APIView):
                            action=action, changes=changes, reference_id=command_id)
                 if command_id:
                     CatalogCommand.objects.create(business_id=business_id, command_id=command_id, product=product)
+        except BarcodeConflict as exc:
+            return error('duplicate_barcode', str(exc), 409)
         except IntegrityError:
             return error('duplicate_product', 'SKU or barcode already exists in this business.', 409)
         return JsonResponse({'product': ProductSerializer(product).data})
@@ -575,10 +714,15 @@ class ProductUnitsView(APIView):
             return error('invalid_variant', str(exc), 409)
         try:
             with transaction.atomic():
+                from accounts.models import Business
+                Business.objects.select_for_update().get(pk=business_id)
                 unit = serializer.save(product=product, variant=variant)
+                assert_barcode_available(business_id, unit.barcode, unit_id=unit.pk)
                 record(business_id=business_id, actor=current_session(request).user,
                        entity_type='package', entity_id=unit.pk, subject=unit.name, product_id=product.pk,
                        action='created', changes={'after': snapshot(unit, PACKAGE_FIELDS)})
+        except BarcodeConflict as exc:
+            return error('duplicate_barcode', str(exc), 409)
         except IntegrityError:
             return error('duplicate_unit', 'This package name already exists.', 409)
         return JsonResponse({'unit': ProductUnitSerializer(unit).data}, status=201)
@@ -600,13 +744,18 @@ class ProductUnitDetailView(APIView):
             return invalid(serializer)
         try:
             with transaction.atomic():
+                from accounts.models import Business
+                Business.objects.select_for_update().get(pk=business_id)
                 before = snapshot(unit, PACKAGE_FIELDS)
                 unit = serializer.save()
+                assert_barcode_available(business_id, unit.barcode, unit_id=unit.pk)
                 changes = differences(before, snapshot(unit, PACKAGE_FIELDS))
                 if changes:
                     record(business_id=business_id, actor=current_session(request).user,
                            entity_type='package', entity_id=unit.pk, subject=unit.name, product_id=product_id,
                            action='updated', changes=changes)
+        except BarcodeConflict as exc:
+            return error('duplicate_barcode', str(exc), 409)
         except IntegrityError:
             return error('duplicate_unit', 'This package name already exists.', 409)
         return JsonResponse({'unit': serializer.data})
@@ -774,6 +923,7 @@ class ProductVariantsView(APIView):
                 attributes = {item.name.casefold(): (item, {value.value.casefold(): value for value in item.values.all()})
                               for item in product.attributes.prefetch_related('values')}
                 variant = make_variant(product, request.data, attributes)
+                assert_barcode_available(business_id, variant.barcode, variant_id=variant.pk)
                 CatalogCommand.objects.create(business_id=business_id, command_id=command_id, product=product)
                 record(business_id=business_id, actor=current_session(request).user,
                        entity_type='variant', entity_id=variant.pk, subject=variant.label, product_id=product.pk,
@@ -784,6 +934,8 @@ class ProductVariantsView(APIView):
                 product.save(update_fields=['retail_price', 'updated_at'])
         except serializers.ValidationError as exc:
             return JsonResponse({'error': {'code': 'invalid_input', 'message': 'Check variant fields.', 'fields': exc.detail}}, status=400)
+        except BarcodeConflict as exc:
+            return error('duplicate_barcode', str(exc), 409)
         except IntegrityError:
             return error('duplicate_variant', 'SKU, barcode or combination already exists.', 409)
         return JsonResponse({'variant': ProductVariantSerializer(variant).data}, status=201)
@@ -829,8 +981,11 @@ class ProductVariantDetailView(APIView):
             return error('stock_remains', 'Clear variant stock before deactivation.', 409)
         try:
             with transaction.atomic():
+                from accounts.models import Business
+                Business.objects.select_for_update().get(pk=business_id)
                 before = ProductVariantSerializer(variant).data
                 variant = serializer.save()
+                assert_barcode_available(business_id, variant.barcode, variant_id=variant.pk)
                 changes = differences(before, ProductVariantSerializer(variant).data)
                 if changes:
                     record(business_id=business_id, actor=current_session(request).user,
@@ -839,6 +994,8 @@ class ProductVariantDetailView(APIView):
                 prices = list(variant.product.variants.filter(is_active=True, retail_price__isnull=False).values_list('retail_price', flat=True))
                 variant.product.retail_price = min(prices) if prices else None
                 variant.product.save(update_fields=['retail_price', 'updated_at'])
+        except BarcodeConflict as exc:
+            return error('duplicate_barcode', str(exc), 409)
         except IntegrityError:
             return error('duplicate_variant', 'SKU or barcode already exists.', 409)
         return JsonResponse({'variant': ProductVariantSerializer(variant).data})

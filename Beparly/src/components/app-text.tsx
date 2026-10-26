@@ -5,10 +5,11 @@ import { appFontFamily } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
 
 function applyCurrencyPreference(node: React.ReactNode, showCurrencySymbol: boolean): React.ReactNode {
-  if (typeof node === 'string') return showCurrencySymbol ? node : node.replaceAll('৳', '');
-  if (Array.isArray(node)) return node.map((item) => applyCurrencyPreference(item, showCurrencySymbol));
+  if (showCurrencySymbol) return node;
+  if (typeof node === 'string') return node.replaceAll('৳', '');
+  if (Array.isArray(node)) return React.Children.map(node, (item) => applyCurrencyPreference(item, false));
   if (React.isValidElement<{ children?: React.ReactNode }>(node)) {
-    return React.cloneElement(node, {}, applyCurrencyPreference(node.props.children, showCurrencySymbol));
+    return React.cloneElement(node, {}, applyCurrencyPreference(node.props.children, false));
   }
   return node;
 }

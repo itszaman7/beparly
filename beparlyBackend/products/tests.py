@@ -2,6 +2,7 @@ import io
 import json
 import uuid
 import tempfile
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.test import TestCase, override_settings
@@ -13,6 +14,7 @@ from accounts.models import Business, BusinessMember, User
 from audit.models import AuditEvent
 
 from .models import Category, Product, ProductVariant, ProductUnit, StockBatch
+from .barcodes import generated_barcode
 from stockkeeper.models import StockBalance, StockMovement, StockLocation
 from purchases.services import save_draft, complete_purchase
 from accounting.models import Contact
@@ -44,6 +46,86 @@ class ProductApiTests(TestCase):
             return getattr(self.client, method)(path, **headers)
         return getattr(self.client, method)(path, json.dumps(data), content_type='application/json', **headers)
 
+    def test_blank_product_and_package_codes_are_generated_and_scannable(self):
+        created = self.call('post', self.base + 'products/', {'name': 'Biscuits'}, command=uuid.uuid4())
+        self.assertEqual(created.status_code, 201, created.content)
+        product = created.json()['product']
+        self.assertTrue(product['barcode'].startswith('B-'))
+        self.assertLessEqual(len(product['barcode']), 16)
+        self.assertEqual(self.call('get', self.base + f"products/{product['id']}/barcode-labels/?paper=50x30").status_code, 200)
+        package = self.call('post', self.base + f"products/{product['id']}/units/",
+            {'name': 'Carton', 'factor': '12'})
+        self.assertEqual(package.status_code, 201, package.content)
+        unit = package.json()['unit']
+        self.assertTrue(unit['barcode'].startswith('B-'))
+        self.assertNotEqual(unit['barcode'], product['barcode'])
+        lookup = self.call('get', self.base + f"products/barcodes/lookup/?code={unit['barcode']}")
+        self.assertEqual(lookup.status_code, 200, lookup.content)
+        self.assertEqual(lookup.json()['target']['unit_id'], unit['id'])
+
+    def test_legacy_blank_barcode_can_be_assigned_then_printed_once(self):
+        product = Product.objects.create(business=self.business, name='Old biscuits', sku='OLD-1', barcode='')
+        path = self.base + f'products/{product.pk}/barcode-labels/'
+        self.assertEqual(self.call('get', path).status_code, 400)
+        first = self.call('post', path, {})
+        self.assertEqual(first.status_code, 200, first.content)
+        code = first.json()['barcode']
+        self.assertTrue(code.startswith('B-'))
+        self.assertEqual(self.call('post', path, {}).json()['barcode'], code)
+        product.refresh_from_db()
+        self.assertEqual(product.barcode, code)
+        self.assertEqual(product.variants.get(is_default=True).barcode, code)
+        self.assertEqual(AuditEvent.objects.filter(product_id=product.pk, entity_type='product', action='updated').count(), 1)
+        pdf = self.call('get', path)
+        self.assertEqual(pdf.status_code, 200, pdf.content[:300])
+        self.assertTrue(pdf.content.startswith(b'%PDF-'))
+        self.assertEqual(self.call('get', self.base + f'products/barcodes/lookup/?code={code}').status_code, 200)
+        self.assertEqual(self.call('post', path, {}, token=self.other_token).status_code, 404)
+
+    def test_legacy_variant_and_package_codes_are_scoped_and_idempotent(self):
+        product = Product.objects.create(business=self.business, name='Old phone', product_type='variant', sku='PHONE')
+        variant = ProductVariant.objects.create(business=self.business, product=product, sku='PHONE-BLUE', barcode='',
+                                                 label='Blue', combination_key='blue')
+        unit = ProductUnit.objects.create(product=product, variant=variant, name='Case', factor=12, barcode='')
+        path = self.base + f'products/{product.pk}/barcode-labels/'
+        variant_path = path + f'?variant_id={variant.pk}'
+        self.assertEqual(self.call('post', path, {}).status_code, 400)
+        variant_code = self.call('post', path, {'variant_id': str(variant.pk)}).json()['barcode']
+        self.assertEqual(self.call('post', path, {'variant_id': str(variant.pk)}).json()['barcode'], variant_code)
+        unit_code = self.call('post', path, {'variant_id': str(variant.pk), 'unit_id': str(unit.pk)}).json()['barcode']
+        self.assertNotEqual(variant_code, unit_code)
+        self.assertEqual(self.call('get', variant_path + f'&unit_id={unit.pk}').status_code, 200)
+        self.assertEqual(AuditEvent.objects.filter(product_id=product.pk, action='updated').count(), 2)
+
+    def test_exact_barcode_lookup_preserves_package_identity_and_rejects_collisions(self):
+        product = Product.objects.create(business=self.business, name='Rice', sku='RICE-1',
+            barcode='RICE-BASE', retail_price=Decimal('20.00'))
+        unit_path = self.base + f'products/{product.pk}/units/'
+        created = self.call('post', unit_path, {'name': 'Carton', 'factor': '12',
+            'selling_price': '220.00', 'barcode': 'RICE-CASE'})
+        self.assertEqual(created.status_code, 201, created.content)
+        unit_id = created.json()['unit']['id']
+        lookup = self.base + 'products/barcodes/lookup/?code='
+        target = self.call('get', lookup + 'RICE-CASE').json()['target']
+        self.assertEqual(target['unit_id'], unit_id)
+        self.assertEqual(target['factor'], '12.000')
+        self.assertEqual(target['retail_price'], '220.00')
+        self.assertEqual(self.call('get', lookup + 'RICE-BASE').json()['target']['unit_id'], None)
+        self.assertEqual(self.call('get', lookup + 'RICE-CASE', token=self.other_token).status_code, 404)
+        duplicate = self.call('post', unit_path, {'name': 'Bag', 'factor': '5', 'barcode': 'rice-base'})
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertFalse(ProductUnit.objects.filter(product=product, name='Bag').exists())
+        conflicting_product = self.call('post', self.base + 'products/',
+            {'name': 'Other rice', 'sku': 'RICE-2', 'barcode': 'rice-case'}, command=uuid.uuid4())
+        self.assertEqual(conflicting_product.status_code, 409)
+        self.assertFalse(Product.objects.filter(business=self.business, sku='RICE-2').exists())
+        labels = self.call('get', self.base + f'products/{product.pk}/barcode-labels/?unit_id={unit_id}&paper=50x30&count=2')
+        self.assertEqual(labels.status_code, 200, labels.content[:300])
+        self.assertTrue(labels.content.startswith(b'%PDF-'))
+        self.assertEqual(labels.content.count(b'/Type /Page\n'), 2)
+        self.assertEqual(self.call('get', self.base + f'products/{product.pk}/barcode-labels/?paper=bad').status_code, 400)
+        self.assertEqual(self.call('get', self.base + f'products/{product.pk}/barcode-labels/', token=self.other_token).status_code, 404)
+
     def test_purchase_catalog_returns_exact_variants_and_last_received_base_cost(self):
         product = Product.objects.create(business=self.business, name='Vivo X300', product_type='variant', sku='VIVO')
         small = ProductVariant.objects.create(business=self.business, product=product, sku='VX-8', barcode='80123',
@@ -55,7 +137,7 @@ class ProductApiTests(TestCase):
         purchase = save_draft(self.business, self.user, uuid.uuid4(), {'supplier_id': str(supplier.pk),
             'location_id': location.pk, 'lines': [{'product_id': str(product.pk), 'variant_id': str(small.pk),
                                                   'quantity': '2', 'unit_cost': '60000'}]})
-        complete_purchase(purchase, self.user, uuid.uuid4())
+        complete_purchase(purchase, self.user, uuid.uuid4(), due_date=date.today() + timedelta(days=30))
         response = self.call('get', self.base + 'products/purchase-catalog/?search=VX-8')
         self.assertEqual(response.status_code, 200, response.content)
         self.assertEqual(len(response.json()['items']), 1)
@@ -65,7 +147,7 @@ class ProductApiTests(TestCase):
         packed = save_draft(self.business, self.user, uuid.uuid4(), {'supplier_id': str(supplier.pk),
             'location_id': location.pk, 'lines': [{'product_id': str(product.pk), 'variant_id': str(small.pk),
                                                   'unit_id': str(carton.pk), 'quantity': '1', 'unit_cost': '100000'}]})
-        complete_purchase(packed, self.user, uuid.uuid4())
+        complete_purchase(packed, self.user, uuid.uuid4(), due_date=date.today() + timedelta(days=30))
         packed_cost = self.call('get', self.base + 'products/purchase-catalog/?search=VX-8').json()['items'][0]
         self.assertEqual(Decimal(packed_cost['last_purchase_cost']), Decimal('50000'))
         self.assertTrue(self.call('get', self.base + 'products/purchase-catalog/?search=PACK-8').json()['items'][0]['package_barcode_match'])
@@ -155,7 +237,7 @@ class ProductApiTests(TestCase):
                          [Decimal('3'), Decimal('5')])
         self.assertEqual(len(self.call('get', self.base + 'products/?search=SHIRT-BLUE').json()['products']), 1)
         receipt = {'product_id': product_id, 'location_id': StockLocation.objects.get(business=self.business, is_default=True).pk,
-                   'quantity': '1', 'unit_cost': '80', 'reason': 'More stock'}
+                   'quantity': '1', 'unit_cost': '80', 'reason': 'Count gain', 'financial_reason': 'count_gain'}
         self.assertEqual(self.call('post', self.base + 'stock/receipts/', receipt, command=uuid.uuid4()).status_code, 409)
         receipt['variant_id'] = red_id
         receipt_command = uuid.uuid4()
@@ -199,7 +281,7 @@ class ProductApiTests(TestCase):
         self.assertEqual(single.status_code, 201, single.content)
         item = single.json()['product']
         self.assertEqual(item['sku'], 'P-' + single_id.hex[:12].upper())
-        self.assertEqual(item['barcode'], 'B-' + single_id.hex[:16].upper())
+        self.assertEqual(item['barcode'], generated_barcode(single_id))
         self.assertEqual(item['wholesale_price'], '95.00')
         self.assertEqual(item['specifications'], {'Color': 'White'})
         self.assertEqual(ProductVariant.objects.get(product_id=single_id).barcode, item['barcode'])
@@ -214,14 +296,14 @@ class ProductApiTests(TestCase):
         self.assertEqual(created.status_code, 201, created.content)
         variant = ProductVariant.objects.get(pk=variant_id)
         self.assertEqual(variant.sku, 'V-' + variant_id.hex[:12].upper())
-        self.assertEqual(variant.barcode, 'B-' + variant_id.hex[:16].upper())
+        self.assertEqual(variant.barcode, generated_barcode(variant_id))
         self.assertEqual(variant.wholesale_price, Decimal('100'))
         self.assertEqual(variant.tracking_mode, 'batch')
         updated = self.call('patch', self.base + f'products/{variant_product_id}/variants/{variant_id}/',
                             {'sku': '', 'barcode': '', 'wholesale_price': '105.00'})
         self.assertEqual(updated.status_code, 200, updated.content)
         self.assertEqual(updated.json()['variant']['sku'], 'V-' + variant_id.hex[:12].upper())
-        self.assertEqual(updated.json()['variant']['barcode'], 'B-' + variant_id.hex[:16].upper())
+        self.assertEqual(updated.json()['variant']['barcode'], generated_barcode(variant_id))
         self.assertEqual(updated.json()['variant']['wholesale_price'], '105.00')
 
     @skipUnless(connection.vendor == 'postgresql', 'Ownership triggers are PostgreSQL specific.')
@@ -254,11 +336,11 @@ class ProductApiTests(TestCase):
         location = StockLocation.objects.get(business=self.business, is_default=True)
         wrong = self.call('post', self.base + 'stock/receipts/', {'product_id': product_id,
             'variant_id': blue_id, 'location_id': location.pk, 'batch_id': batch.json()['batch']['id'],
-            'quantity': '1', 'unit_cost': '20', 'reason': 'Purchase'}, command=uuid.uuid4())
+            'quantity': '1', 'unit_cost': '20', 'reason': 'Count gain', 'financial_reason': 'count_gain'}, command=uuid.uuid4())
         self.assertEqual(wrong.status_code, 409)
         correct = self.call('post', self.base + 'stock/receipts/', {'product_id': product_id,
             'variant_id': red_id, 'location_id': location.pk, 'batch_id': batch.json()['batch']['id'],
-            'quantity': '1', 'unit_cost': '20', 'reason': 'Purchase'}, command=uuid.uuid4())
+            'quantity': '1', 'unit_cost': '20', 'reason': 'Count gain', 'financial_reason': 'count_gain'}, command=uuid.uuid4())
         self.assertEqual(correct.status_code, 201, correct.content)
         self.assertEqual(StockBalance.objects.get(variant_id=red_id).quantity, Decimal('1'))
         self.assertFalse(StockBalance.objects.filter(variant_id=blue_id).exists())
@@ -306,7 +388,7 @@ class ProductApiTests(TestCase):
         self.assertEqual(StockMovement.objects.filter(product_id=product_id).count(), 1)
         self.assertEqual(self.call('post', self.base + 'products/', {'name': 'Rice'}, command=command).status_code, 200)
         self.assertEqual(StockMovement.objects.filter(product_id=product_id).count(), 1)
-        receipt = {'product_id': product_id, 'location_id': location.pk, 'quantity': '2.000', 'unit_cost': '27.0000', 'reason': 'Previously unrecorded stock'}
+        receipt = {'product_id': product_id, 'location_id': location.pk, 'quantity': '2.000', 'unit_cost': '27.0000', 'reason': 'Count gain', 'financial_reason': 'count_gain'}
         receipt_id = uuid.uuid4()
         first = self.call('post', self.base + 'stock/receipts/', receipt, command=receipt_id)
         self.assertEqual(first.status_code, 201, first.content)
@@ -334,7 +416,7 @@ class ProductApiTests(TestCase):
         for batch_id in (old_id, new_id):
             receipt = self.call('post', self.base + 'stock/receipts/', {
                 'product_id': product_id, 'location_id': shop.pk, 'quantity': '2', 'unit_cost': '5',
-                'unit_id': unit_id, 'batch_id': batch_id, 'reason': 'Opening count'}, command=uuid.uuid4())
+                'unit_id': unit_id, 'batch_id': batch_id, 'reason': 'Count gain', 'financial_reason': 'count_gain'}, command=uuid.uuid4())
             self.assertEqual(receipt.status_code, 201, receipt.content)
         detail = self.call('get', self.base + f'products/{product_id}/').json()
         self.assertEqual(detail['stock']['physical'], '120.000')

@@ -1,11 +1,12 @@
 import { router } from 'expo-router';
 import { File, Paths } from 'expo-file-system';
 import * as Print from 'expo-print';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppSymbol } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { useAuth } from '@/features/auth/auth-context';
 import { api, type LabelPrintSettings } from '@/services/api';
 
@@ -42,6 +43,10 @@ export default function PrintSettings() {
   const owner = session?.account?.role === 'owner';
   const [footer, setFooter] = useState('');
   const [savedFooter, setSavedFooter] = useState('');
+  const [invoicePaper, setInvoicePaper] = useState<'A4' | 'A5'>('A4');
+  const [savedInvoicePaper, setSavedInvoicePaper] = useState<'A4' | 'A5'>('A4');
+  const [receiptPaper, setReceiptPaper] = useState<'58mm' | '80mm'>('80mm');
+  const [savedReceiptPaper, setSavedReceiptPaper] = useState<'58mm' | '80mm'>('80mm');
   const [label, setLabel] = useState<LabelDraft>(toDraft(defaults));
   const [savedLabel, setSavedLabel] = useState<LabelDraft>(toDraft(defaults));
   const [paperOpen, setPaperOpen] = useState(false);
@@ -50,19 +55,20 @@ export default function PrintSettings() {
   const [saving, setSaving] = useState(false);
   const [printing, setPrinting] = useState(false);
   const [message, setMessage] = useState('');
-  const dirty = footer !== savedFooter || JSON.stringify(label) !== JSON.stringify(savedLabel);
+  const dirty = footer !== savedFooter || invoicePaper !== savedInvoicePaper || receiptPaper !== savedReceiptPaper || JSON.stringify(label) !== JSON.stringify(savedLabel);
 
-  useEffect(() => {
+  const load = useCallback(async () => {
     if (!session || !businessId) return;
-    let active = true;
-    void api.businessProfile(session.token, businessId)
-      .then(({ business }) => { if (!active) return; const next = toDraft(business.label_print_settings ?? defaults);
+    setLoading(true);
+    try { const { business } = await api.businessProfile(session.token, businessId); const next = toDraft(business.label_print_settings ?? defaults);
         setFooter(business.invoice_footer_text ?? ''); setSavedFooter(business.invoice_footer_text ?? '');
-        setLabel(next); setSavedLabel(next); })
-      .catch((error) => setMessage(error instanceof Error ? error.message : 'Could not load print settings.'))
-      .finally(() => setLoading(false));
-    return () => { active = false; };
+        setInvoicePaper(business.invoice_paper ?? 'A4'); setSavedInvoicePaper(business.invoice_paper ?? 'A4');
+        setReceiptPaper(business.receipt_paper ?? '80mm'); setSavedReceiptPaper(business.receipt_paper ?? '80mm');
+        setLabel(next); setSavedLabel(next); setMessage(''); }
+    catch (error) { setMessage(error instanceof Error ? error.message : 'Could not load print settings.'); }
+    finally { setLoading(false); }
   }, [session, businessId]);
+  useEffect(() => { const timeout = setTimeout(() => { void load(); }, 0); return () => clearTimeout(timeout); }, [load]);
 
   async function save() {
     if (!session || !businessId || !owner || saving) return;
@@ -71,9 +77,11 @@ export default function PrintSettings() {
     try { settings = parseSettings(label); } catch (error) { setMessage((error as Error).message); return; }
     setSaving(true);
     try {
-      const { business } = await api.updateBusinessProfile(session.token, businessId, { invoice_footer_text: footer.trim(), label_print_settings: settings });
+      const { business } = await api.updateBusinessProfile(session.token, businessId, { invoice_footer_text: footer.trim(), label_print_settings: settings, invoice_paper: invoicePaper, receipt_paper: receiptPaper });
       setFooter(business.invoice_footer_text ?? '');
       setSavedFooter(business.invoice_footer_text ?? '');
+      setInvoicePaper(business.invoice_paper ?? 'A4'); setSavedInvoicePaper(business.invoice_paper ?? 'A4');
+      setReceiptPaper(business.receipt_paper ?? '80mm'); setSavedReceiptPaper(business.receipt_paper ?? '80mm');
       const next = toDraft(business.label_print_settings ?? defaults);
       setLabel(next); setSavedLabel(next);
       await refreshBusinesses();
@@ -115,7 +123,7 @@ export default function PrintSettings() {
   }
 
   if (!session?.account) return null;
-  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content}>
+  return <SafeAreaView style={styles.safe}><RefreshableScrollView onRefresh={() => { if (dirty) { setMessage('Save or discard your changes before refreshing.'); return; } return load(); }} contentContainerStyle={styles.content}>
     <Pressable onPress={() => router.back()}><Text style={styles.back}>‹ Back</Text></Pressable>
     <Text style={styles.title}>Print settings</Text>
     <View style={styles.card}>
@@ -124,6 +132,14 @@ export default function PrintSettings() {
       <Text style={styles.label}>Invoice footer text</Text>
       <TextInput value={footer} onChangeText={(value) => { setFooter(value); setMessage(''); }} editable={owner && !loading} maxLength={500} multiline placeholder="Leave blank to hide the footer" placeholderTextColor="#82908A" style={styles.input} accessibilityLabel="Invoice footer text" />
       <Text style={styles.hint}>{footer.length}/500 characters · Blank hides the footer.</Text>
+    </View>
+    <View style={styles.card}>
+      <View style={styles.cardHeading}><AppSymbol name="receipt" color="#006D64" size={20} /><Text style={styles.cardTitle}>Invoice and receipt paper</Text></View>
+      <Text style={styles.muted}>These are the default PDF sizes. You can change paper for an individual print preview.</Text>
+      <Text style={styles.label}>Invoice</Text>
+      <View style={styles.grid}>{(['A4', 'A5'] as const).map(value => <Pressable key={value} disabled={!owner || loading} onPress={() => setInvoicePaper(value)} style={[styles.select, { flexGrow: 1, backgroundColor: invoicePaper === value ? '#DDF3EF' : 'white' }]}><Text style={styles.selectText}>{value}</Text></Pressable>)}</View>
+      <Text style={styles.label}>Receipt roll</Text>
+      <View style={styles.grid}>{(['58mm', '80mm'] as const).map(value => <Pressable key={value} disabled={!owner || loading} onPress={() => setReceiptPaper(value)} style={[styles.select, { flexGrow: 1, backgroundColor: receiptPaper === value ? '#DDF3EF' : 'white' }]}><Text style={styles.selectText}>{value === '58mm' ? '58 mm' : '80 mm'}</Text></Pressable>)}</View>
     </View>
     <View style={styles.card}>
       <View style={styles.cardHeading}><AppSymbol name="receipt" color="#006D64" size={20} /><Text style={styles.cardTitle}>Paper size</Text></View>
@@ -170,7 +186,7 @@ export default function PrintSettings() {
     </View>
     {owner ? <Pressable onPress={() => void save()} accessibilityRole="button" disabled={loading || saving || !dirty} style={[styles.save, (loading || saving || !dirty) && styles.disabled]}><Text style={styles.saveText}>{saving ? 'Saving…' : 'Save print settings'}</Text></Pressable> : <Text style={styles.muted}>Only the business owner can change print settings.</Text>}
     {message ? <Text style={styles.message}>{message}</Text> : null}
-  </ScrollView></SafeAreaView>;
+  </RefreshableScrollView></SafeAreaView>;
 }
 
 const styles = StyleSheet.create({

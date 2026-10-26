@@ -36,6 +36,17 @@ DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
 ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
 if not DEBUG and 'DJANGO_SECRET_KEY' not in os.environ:
     raise RuntimeError('DJANGO_SECRET_KEY is required when DJANGO_DEBUG=0')
+if not DEBUG and not os.environ.get('DJANGO_ALLOWED_HOSTS'):
+    raise RuntimeError('DJANGO_ALLOWED_HOSTS is required when DJANGO_DEBUG=0')
+
+SECURE_SSL_REDIRECT = not DEBUG
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+SECURE_HSTS_SECONDS = int(os.environ.get('DJANGO_HSTS_SECONDS', '0')) if not DEBUG else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = os.environ.get('DJANGO_HSTS_INCLUDE_SUBDOMAINS') == '1'
+SECURE_HSTS_PRELOAD = os.environ.get('DJANGO_HSTS_PRELOAD') == '1'
+if os.environ.get('DJANGO_TRUST_PROXY_SSL_HEADER') == '1':
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 
 # Application definition
@@ -71,6 +82,8 @@ MIDDLEWARE = [
 ROOT_URLCONF = 'beparlyBackend.urls'
 AUTH_USER_MODEL = 'accounts.User'
 API_ALLOWED_ORIGINS = set(os.environ.get('API_ALLOWED_ORIGINS', 'http://localhost:8081,http://127.0.0.1:8081,http://localhost:19006').split(','))
+if not DEBUG and (not os.environ.get('API_ALLOWED_ORIGINS') or '*' in API_ALLOWED_ORIGINS):
+    raise RuntimeError('Set explicit API_ALLOWED_ORIGINS when DJANGO_DEBUG=0')
 
 TEMPLATES = [
     {
@@ -146,6 +159,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'

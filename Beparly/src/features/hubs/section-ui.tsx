@@ -4,18 +4,21 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol, type AppSymbolName } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { palette, radius, spacing } from '@/constants/design-system';
+import { blurWebFocus } from '@/utils/web-focus';
 
 export type HubAction = { title: string; caption: string; icon: AppSymbolName; href: Href; color: string; background: string };
 export type ChartBar = { label: string; value: number; display?: string };
 
-export function HubPage({ eyebrow, title, subtitle, children }: { eyebrow: string; title: string; subtitle: string; children?: React.ReactNode }) {
-  return <SafeAreaView style={styles.safe} edges={['top']}><ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+export function HubPage({ eyebrow, title, subtitle, children, onRefresh, refreshing }: { eyebrow: string; title: string; subtitle: string; children?: React.ReactNode; onRefresh?: () => void; refreshing?: boolean }) {
+  const Scroller = onRefresh ? RefreshableScrollView : ScrollView;
+  return <SafeAreaView style={styles.safe} edges={['top']}><Scroller contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} onRefresh={onRefresh!} refreshing={refreshing}>
     <View style={styles.content}>
       <View style={styles.header}><Text style={styles.eyebrow}>{eyebrow}</Text><Text style={styles.title}>{title}</Text><Text style={styles.subtitle}>{subtitle}</Text></View>
       {children}
     </View>
-  </ScrollView></SafeAreaView>;
+  </Scroller></SafeAreaView>;
 }
 
 export function HubSectionTitle({ title, detail }: { title: string; detail?: string }) {
@@ -23,7 +26,7 @@ export function HubSectionTitle({ title, detail }: { title: string; detail?: str
 }
 
 export function HubActions({ actions }: { actions: HubAction[] }) {
-  return <View style={styles.actionGrid}>{actions.map((action) => <Pressable key={action.title} onPress={() => router.push(action.href)}
+  return <View style={styles.actionGrid}>{actions.map((action) => <Pressable key={action.title} onPress={() => { blurWebFocus(); router.push(action.href); }}
     accessibilityRole="button" accessibilityLabel={action.title} accessibilityHint={action.caption}
     style={({ pressed }) => [styles.action, pressed && styles.pressed]}>
     <View style={[styles.actionIcon, { backgroundColor: action.background }]}><AppSymbol name={action.icon} color={action.color} size={19} /></View>

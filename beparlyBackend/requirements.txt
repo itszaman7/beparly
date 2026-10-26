@@ -3,6 +3,7 @@ psycopg[binary]>=3.1.12,<4
 djangorestframework>=3.18,<4
 Pillow>=11,<13
 reportlab>=4.5,<5
+pypdf>=6,<7
 uharfbuzz>=0.51,<1
 django-storages[s3]>=1.14,<2
 cryptography>=44,<48

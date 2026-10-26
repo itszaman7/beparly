@@ -241,7 +241,10 @@ def purchase_detail(request, business_id, purchase_id):
         if request.method == 'PATCH':
             purchase = save_draft(member.business, session.user,
                 command_uuid(request.headers.get('X-Command-ID')), body(request), purchase)
-        return JsonResponse({'purchase': purchase_data(purchase, True)})
+        result = purchase_data(purchase, True)
+        from .batch_actions import record_notes
+        result['added_notes'] = record_notes(member.business, 'purchase', purchase.pk)
+        return JsonResponse({'purchase': result})
     except (ValueError, StockError, AccountingError, ValidationError) as exc:
         return invalid(exc)
 

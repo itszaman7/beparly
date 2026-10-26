@@ -265,11 +265,19 @@ def business_profile(request, business_id):
                 raise ValueError('show_currency_symbol must be true or false.')
             if 'label_print_settings' in data:
                 member.business.label_print_settings = validate_label_settings(data['label_print_settings'])
+            if 'invoice_paper' in data:
+                if data['invoice_paper'] not in ('A4', 'A5'):
+                    raise ValueError('Choose A4 or A5 invoice paper.')
+                member.business.invoice_paper = data['invoice_paper']
+            if 'receipt_paper' in data:
+                if data['receipt_paper'] not in ('58mm', '80mm'):
+                    raise ValueError('Choose 58 or 80 mm receipt paper.')
+                member.business.receipt_paper = data['receipt_paper']
             member.business.phone = str(data.get('phone', member.business.phone)).strip()
             member.business.address = str(data.get('address', member.business.address)).strip()
             member.business.show_currency_symbol = data.get('show_currency_symbol', member.business.show_currency_symbol)
             member.business.invoice_footer_text = str(data.get('invoice_footer_text', member.business.invoice_footer_text)).strip()
-            member.business.save(update_fields=['phone', 'address', 'show_currency_symbol', 'invoice_footer_text', 'label_print_settings'])
+            member.business.save(update_fields=['phone', 'address', 'show_currency_symbol', 'invoice_footer_text', 'label_print_settings', 'invoice_paper', 'receipt_paper'])
         except ValueError as exc:
             return error('invalid_input', str(exc))
     business = member.business
@@ -278,6 +286,7 @@ def business_profile(request, business_id):
         'address': business.address, 'logo_url': business.logo.url if business.logo else None,
         'show_currency_symbol': business.show_currency_symbol, 'invoice_footer_text': business.invoice_footer_text,
         'label_print_settings': label_settings(business),
+        'invoice_paper': business.invoice_paper, 'receipt_paper': business.receipt_paper,
         'role': member.role,
         'can_manage_purchases': member.role == BusinessMember.OWNER or member.can_manage_purchases}})
 

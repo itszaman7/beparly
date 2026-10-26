@@ -7,6 +7,7 @@ from django.http import JsonResponse
 from .models import JournalLine
 from .views import owner, parse_date
 from .services import AccountingError
+from .formatting import decimal_text
 from accounts.views import error
 from stockkeeper.services import business_today
 
@@ -20,7 +21,7 @@ def empty_amounts():
 
 
 def serialized(amounts):
-    return {field: str(amounts[field]) for field in FIELDS}
+    return {field: decimal_text(amounts[field]) for field in FIELDS}
 
 
 def financial_summary(request, business_id):
@@ -99,10 +100,10 @@ def financial_summary(request, business_id):
         rows.append({'period': day.isoformat(), 'has_activity': day in periods_with_activity, **serialized(amounts)})
     return JsonResponse({
         'start_date': start.isoformat(), 'end_date': end.isoformat(), 'group_by': group_by,
-        'rows': rows, 'totals': serialized(totals), 'profit_metrics': {'net_sales': str(sales_income),
-            'other_income': str(totals['income'] - sales_income),
-            'gross_profit': str(sales_income - totals['product_cost'])},
+        'rows': rows, 'totals': serialized(totals), 'profit_metrics': {'net_sales': decimal_text(sales_income),
+            'other_income': decimal_text(totals['income'] - sales_income),
+            'gross_profit': decimal_text(sales_income - totals['product_cost'])},
         'breakdown': {key: [dict(id=item['id'], name=item['name'], type=item['type'],
-                                amount=str(item['amount'])) for item in sorted(group.values(), key=lambda row: (row['name'], row['id']))]
+                                amount=decimal_text(item['amount'])) for item in sorted(group.values(), key=lambda row: (row['name'], row['id']))]
                       for key, group in breakdown.items()},
     })

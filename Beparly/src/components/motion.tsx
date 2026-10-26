@@ -28,10 +28,13 @@ export function PressScale({ children, style, onPress, ...props }: PressableProp
       {...props}
       onPress={onPress}
       onPressIn={(event) => {
+        // Reanimated shared values are intentionally mutable event state.
+        // eslint-disable-next-line react-hooks/immutability
         if (!reducedMotion) scale.value = withTiming(0.97, { duration: 110 });
         props.onPressIn?.(event);
       }}
       onPressOut={(event) => {
+        // eslint-disable-next-line react-hooks/immutability
         if (!reducedMotion) scale.value = withTiming(1, { duration: 150 });
         props.onPressOut?.(event);
       }}

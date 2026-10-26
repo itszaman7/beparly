@@ -9,6 +9,7 @@ import { AppSymbol } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
 import { palette, radius, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
+import { blurWebFocus } from '@/utils/web-focus';
 
 export default function AppTabs() {
   const pathname = usePathname();
@@ -62,6 +63,7 @@ function TabButton({ label, icon, isFocused, ref: _ref, ...props }: TabTriggerSl
   return (
     <Pressable
       {...props}
+      onPress={(event) => { blurWebFocus(); props.onPress?.(event); }}
       accessibilityRole="tab"
       accessibilityLabel={label}
       accessibilityState={{ selected: !!isFocused }}

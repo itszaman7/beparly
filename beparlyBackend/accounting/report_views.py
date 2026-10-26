@@ -14,6 +14,7 @@ from .models import JournalEntry, JournalLine, LedgerAccount
 from .reports import financial_summary
 from .sale_reports import add_sale_previews_to_entries, add_sale_previews_to_movements
 from .services import AccountingError
+from .formatting import decimal_text
 from .views import owner, parse_date
 
 ZERO = Decimal('0')
@@ -83,12 +84,12 @@ def statement(request, business, name, cutoff, start):
         for row in rows:
             net = row['debit'] - row['credit']
             result.append({'id': row['id'], 'name': row['name'], 'type': row['type'],
-                           'debit': str(max(net, ZERO)), 'credit': str(max(-net, ZERO))})
+                           'debit': decimal_text(max(net, ZERO)), 'credit': decimal_text(max(-net, ZERO))})
         offset = (page(request) - 1) * 50
         return {'as_of': cutoff.isoformat(), 'rows': result[offset:offset + 50],
                 'page': page(request), 'next_page': page(request) + 1 if len(result) > offset + 50 else None,
-                'total_debit': str(sum((Decimal(r['debit']) for r in result), ZERO)),
-                'total_credit': str(sum((Decimal(r['credit']) for r in result), ZERO)),
+                'total_debit': decimal_text(sum((Decimal(r['debit']) for r in result), ZERO)),
+                'total_credit': decimal_text(sum((Decimal(r['credit']) for r in result), ZERO)),
                 'reconciled': debit == credit}
     if name == 'balance-sheet':
         groups = {'asset': [], 'liability': [], 'equity': []}
@@ -97,7 +98,7 @@ def statement(request, business, name, cutoff, start):
             net = row['debit'] - row['credit']
             if row['type'] in groups:
                 value = net if row['type'] == 'asset' else -net
-                groups[row['type']].append({'id': row['id'], 'name': row['name'], 'amount': str(value)})
+                groups[row['type']].append({'id': row['id'], 'name': row['name'], 'amount': decimal_text(value)})
             elif row['type'] == 'income':
                 earnings -= net
             else:
@@ -109,8 +110,8 @@ def statement(request, business, name, cutoff, start):
         offset = (page(request) - 1) * 50
         return {'as_of': cutoff.isoformat(), 'rows': ordered[offset:offset + 50],
                 'page': page(request), 'next_page': page(request) + 1 if len(ordered) > offset + 50 else None,
-                'current_earnings': str(earnings), 'assets': str(assets),
-                'liabilities': str(liabilities), 'equity': str(equity),
+                'current_earnings': decimal_text(earnings), 'assets': decimal_text(assets),
+                'liabilities': decimal_text(liabilities), 'equity': decimal_text(equity),
                 'reconciled': debit == credit and assets == liabilities + equity + earnings}
     if name == 'profit-loss':
         response = financial_summary(request, business.pk)
@@ -151,14 +152,14 @@ def statement(request, business, name, cutoff, start):
         entry = line.entry
         detail.append({'id': line.pk, 'journal_id': str(entry.pk), 'event_date': entry.event_date.isoformat(),
                        'source_type': entry.source_type, 'source_id': entry.source_id,
-                       'description': entry.description, 'debit': str(line.debit), 'credit': str(line.credit),
-                       'running_balance': str(running)})
+                       'description': entry.description, 'debit': decimal_text(line.debit), 'credit': decimal_text(line.credit),
+                       'running_balance': decimal_text(running)})
     add_sale_previews_to_entries(detail, [line.entry for line in selected[:50]], business)
     closing = opening_raw + ((period_credit - period_debit) if normal_credit else (period_debit - period_credit))
     return {'as_of': cutoff.isoformat(), 'start_date': start.isoformat() if start else None,
             'account': {'id': account.code, 'name': account.name, 'type': account.type},
-            'opening_balance': str(opening_raw), 'total_debit': str(period_debit),
-            'total_credit': str(period_credit), 'closing_balance': str(closing),
+            'opening_balance': decimal_text(opening_raw), 'total_debit': decimal_text(period_debit),
+            'total_credit': decimal_text(period_credit), 'closing_balance': decimal_text(closing),
             'rows': detail, 'page': number, 'next_page': number + 1 if len(selected) > 50 else None,
             'reconciled': debit == credit}
 
@@ -195,7 +196,7 @@ def activity(request, business, name, start, end):
         day_rows = (lines.values('entry__event_date').annotate(debit=Sum('debit'), credit=Sum('credit'))
                     .order_by('-entry__event_date'))
         result = paged(day_rows, request, lambda row: {'date': row['entry__event_date'].isoformat(),
-            'amount': str((row['credit'] - row['debit']) if sign == -1 else (row['debit'] - row['credit']))})
+            'amount': decimal_text((row['credit'] - row['debit']) if sign == -1 else (row['debit'] - row['credit']))})
     else:
         entries = (JournalEntry.objects.filter(pk__in=lines.values('entry_id'))
                    .select_related('reverses').order_by('-event_date', '-created_at', '-pk'))
@@ -203,11 +204,11 @@ def activity(request, business, name, start, end):
         selected = list(entries[(number - 1) * 50:number * 50 + 1])
         detail = [ {'id': str(entry.pk), 'source_type': entry.source_type,
             'source_id': entry.source_id, 'date': entry.event_date.isoformat(), 'description': entry.description,
-            'amount': str(sum(((line.credit - line.debit) if sign == -1 else (line.debit - line.credit)
+            'amount': decimal_text(sum(((line.credit - line.debit) if sign == -1 else (line.debit - line.credit)
                 for line in entry.lines.filter(pk__in=lines.values('pk'))), ZERO))} for entry in selected[:50]]
         add_sale_previews_to_entries(detail, selected[:50], business)
         result = {'rows': detail, 'page': number, 'next_page': number + 1 if len(selected) > 50 else None}
-    response = {'start_date': start.isoformat(), 'end_date': end.isoformat(), 'total': str(amount), **result}
+    response = {'start_date': start.isoformat(), 'end_date': end.isoformat(), 'total': decimal_text(amount), **result}
     if name == 'sales-summary':
         import json
         summary = json.loads(financial_summary(request, business.pk).content)
@@ -236,31 +237,31 @@ def inventory(request, business, name, start, end, cutoff, location):
             if location:
                 recognized = recognized.filter(location=location)
             expired_layers = layers.filter(batch__expires_on__lt=cutoff)
-            return {'as_of': cutoff.isoformat(), 'expired_awaiting_disposal': str(total(expired, 'quantity')),
-                    'expired_awaiting_disposal_cost': str(sum((layer.remaining_quantity * layer.unit_cost for layer in expired_layers), ZERO)),
-                    'recognized_write_off_quantity': str(-total(recognized, 'quantity_change')),
-                    'recognized_write_off_cost': str(-total(recognized, 'inventory_cost')),
+            return {'as_of': cutoff.isoformat(), 'expired_awaiting_disposal': decimal_text(total(expired, 'quantity')),
+                    'expired_awaiting_disposal_cost': decimal_text(sum((layer.remaining_quantity * layer.unit_cost for layer in expired_layers), ZERO)),
+                    'recognized_write_off_quantity': decimal_text(-total(recognized, 'quantity_change')),
+                    'recognized_write_off_cost': decimal_text(-total(recognized, 'inventory_cost')),
                     **paged(balances.select_related('product', 'variant', 'batch', 'location').order_by('batch__expires_on', 'pk'), request,
                         lambda row: {'id': row.pk, 'product_id': row.product_id, 'variant_id': row.variant_id,
                             'name': row.product.name, 'variant': row.variant.label, 'location': row.location.name,
-                            'expires_on': row.batch.expires_on.isoformat(), 'quantity': str(row.quantity),
+                            'expires_on': row.batch.expires_on.isoformat(), 'quantity': decimal_text(row.quantity),
                             'status': 'expired' if row.batch.expires_on < cutoff else 'awaiting_expiry'})}
         quantities = balances.values('product_id', 'variant_id', 'product__name', 'variant__label').annotate(quantity=Sum('quantity')).order_by('product__name', 'variant__label')
         result = paged(quantities, request, lambda row: {'product_id': row['product_id'], 'variant_id': row['variant_id'],
-            'name': row['product__name'], 'variant': row['variant__label'], 'quantity': str(row['quantity'])})
-        result.update({'as_of': cutoff.isoformat(), 'total_quantity': str(total(balances, 'quantity'))})
+            'name': row['product__name'], 'variant': row['variant__label'], 'quantity': decimal_text(row['quantity'])})
+        result.update({'as_of': cutoff.isoformat(), 'total_quantity': decimal_text(total(balances, 'quantity'))})
         if name == 'stock-valuation':
             value = sum((layer.remaining_quantity * layer.unit_cost for layer in layers), ZERO)
             costs = {}
             for layer in layers:
                 costs[layer.variant_id] = costs.get(layer.variant_id, ZERO) + layer.remaining_quantity * layer.unit_cost
             for row in result['rows']:
-                row['value'] = str(costs.get(row['variant_id'], ZERO))
+                row['value'] = decimal_text(costs.get(row['variant_id'], ZERO))
             ledger_value = total(JournalLine.objects.filter(entry__business=business, entry__event_date__lte=cutoff,
                 account__code='INVENTORY'), 'debit') - total(JournalLine.objects.filter(entry__business=business,
                 entry__event_date__lte=cutoff, account__code='INVENTORY'), 'credit')
             layer_quantity = sum((layer.remaining_quantity for layer in layers), ZERO)
-            result.update({'available': True, 'value': str(value), 'ledger_value': str(ledger_value) if not location else None,
+            result.update({'available': True, 'value': decimal_text(value), 'ledger_value': decimal_text(ledger_value) if not location else None,
                            'reconciled': value == ledger_value and layer_quantity == total(balances, 'quantity') if not location else
                                layer_quantity == total(balances, 'quantity')})
         return result
@@ -275,7 +276,7 @@ def inventory(request, business, name, start, end, cutoff, location):
                    .annotate(quantity=Sum('quantity_change'), cost=Sum('inventory_cost')).order_by('quantity', 'product__name'))
         result = paged(grouped, request, lambda row: {'product_id': row['product_id'], 'variant_id': row['variant_id'],
             'name': row['product__name'], 'variant': row['variant__label'],
-            'quantity': str(-row['quantity']), 'cost': str(-row['cost'])})
+            'quantity': decimal_text(-row['quantity']), 'cost': decimal_text(-row['cost'])})
     else:
         number = page(request)
         selected = list(movements.select_related('product', 'variant', 'location')
@@ -284,12 +285,12 @@ def inventory(request, business, name, start, end, cutoff, location):
                 'name': row.product.name, 'variant': row.variant.label, 'location': row.location.name,
                 'date': timezone.localtime(row.created_at, ZoneInfo(business.timezone)).date().isoformat(),
                 'type': row.type, 'reference_id': str(row.reference_id),
-                'quantity': str(row.quantity_change), 'cost': str(row.inventory_cost)} for row in selected[:50]]
+                'quantity': decimal_text(row.quantity_change), 'cost': decimal_text(row.inventory_cost)} for row in selected[:50]]
         add_sale_previews_to_movements(detail, selected[:50], business)
         result = {'rows': detail, 'page': number, 'next_page': number + 1 if len(selected) > 50 else None}
     result.update({'start_date': start.isoformat(), 'end_date': end.isoformat(),
-                   'total_quantity': str(total(movements, 'quantity_change')),
-                   'total_cost': str(total(movements, 'inventory_cost'))})
+                   'total_quantity': decimal_text(total(movements, 'quantity_change')),
+                   'total_cost': decimal_text(total(movements, 'inventory_cost'))})
     return result
 
 

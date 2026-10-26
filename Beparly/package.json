@@ -9,6 +9,7 @@
     "expo": "~58.0.14",
     "expo-camera": "~58.0.12",
     "expo-constants": "~58.0.12",
+    "expo-crypto": "~58.0.7",
     "expo-device": "~58.0.5",
     "expo-document-picker": "~58.0.4",
     "expo-file-system": "~58.0.10",
@@ -43,6 +44,7 @@
     "@types/react": "~19.3.0",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~58.0.0",
+    "fake-indexeddb": "^6.2.6",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -52,7 +54,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test:products": "node --test src/features/products/product-rules.test.js src/features/products/stock-rules.test.js"
+    "test:products": "node --test src/features/products/product-rules.test.js src/features/products/stock-rules.test.js",
+    "test:checkout": "node --test src/features/sales/checkout-command.test.mjs src/features/sales/checkout-command-store.web.test.mjs"
   },
   "private": true
 }

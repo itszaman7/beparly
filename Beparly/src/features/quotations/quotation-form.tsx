@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppText as Text } from '@/components/app-text';
 import { AppSymbol } from '@/components/app-symbol';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { palette, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
 import { api, ApiError, Category, Contact, Product, ProductUnit, QuotationInput, QuotationLineInput, StockLocation, Variant } from '@/services/api';
@@ -207,7 +208,15 @@ export function QuotationForm({ id, initialTier, draftKey }: { id?: string; init
   }
   if (!session?.account) return null;
   if (!draft) return <SafeAreaView style={[styles.safe, styles.loadingState]} edges={['top', 'bottom']}><ActivityIndicator color={palette.primaryDeep} /></SafeAreaView>;
-  return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}><><ScrollView contentContainerStyle={styles.page}>
+  return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}><><RefreshableScrollView onRefresh={async () => {
+    if (!session || !businessId) return;
+    try {
+      const [catalog, shops, categoryResult] = await Promise.all([api.products(session.token, businessId), api.locations(session.token, businessId), api.categories(session.token, businessId)]);
+      setProducts(catalog.products.filter((row) => row.is_active)); setLocations(shops.locations.filter((row) => row.is_active));
+      setCatalogCategories(categoryResult.categories.filter((row) => row.is_active)); setError('');
+      void Promise.all([cacheQuotationCatalog(businessId, catalog.products), cacheQuotationCategories(businessId, categoryResult.categories)]).catch(() => {});
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not refresh quotation choices.'); }
+  }} contentContainerStyle={styles.page}>
     <View style={styles.formHeading}><Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/sales/quotations' as Href)} style={styles.backButton}><AppSymbol name="back" size={20} color={palette.ink} /></Pressable><Text style={styles.formTitle}>{step === 'catalog' ? `${input.price_tier === 'retail' ? 'Retail' : 'Wholesale'} products` : id ? 'Edit quotation' : 'Review offer'}</Text></View>
     {draft?.state === 'conflict' && <Text style={styles.notice}>Conflict · local edits kept</Text>}
     {step === 'catalog' && <>
@@ -261,7 +270,7 @@ export function QuotationForm({ id, initialTier, draftKey }: { id?: string; init
     {!!error && <Text style={styles.danger}>{error}</Text>}
     {draft?.state === 'conflict' && draft.serverId && <Pressable style={styles.chip} onPress={() => void saveConflictAsCopy()} disabled={saving}><Text style={styles.link}>Save my edits as a new draft</Text></Pressable>}
     <Pressable style={styles.primary} onPress={() => void save()} disabled={saving}><Text style={styles.primaryText}>{saving ? 'Saving…' : 'Save quotation draft'}</Text></Pressable></>}
-  </ScrollView>
+  </RefreshableScrollView>
   <Modal visible={showCustomerPicker} transparent animationType="slide" onRequestClose={() => setShowCustomerPicker(false)}>
     <View style={styles.modalBackdrop}><View style={styles.modalSheet}>
       <View style={styles.modalHeader}><View><Text style={styles.modalEyebrow}>CUSTOMER</Text><Text style={styles.modalTitle}>Choose a buyer</Text></View>

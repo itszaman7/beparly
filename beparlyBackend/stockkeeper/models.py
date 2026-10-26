@@ -72,6 +72,16 @@ class CostLayer(models.Model):
 
     def save(self, *args, **kwargs):
         validate_stock_links(self)
+        updated = kwargs.get('update_fields')
+        if self.pk and not self._state.adding and not (updated is not None and set(updated) <= {'remaining_quantity'}):
+            original = CostLayer.objects.get(pk=self.pk)
+            if (original.business_id, original.product_id, original.variant_id,
+                    original.location_id, original.batch_id,
+                    original.received_quantity, original.unit_cost) != (
+                    self.business_id, self.product_id, self.variant_id,
+                    self.location_id, self.batch_id,
+                    self.received_quantity, self.unit_cost):
+                raise ValidationError('Posted FIFO cost and origin cannot be changed.')
         super().save(*args, **kwargs)
 
 

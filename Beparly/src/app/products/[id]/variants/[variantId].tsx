@@ -6,6 +6,7 @@ import { toast } from 'tamagui/toast';
 
 import { AppSymbol } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { palette, radius, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
 import { ActionTile, Info, Section } from '@/features/products/product-detail';
@@ -118,7 +119,7 @@ export default function VariantDetailScreen() {
       <Text style={styles.headerTitle}>Variant details</Text></View>
     {loading && !variant ? <View style={styles.center}><ActivityIndicator color={palette.primary} /><Text style={styles.soft}>Loading variant…</Text></View> : !variant || !stock || !product ?
       <View style={styles.center}><Text style={styles.soft}>{error || 'Variant not found.'}</Text><Pressable accessibilityRole="button" onPress={() => void load()}><Text style={styles.link}>Try again</Text></Pressable></View> :
-      <ScrollView contentContainerStyle={styles.content}>
+      <RefreshableScrollView onRefresh={load} contentContainerStyle={styles.content}>
         <View style={styles.hero}>{product.image_url ? <Image source={{ uri: product.image_url }} style={styles.heroImage} resizeMode="cover" /> :
           <View style={styles.heroImage}><Text style={styles.initials}>{variant.label.slice(0, 2).toUpperCase()}</Text><Text style={styles.soft}>No photo</Text></View>}
           <View style={styles.heroCopy}><Text style={styles.status}>{variant.is_active ? '● Active' : '○ Inactive'}</Text>
@@ -187,7 +188,7 @@ export default function VariantDetailScreen() {
           <Pressable accessibilityRole="button" onPress={() => router.push({ pathname: '/stock/audit', params: { productId: id } })} style={styles.inlineAction}><Text style={styles.link}>View product activity</Text><AppSymbol name="chevron" size={18} color={palette.primaryDeep} /></Pressable>
         </Section>
 
-      </ScrollView>}
+      </RefreshableScrollView>}
 
     <Modal transparent visible={!!help} animationType="fade" onRequestClose={() => setHelp(null)}><Pressable style={styles.backdrop} onPress={() => setHelp(null)}><View style={styles.helpCard}>
       <View style={styles.helpTitle}><AppSymbol name="info" size={21} color={palette.primaryDeep} /><Text style={styles.heading}>{help?.title}</Text></View><Text style={styles.body}>{help?.message}</Text>

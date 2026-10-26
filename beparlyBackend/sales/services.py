@@ -1,4 +1,6 @@
 from decimal import Decimal, ROUND_HALF_UP
+import hashlib
+import json
 from uuid import uuid4
 
 from django.db import transaction
@@ -21,11 +23,22 @@ class SaleError(ValueError):
     pass
 
 
+def sale_request_hash(data):
+    """Hash the exact canonical command payload, independent of JSON key order."""
+    encoded = json.dumps(data, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False)
+    return hashlib.sha256(encoded.encode('utf-8')).hexdigest()
+
+
 def create_sale(business, actor, command_id, data, *, quotation=None):
     with transaction.atomic():
         Business.objects.select_for_update().get(pk=business.pk)
+        request_hash = sale_request_hash(data)
         prior = Sale.objects.filter(business=business, command_id=command_id).first()
         if prior:
+            if not prior.request_hash:
+                raise SaleError('This earlier sale cannot verify a retry payload. Look up its command status.')
+            if prior.request_hash != request_hash:
+                raise SaleError('This command ID was already used with different sale details.')
             return prior
         if data.get('mode') not in ('quick', 'manual'):
             raise SaleError('Choose Quick Sale or Manual Sale.')
@@ -150,7 +163,8 @@ def create_sale(business, actor, command_id, data, *, quotation=None):
             quotation=quotation, customer_name_snapshot=(quotation.customer_name if quotation and quotation.customer_id == (None if guest_sale else contact.pk) else contact.name) or 'Walk-in Customer',
             customer_phone_snapshot=quotation.customer_phone if quotation and quotation.customer_id == (None if guest_sale else contact.pk) else contact.phone,
             customer_address_snapshot={'address': quotation.customer_address} if quotation and quotation.customer_id == (None if guest_sale else contact.pk) else {'address': contact.address, 'district': contact.district, 'area': contact.area},
-            location=location, income_category=category, actor=actor, command_id=command_id, mode=mode,
+            location=location, income_category=category, actor=actor, command_id=command_id,
+            request_hash=request_hash, mode=mode,
             price_tier=tier, subtotal=subtotal, discount=discount, delivery_fee=delivery_fee, total=total, paid=Decimal('0'),
             payment_status='due', billing_address={'text': location.address.strip(), 'location_id': str(location.pk)},
             delivery_address={'text': delivery_address} if delivery_address else {}, source=str(data.get('source') or '').strip()[:80],
@@ -230,124 +244,9 @@ def _returned_cost_portions(line, previous_base, requested_base):
     return result
 
 
-@transaction.atomic
 def return_sale(sale, actor, command_id, data):
-    Business.objects.select_for_update().get(pk=sale.business_id)
-    sale = Sale.objects.select_for_update().get(pk=sale.pk)
-    prior = SaleReturn.objects.filter(sale=sale, command_id=command_id).first()
-    if prior:
-        return prior
-    if sale.status != 'completed':
-        raise SaleError('Only completed sales can be returned.')
-    reason = str(data.get('reason') or '').strip()
-    if not reason or len(reason) > 240:
-        raise SaleError('Enter a return reason up to 240 characters.')
-    raw_lines = data.get('lines')
-    if not isinstance(raw_lines, list) or not raw_lines or len(raw_lines) > 100:
-        raise SaleError('Choose at least one item to return.')
-    sale_lines = list(sale.lines.order_by('pk'))
-    indexed = {str(line.pk): line for line in sale_lines}
-    prepared = []
-    seen = set()
-    return_amount = Decimal('0')
-    sellable_cost = damaged_cost = Decimal('0')
-    for item in raw_lines:
-        if not isinstance(item, dict):
-            raise SaleError('Choose valid sale items to return.')
-        line_id = str(item.get('line_id') or '')
-        if line_id in seen or line_id not in indexed:
-            raise SaleError('Each returned item must belong to this sale and appear once.')
-        seen.add(line_id)
-        line = indexed[line_id]
-        condition = item.get('condition')
-        if condition not in ('sellable', 'damaged'):
-            raise SaleError('Choose whether each returned item is sellable or damaged.')
-        quantity = amount(item.get('quantity'), places=3)
-        previous = list(line.return_lines.select_related('sale_return').all())
-        previous_qty = sum((row.quantity for row in previous), Decimal('0'))
-        if quantity > line.quantity - previous_qty:
-            raise SaleError(f'Return quantity exceeds the remaining quantity for {line.product_name}.')
-        base = (quantity * line.conversion_factor).quantize(Decimal('0.001'))
-        previous_base = (previous_qty * line.conversion_factor).quantize(Decimal('0.001'))
-        line_net = _line_net_amount(sale, line, sale_lines)
-        already_credited = sum((row.amount for row in previous), Decimal('0'))
-        if quantity == line.quantity - previous_qty:
-            credited = line_net - already_credited
-        else:
-            cumulative = (line_net * (previous_qty + quantity) / line.quantity).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            credited = cumulative - already_credited
-        if credited <= 0:
-            raise SaleError('Return amount must be positive. Increase the returned quantity.')
-        portions = _returned_cost_portions(line, previous_base, base)
-        cost = sum((qty * unit_cost for qty, unit_cost in portions), Decimal('0')).quantize(Decimal('0.0000001'))
-        prepared.append((line, quantity, base, condition, credited, cost, portions))
-        return_amount += credited
-        if condition == 'sellable':
-            sellable_cost += cost
-        else:
-            damaged_cost += cost
-    due = sale_net_total(sale) - sale.paid
-    due_reduction = min(due, return_amount)
-    refund_amount = return_amount - due_reduction
-    account = None
-    if refund_amount:
-        account = MoneyAccount.objects.filter(business=sale.business, pk=data.get('refund_account_id'),
-                                              is_active=True).select_related('ledger_account').first()
-        if not account:
-            raise SaleError('Choose an active money account for the refund.')
-    journal_lines = [dr(sale.income_category.ledger_account, return_amount),
-                     cr(ensure_party_accounts(sale.customer).receivable_account, return_amount, sale.customer)]
-    if sellable_cost:
-        journal_lines.extend([dr(ledger(sale.business, 'INVENTORY'), sellable_cost), cr(ledger(sale.business, 'COGS'), sellable_cost)])
-    if damaged_cost:
-        journal_lines.extend([dr(ledger(sale.business, 'INVENTORY_LOSS'), damaged_cost), cr(ledger(sale.business, 'COGS'), damaged_cost)])
-    return_id = uuid4()
-    journal = post(sale.business, 'sale_return', return_id, f'Return {sale.invoice_number}',
-                   journal_lines, actor=actor, command_id=command_id)
-    sale_return = SaleReturn.objects.create(id=return_id, sale=sale, command_id=command_id, actor=actor,
-        reason=reason, amount=return_amount, due_reduction=due_reduction, refund_amount=refund_amount,
-        refund_account=account, journal=journal)
-    for line, quantity, base, condition, credited, cost, portions in prepared:
-        SaleReturnLine.objects.create(sale_return=sale_return, sale_line=line, quantity=quantity,
-            amount=credited, inventory_cost=cost, condition=condition)
-        if condition == 'sellable':
-            balance_row, _ = StockBalance.objects.select_for_update().get_or_create(
-                business=sale.business, product=line.product, variant=line.variant, location=sale.location,
-                batch=line.batch, defaults={'quantity': Decimal('0')})
-            balance_row.quantity += base
-            balance_row.save(update_fields=['quantity', 'updated_at'])
-            for portion_qty, unit_cost in portions:
-                CostLayer.objects.create(business=sale.business, product=line.product, variant=line.variant,
-                    location=sale.location, batch=line.batch, received_quantity=portion_qty,
-                    remaining_quantity=portion_qty, unit_cost=unit_cost)
-            movement = StockMovement.objects.create(business=sale.business, product=line.product,
-                variant=line.variant, location=sale.location, batch=line.batch, type='sale_return',
-                quantity_change=base, inventory_cost=cost, unit_name=line.unit_name,
-                conversion_factor=line.conversion_factor, reason=f'Return {sale.invoice_number}: {reason}',
-                reference_id=sale_return.pk, actor=actor)
-            from stockkeeper.services import audit_movement
-            audit_movement(movement)
-    if refund_amount:
-        refund_journal = post(sale.business, 'sale_return_refund', sale_return.pk,
-            f'Refund {sale.invoice_number}',
-            [dr(ensure_party_accounts(sale.customer).receivable_account, refund_amount, sale.customer),
-             cr(account.ledger_account, refund_amount)], actor=actor)
-        MoneyTransaction.objects.create(business=sale.business, kind='sale_refund', amount=refund_amount,
-            account=account, contact=sale.customer, note=f'Refund for {sale.invoice_number}',
-            event_date=business_today(sale.business), journal=refund_journal)
-        sale_return.refund_journal = refund_journal
-        sale_return.save(update_fields=['refund_journal'])
-        sale.paid -= refund_amount
-    net_total = sale_net_total(sale)
-    sale.payment_status = 'paid' if sale.paid == net_total else ('due' if sale.paid == 0 else 'partial')
-    sale.save(update_fields=['paid', 'payment_status'])
-    record(business_id=sale.business_id, actor=actor, entity_type='sale_return', entity_id=sale_return.pk,
-        action='completed', subject=sale.invoice_number, location_id=sale.location_id,
-        reference_id=sale.pk, changes={'reason': reason, 'amount': str(return_amount),
-        'due_reduction': str(due_reduction), 'refund': str(refund_amount),
-        'lines': [{'line_id': str(line.pk), 'quantity': str(quantity), 'condition': condition}
-                  for line, quantity, _, condition, _, _, _ in prepared]})
-    return sale_return
+    from .return_workflow import credit_sale
+    return credit_sale(sale, actor, command_id, data)
 
 
 def _collect_locked(sale, actor, command_id, value, account, kind='receipt'):
@@ -385,67 +284,47 @@ def collect_sale(sale, actor, command_id, value, account):
 
 @transaction.atomic
 def cancel_sale(sale, actor, command_id, reason):
+    """Only an unposted draft can be cancelled here."""
     Business.objects.select_for_update().get(pk=sale.business_id)
     sale = Sale.objects.select_for_update().get(pk=sale.pk)
-    if sale.status == 'cancelled':
-        if sale.cancellation_command_id == command_id:
-            return sale
-        raise SaleError('This sale was already cancelled.')
-    if sale.returns.exists():
-        raise SaleError('This sale has returns. Use the return history instead of cancelling it.')
     reason = str(reason or '').strip()
     if not reason or len(reason) > 240:
         raise SaleError('Enter a cancellation reason up to 240 characters.')
-    from accounting.services import reverse
-    journal = JournalEntry.objects.get(business=sale.business, source_type='sale', source_id=str(sale.pk))
-    reverse(journal, actor, command_id, f'Cancel {sale.invoice_number}: {reason}')
-    for line in sale.lines.select_related('product', 'variant', 'batch').all():
-        balance, _ = StockBalance.objects.select_for_update().get_or_create(
-            business=sale.business, product=line.product, variant=line.variant, location=sale.location, batch=line.batch,
-            defaults={'quantity': Decimal('0')})
-        balance.quantity += line.base_quantity
-        balance.save(update_fields=['quantity', 'updated_at'])
-        for portion in line.cost_layers:
-            quantity = Decimal(portion['quantity'])
-            CostLayer.objects.create(business=sale.business, product=line.product, variant=line.variant,
-                location=sale.location, batch=line.batch, received_quantity=quantity,
-                remaining_quantity=quantity, unit_cost=Decimal(portion['unit_cost']))
-        movement = StockMovement.objects.create(business=sale.business, product=line.product, variant=line.variant,
-            location=sale.location, batch=line.batch, type='sale_cancellation', quantity_change=line.base_quantity,
-            inventory_cost=line.inventory_cost, unit_name=line.unit_name, conversion_factor=line.conversion_factor,
-            reason=f'Cancel {sale.invoice_number}: {reason}', reference_id=sale.pk, actor=actor)
-        record(business_id=sale.business_id, actor=actor, entity_type='stock', entity_id=movement.pk,
-            subject=line.product_name, product_id=line.product_id, location_id=sale.location_id,
-            action='sale_cancellation', reference_id=sale.pk,
-            changes={'quantity_change': str(line.base_quantity), 'inventory_cost': str(line.inventory_cost), 'reason': reason})
-    for payment in sale.payments.filter(kind='receipt').select_related('account__ledger_account'):
-        refund_id = uuid4()
-        refund_journal = post(sale.business, 'sale_refund', refund_id, f'Refund {sale.invoice_number}',
-            [dr(ensure_party_accounts(sale.customer).receivable_account, payment.amount, sale.customer), cr(payment.account.ledger_account, payment.amount)], actor=actor)
-        SalePayment.objects.create(sale=sale, command_id=refund_id, amount=payment.amount, account=payment.account,
-            journal=refund_journal, actor=actor, kind='refund')
-        MoneyTransaction.objects.create(business=sale.business, kind='sale_refund', amount=payment.amount,
-            account=payment.account, contact=sale.customer, note=f'Refund for {sale.invoice_number}',
-            event_date=business_today(sale.business), journal=refund_journal)
+    if sale.status == 'cancelled':
+        if sale.cancellation_command_id == command_id and sale.cancellation_reason == reason:
+            return sale
+        raise SaleError('This sale was already cancelled or the retry details changed.')
+    if sale.status != 'draft':
+        raise SaleError('Completed sales require an explicit credit, goods receipt and refund workflow.')
+    if JournalEntry.objects.filter(business=sale.business, source_type='sale', source_id=str(sale.pk)).exists():
+        raise SaleError('A financially posted sale cannot be cancelled as a draft.')
     sale.status = 'cancelled'
     sale.payment_status = 'cancelled'
     sale.cancellation_reason = reason
     sale.cancellation_command_id = command_id
     sale.save(update_fields=['status', 'payment_status', 'cancellation_reason', 'cancellation_command_id'])
     record(business_id=sale.business_id, actor=actor, entity_type='sale', entity_id=sale.pk,
-        action='cancelled', subject=sale.invoice_number, location_id=sale.location_id,
-        reference_id=sale.pk, changes={'reason': reason, 'refunded': str(sale.paid)})
+           action='draft_cancelled', subject=sale.invoice_number, reference_id=sale.pk,
+           changes={'reason': reason})
     return sale
 
 
 def serialize_sale(sale, include_lines=False):
     lines = list(sale.lines.all())
     purchase_cost = sum((line.inventory_cost for line in lines), Decimal('0'))
-    returns = list(sale.returns.prefetch_related('lines').all())
+    returns = list(sale.returns.prefetch_related('lines__receipts__disposition').all())
     returned_amount = sum((row.amount for row in returns), Decimal('0'))
-    returned_sellable_cost = sum((item.inventory_cost for row in returns for item in row.lines.all()
-                                 if item.condition == 'sellable'), Decimal('0'))
+    returned_sellable_cost = sum((
+        sum((receipt.inventory_cost for receipt in item.receipts.all()
+             if receipt.condition == 'sellable' or
+             (receipt.condition == 'inspection' and hasattr(receipt, 'disposition') and
+              receipt.disposition.action == 'restocked')), Decimal('0'))
+        if item.condition == 'pending' else item.inventory_cost if item.condition == 'sellable' else Decimal('0')
+        for row in returns for item in row.lines.all()), Decimal('0'))
     net_total = Decimal('0') if sale.status == 'cancelled' else sale.total - returned_amount
+    refund_outstanding = sum((max(Decimal('0'), row.amount - row.due_reduction - row.refund_amount -
+        sum((payment.amount for payment in row.refund_payments.all()), Decimal('0')))
+        for row in returns), Decimal('0'))
     result = {'id': str(sale.pk), 'invoice_number': sale.invoice_number,
         'quotation_id': str(sale.quotation_id) if sale.quotation_id else None,
         'customer_id': str(sale.customer_id) if sale.customer_id else None,
@@ -460,7 +339,8 @@ def serialize_sale(sale, include_lines=False):
         'purchase_cost': str(purchase_cost - returned_sellable_cost),
         'profit': str(net_total - (purchase_cost - returned_sellable_cost)),
         'item_count': len(lines), 'item_quantity': str(sum((line.quantity for line in lines), Decimal('0'))),
-        'due': str(Decimal('0') if sale.status == 'cancelled' else net_total-sale.paid), 'created_at': sale.created_at.isoformat(),
+        'due': str(Decimal('0') if sale.status == 'cancelled' else max(Decimal('0'), net_total-sale.paid)),
+        'refund_outstanding': str(refund_outstanding), 'created_at': sale.created_at.isoformat(),
         'invoice_date': sale.invoice_date.isoformat(), 'billing_address': sale.billing_address,
         'delivery_address': sale.delivery_address, 'source': sale.source, 'notes': sale.notes,
         'payment_account_names': [payment.account.name for payment in sale.payments.all() if payment.kind == 'receipt']}
@@ -468,14 +348,32 @@ def serialize_sale(sale, include_lines=False):
         result['lines'] = [{'id': line.pk, 'product_id': str(line.product_id), 'variant_id': str(line.variant_id), 'name': line.product_name,
             'variant': line.variant_name, 'image_url': line.image_url_snapshot, 'sku': line.sku, 'unit': line.unit_name, 'quantity': str(line.quantity),
             'unit_price': str(line.unit_price), 'inventory_cost': str(line.inventory_cost), 'line_total': str(line.line_total),
+            'batch_id': str(line.batch_id) if line.batch_id else None,
             'returned_quantity': str(sum((item.quantity for row in returns for item in row.lines.all()
                                           if item.sale_line_id == line.pk), Decimal('0')))} for line in lines]
         result['payments'] = [{'id': str(payment.pk), 'amount': str(payment.amount), 'account_id': str(payment.account_id),
             'account_name': payment.account.name, 'kind': payment.kind, 'created_at': payment.created_at.isoformat()} for payment in sale.payments.all()]
         result['returns'] = [{'id': str(row.pk), 'reason': row.reason, 'amount': str(row.amount),
-            'due_reduction': str(row.due_reduction), 'refund_amount': str(row.refund_amount),
+            'due_reduction': str(row.due_reduction), 'delivery_credit': str(row.delivery_credit),
+            'refund_amount': str(row.refund_amount + sum((payment.amount for payment in row.refund_payments.all()), Decimal('0'))),
+            'refund_outstanding': str(max(Decimal('0'), row.amount-row.due_reduction-row.refund_amount-
+                sum((payment.amount for payment in row.refund_payments.all()), Decimal('0')))),
             'refund_account_name': row.refund_account.name if row.refund_account_id else None,
             'created_at': row.created_at.isoformat(),
-            'lines': [{'line_id': item.sale_line_id, 'quantity': str(item.quantity), 'condition': item.condition}
+            'lines': [{'id': item.pk, 'line_id': item.sale_line_id, 'quantity': str(item.quantity),
+                       'condition': item.condition,
+                       'received_quantity': str(sum((receipt.quantity for receipt in item.receipts.all()), Decimal('0'))
+                           if item.condition == 'pending' else item.quantity),
+                       'receipts': [{'id': str(receipt.pk), 'quantity': str(receipt.quantity),
+                           'condition': receipt.condition, 'location_id': receipt.location_id,
+                           'status': (receipt.disposition.action if hasattr(receipt, 'disposition')
+                               else 'inspection' if receipt.condition == 'inspection'
+                               else 'restocked' if receipt.condition == 'sellable' else 'written_off'),
+                           'disposition_id': (str(receipt.disposition.pk)
+                               if hasattr(receipt, 'disposition') else None),
+                           'supplier_id': (str(receipt.disposition.supplier_id)
+                               if hasattr(receipt, 'disposition') and receipt.disposition.supplier_id else None),
+                           'evidence_reference': receipt.evidence_reference,
+                           'created_at': receipt.created_at.isoformat()} for receipt in item.receipts.all()]}
                       for item in row.lines.all()]} for row in returns]
     return result

@@ -24,6 +24,7 @@ SYSTEM_ACCOUNTS = {
     'AR': ('Accounts Receivable', 'asset'),
     'AP': ('Accounts Payable', 'liability'),
     'CUSTOMER_ADVANCE': ('Customer Advances', 'liability'),
+    'CUSTOMER_REFUND': ('Customer Refunds Payable', 'liability'),
     'SUPPLIER_ADVANCE': ('Supplier Advances', 'asset'),
     'SALES': ('Sales Revenue', 'income'),
     'DELIVERY_INCOME': ('Delivery Income', 'income'),

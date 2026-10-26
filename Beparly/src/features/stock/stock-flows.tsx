@@ -1,10 +1,11 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { toast } from 'tamagui/toast';
 
 import { AppText as Text } from '@/components/app-text';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { palette, radius, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
 import { queueStock } from '@/features/products/product-outbox';
@@ -37,7 +38,7 @@ export function LocationStockScreen({ movements = false }: { movements?: boolean
     finally { setLoading(false); }
   }, [token, businessId, id, movements]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
-  return <Page title={movements ? 'Stock Movements' : 'Location Stock'}><ScrollView contentContainerStyle={styles.body}>{loading ? <ActivityIndicator color={palette.primary} /> : error ? <Pressable onPress={() => void load()}><Text style={styles.link}>Retry loading stock</Text></Pressable> : items.length ? items.map((item, index) => <View key={item.id ?? `${item.product_id}-${index}`} style={styles.card}><Text style={styles.name}>{item.name}</Text><Text style={styles.muted}>{movements ? `${item.type}: ${item.quantity_change} · ${item.created_at?.slice(0, 10)}` : `${item.quantity} ${item.unit}`}</Text></View>) : <Text style={styles.muted}>No stock records yet.</Text>}</ScrollView></Page>;
+  return <Page title={movements ? 'Stock Movements' : 'Location Stock'}><RefreshableScrollView onRefresh={load} contentContainerStyle={styles.body}>{loading ? <ActivityIndicator color={palette.primary} /> : error ? <Pressable onPress={() => void load()}><Text style={styles.link}>Retry loading stock</Text></Pressable> : items.length ? items.map((item, index) => <View key={item.id ?? `${item.product_id}-${index}`} style={styles.card}><Text style={styles.name}>{item.name}</Text><Text style={styles.muted}>{movements ? `${item.type}: ${item.quantity_change} · ${item.created_at?.slice(0, 10)}` : `${item.quantity} ${item.unit}`}</Text></View>) : <Text style={styles.muted}>No stock records yet.</Text>}</RefreshableScrollView></Page>;
 }
 
 export function ManualStockScreen() {
@@ -55,8 +56,23 @@ export function ManualStockScreen() {
   const [unitCost, setUnitCost] = useState('');
   const [openings, setOpenings] = useState<ProductMovement[]>([]); const [openingId, setOpeningId] = useState('');
   const [increase, setIncrease] = useState(true);
-  const [financialReason, setFinancialReason] = useState<'owner_contribution' | 'count_gain' | 'shortage' | 'opening_correction'>('count_gain');
+  const [financialReason, setFinancialReason] = useState<'owner_contribution' | 'count_gain' | 'shortage' | 'opening_correction' | null>(null);
   const [busy, setBusy] = useState(false);
+  const refreshChoices = useCallback(async () => {
+    if (!token || !businessId) return;
+    try {
+      const [placeResult, productResult] = await Promise.all([api.locations(token, businessId), api.products(token, businessId, { search: productSearch, active: 'true' })]);
+      setLocations(placeResult.locations.filter((location) => location.is_active)); setProducts(productResult.products);
+      if (selected) {
+        const [detail, unitResult, batchResult, movementResult] = await Promise.all([
+          api.product(token, businessId, selected), api.productUnits(token, businessId, selected, selectedVariant || undefined),
+          api.productBatches(token, businessId, selected, selectedVariant || undefined), api.productMovements(token, businessId, selected, selectedVariant || undefined, true),
+        ]);
+        setSelectedProduct(detail.product); setVariants(detail.variants ?? []); setUnits(unitResult.units);
+        setBatches(batchResult.batches); setOpenings(movementResult.movements);
+      }
+    } catch (cause) { toast.error(cause instanceof Error ? cause.message : 'Could not refresh stock choices.'); }
+  }, [token, businessId, productSearch, selected, selectedVariant]);
   useFocusEffect(useCallback(() => {
     if (!token || !businessId) return;
     void api.locations(token, businessId).then(({ locations: value }) => { setLocations(value.filter((location) => location.is_active)); setLocationId((old) => old || value.find((location) => location.is_default)?.id || null); }).catch(() => {});
@@ -91,6 +107,7 @@ export function ManualStockScreen() {
   async function save() {
     if (!token || !businessId || !locationId || !selected || !/^\d+(\.\d{1,3})?$/.test(quantity) || Number(quantity) <= 0 || !reason.trim()) { toast.error('Choose a product and location, then enter quantity and reason.'); return; }
     if (product?.product_type === 'variant' && !selectedVariant) { toast.error('Choose a variant.'); return; }
+    if (!financialReason) { toast.error('Choose why the stock changed.'); return; }
     if (increase && (!/^\d+(\.\d{1,4})?$/.test(unitCost) || Number(unitCost) < 0)) { toast.error('Enter the actual cost per base unit.'); return; }
     if (activeVariant?.tracking_mode !== 'simple' && !batchId) { toast.error('Choose a batch.'); return; }
     if (financialReason === 'opening_correction' && !openingId) { toast.error('Choose the opening stock record to correct.'); return; }
@@ -104,13 +121,13 @@ export function ManualStockScreen() {
     } else toast.error(cause instanceof Error ? cause.message : 'Could not post stock.'); }
     finally { setBusy(false); }
   }
-  return <Page title="Adjust Stock"><ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+  return <Page title="Adjust Stock"><RefreshableScrollView onRefresh={refreshChoices} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
     {increase && <><Text style={styles.name}>How is stock coming in?</Text>
       <Pressable style={[styles.card, styles.selected]}><Text>Add Stock Manually</Text></Pressable>
       {(session?.account?.role === 'owner' || session?.account?.can_manage_purchases) &&
         <Pressable style={styles.card} onPress={() => router.push(`/purchases/new?locationId=${locationId || ''}`)}><Text>Purchase from Supplier</Text></Pressable>}
       <Text style={styles.muted}>Manual stock changes use the existing adjustment flow.</Text></>}
-    <View style={{ flexDirection: 'row', gap: 8 }}><Pressable onPress={() => { setIncrease(true); setFinancialReason('count_gain'); }} style={[styles.card, increase && styles.selected]}><Text>Add stock</Text></Pressable><Pressable onPress={() => { setIncrease(false); setFinancialReason('shortage'); }} style={[styles.card, !increase && styles.selected]}><Text>Reduce stock</Text></Pressable></View>
+    <View style={{ flexDirection: 'row', gap: 8 }}><Pressable onPress={() => { setIncrease(true); setFinancialReason(null); }} style={[styles.card, increase && styles.selected]}><Text>Add stock</Text></Pressable><Pressable onPress={() => { setIncrease(false); setFinancialReason(null); }} style={[styles.card, !increase && styles.selected]}><Text>Reduce stock</Text></Pressable></View>
     <Text style={styles.name}>Why did this change? *</Text>
     {(increase ? ([['count_gain', 'Inventory count gain'], ['owner_contribution', 'Owner added stock']] as const) : ([['shortage', 'Shortage or loss'], ...(session?.account?.role === 'owner' ? [['opening_correction', 'Correct opening stock'] as const] : [])] as const)).map(([value, label]) =>
       <Pressable key={value} onPress={() => setFinancialReason(value)} style={[styles.card, financialReason === value && styles.selected]}><Text>{label}</Text></Pressable>)}
@@ -130,7 +147,7 @@ export function ManualStockScreen() {
     {increase && <><Text style={styles.name}>Actual cost per base unit (৳) *</Text><TextInput style={styles.input} placeholder="Cost paid for this stock" keyboardType="decimal-pad" value={unitCost} onChangeText={setUnitCost} /><Text style={styles.muted}>Use the actual cost of these goods. The saved buying price is only a reference.</Text></>}
     <Text style={styles.name}>Reason *</Text><TextInput style={styles.input} placeholder="Why is stock changing?" value={reason} onChangeText={setReason} />
     <Pressable disabled={busy} onPress={() => void save()} style={styles.action}><Text style={styles.actionText}>{busy ? 'Posting…' : increase ? 'Add Stock' : 'Reduce Stock'}</Text></Pressable>
-  </ScrollView></Page>;
+  </RefreshableScrollView></Page>;
 }
 
 export function StockActionScreen({ kind }: { kind: 'waste' | 'transfer' }) {
@@ -143,6 +160,17 @@ export function StockActionScreen({ kind }: { kind: 'waste' | 'transfer' }) {
   const [units, setUnits] = useState<ProductUnit[]>([]); const [unitId, setUnitId] = useState('');
   const [batches, setBatches] = useState<StockBatch[]>([]); const [batchId, setBatchId] = useState('');
   const [quantity, setQuantity] = useState(''); const [reason, setReason] = useState('damaged'); const [busy, setBusy] = useState(false);
+  const refreshChoices = useCallback(async () => {
+    if (!token || !businessId) return;
+    try {
+      const [placeResult, productResult] = await Promise.all([api.locations(token, businessId), api.products(token, businessId, { search: productSearch, active: 'true' })]);
+      setLocations(placeResult.locations.filter((item) => item.is_active)); setProducts(productResult.products);
+      if (selected) {
+        const [detail, unitResult, batchResult] = await Promise.all([api.product(token, businessId, selected), api.productUnits(token, businessId, selected, selectedVariant || undefined), api.productBatches(token, businessId, selected, selectedVariant || undefined)]);
+        setVariants(detail.variants ?? []); setUnits(unitResult.units); setBatches(batchResult.batches);
+      }
+    } catch (cause) { toast.error(cause instanceof Error ? cause.message : 'Could not refresh stock choices.'); }
+  }, [token, businessId, productSearch, selected, selectedVariant]);
   useFocusEffect(useCallback(() => {
     if (!token || !businessId) return;
     void api.locations(token, businessId).then(({ locations: value }) => { setLocations(value.filter((item) => item.is_active)); setSource((old) => old || value.find((item) => item.is_default)?.id || 0); }).catch(() => {});
@@ -182,7 +210,7 @@ export function StockActionScreen({ kind }: { kind: 'waste' | 'transfer' }) {
     } else toast.error(cause instanceof Error ? cause.message : 'Could not post stock change.'); }
     finally { setBusy(false); }
   }
-  return <Page title={kind === 'waste' ? 'Record Waste' : 'Transfer Stock'}><ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+  return <Page title={kind === 'waste' ? 'Record Waste' : 'Transfer Stock'}><RefreshableScrollView onRefresh={refreshChoices} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
     <Text style={styles.name}>Product *</Text><TextInput style={styles.input} placeholder="Search name, SKU or barcode" value={productSearch} onChangeText={setProductSearch} />{products.map((item) => <Pressable key={item.id} onPress={() => { setSelected(item.id); setSelectedVariant(''); setBatchId(''); setUnitId(''); }} style={[styles.card, selected === item.id && styles.selected]}><Text>{item.name}</Text></Pressable>)}
     {product?.product_type === 'variant' && <><Text style={styles.name}>Variant *</Text>{variants.map((item) => <Pressable key={item.id} onPress={() => { setSelectedVariant(item.id); setBatchId(''); setUnitId(''); }} style={[styles.card, selectedVariant === item.id && styles.selected]}><Text>{item.label} · {item.sku}</Text></Pressable>)}</>}
     <Text style={styles.name}>From location *</Text>{locations.map((item) => <Pressable key={item.id} onPress={() => setSource(item.id)} style={[styles.card, source === item.id && styles.selected]}><Text>{item.name}</Text></Pressable>)}
@@ -192,7 +220,7 @@ export function StockActionScreen({ kind }: { kind: 'waste' | 'transfer' }) {
     <Text style={styles.name}>Quantity *</Text><TextInput style={styles.input} placeholder="Enter quantity" keyboardType="decimal-pad" value={quantity} onChangeText={setQuantity} />
     {kind === 'waste' && <><Text style={styles.name}>Reason *</Text>{['damaged', 'broken', 'spoiled', 'expired', 'lost', 'other'].map((value) => <Pressable key={value} onPress={() => setReason(value)} style={[styles.card, reason === value && styles.selected]}><Text>{value[0].toUpperCase() + value.slice(1)}</Text></Pressable>)}</>}
     <Pressable disabled={busy} onPress={() => void save()} style={styles.action}><Text style={styles.actionText}>{busy ? 'Posting…' : kind === 'waste' ? 'Record Waste' : 'Transfer Stock'}</Text></Pressable>
-  </ScrollView></Page>;
+  </RefreshableScrollView></Page>;
 }
 
 const styles = StyleSheet.create({ safe: { flex: 1, backgroundColor: palette.surface }, back: { width: '100%', maxWidth: 640, alignSelf: 'center', padding: spacing.lg }, link: { color: palette.primary, fontWeight: '700' }, title: { width: '100%', maxWidth: 640, alignSelf: 'center', fontSize: 24, fontWeight: '700', color: palette.ink, paddingHorizontal: spacing.lg }, body: { width: '100%', maxWidth: 640, alignSelf: 'center', padding: spacing.lg, gap: 12 }, card: { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1, borderRadius: radius.sm, padding: spacing.lg }, selected: { borderColor: palette.primary, backgroundColor: palette.primarySoft }, name: { color: palette.ink, fontSize: 15, fontWeight: '700' }, muted: { color: palette.secondary, fontSize: 13 }, error: { color: palette.rose }, input: { minHeight: 52, backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border, borderRadius: radius.sm, paddingHorizontal: spacing.lg }, action: { minHeight: 54, justifyContent: 'center', alignItems: 'center', backgroundColor: palette.primary, borderRadius: radius.sm }, actionText: { color: '#fff', fontWeight: '700' } });

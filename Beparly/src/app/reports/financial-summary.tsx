@@ -1,7 +1,7 @@
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { router } from 'expo-router';
 import { createElement, useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
@@ -88,7 +88,7 @@ export default function FinancialSummaryScreen() {
     setPicker(null);
   }
   if (session?.account?.role !== 'owner') return null;
-  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content}>
+  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={retry > 0 && loading && !dateError} onRefresh={() => { setRetry((value) => value + 1); setDetailRetry((value) => value + 1); }} />}>
     <View style={styles.heading}><Pressable onPress={() => { releaseWebFocus(); router.back(); }} accessibilityRole="button" accessibilityLabel="Back to reports" style={styles.back}><AppSymbol name="back" size={20} color="#15211F" /></Pressable><View style={{ flex: 1 }}><Text style={styles.eyebrow}>REPORTS</Text><Text style={styles.title}>Financial Summary</Text></View></View>
     <Text style={styles.intro}>Posted income and costs for {session.account.business.name}. Payments against old dues are excluded.</Text>
     <View style={styles.viewSection}>

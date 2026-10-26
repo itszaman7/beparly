@@ -15,6 +15,7 @@ from .models import Contact, ExpenseCategory, IncomeCategory, JournalEntry, Jour
 from .services import (AccountingError, balance, command_uuid, contact_position,
                        create_money_account, money_operation, create_financial_category,
                        reverse, setup_business, ensure_party_accounts)
+from .formatting import decimal_text
 from stockkeeper.services import business_today
 
 
@@ -46,7 +47,7 @@ def command(request):
 def serialize_account(item):
     return {'id': str(item.pk), 'name': item.name, 'kind': item.kind,
             'masked_reference': item.masked_reference, 'is_default': item.is_default,
-            'is_active': item.is_active, 'balance': str(balance(item.ledger_account)),
+            'is_active': item.is_active, 'balance': decimal_text(balance(item.ledger_account)),
             'created_at': item.created_at.isoformat()}
 
 
@@ -62,7 +63,7 @@ def serialize_txn(item):
 def serialize_income_account(item):
     totals = JournalLine.objects.filter(account=item).aggregate(debit=Sum('debit'), credit=Sum('credit'))
     value = (totals['credit'] or Decimal('0')) - (totals['debit'] or Decimal('0'))
-    return {'id': item.code, 'name': item.name, 'balance': str(value)}
+    return {'id': item.code, 'name': item.name, 'balance': decimal_text(value)}
 
 
 def serialize_ledger_account(item):
@@ -72,7 +73,7 @@ def serialize_ledger_account(item):
     else:
         value = (totals['debit'] or Decimal('0')) - (totals['credit'] or Decimal('0'))
     return {'id': item.code, 'code': item.code, 'name': item.name, 'type': item.type,
-            'system_managed': item.system_managed, 'balance': str(value)}
+            'system_managed': item.system_managed, 'balance': decimal_text(value)}
 
 
 @csrf_exempt
@@ -97,10 +98,10 @@ def money_accounts(request, business_id):
                     row.update({'contact_id': str(contact.pk), 'contact_name': contact.name,
                                 'party_type': 'customer' if account.type == 'asset' else 'supplier'})
                     party_accounts.append(row)
-        return JsonResponse({'accounts': rows, 'available_money': str(sum((Decimal(row['balance']) for row in rows), Decimal('0'))),
+        return JsonResponse({'accounts': rows, 'available_money': decimal_text(sum((Decimal(row['balance']) for row in rows), Decimal('0'))),
             'ledger_accounts': [serialize_ledger_account(item) for item in ledger_accounts],
             'party_accounts': party_accounts,
-            'income_accounts': income_rows, 'posted_revenue': str(sum((Decimal(row['balance']) for row in income_rows), Decimal('0')))})
+            'income_accounts': income_rows, 'posted_revenue': decimal_text(sum((Decimal(row['balance']) for row in income_rows), Decimal('0')))})
     try:
         data = body(request)
         item = create_money_account(member.business, str(data.get('name', '')).strip(), data.get('kind'),
@@ -201,18 +202,18 @@ def money_account_ledger(request, business_id, account_id):
     for item in reversed(recent_entries):
         line = item.lines.filter(account=ledger_account).aggregate(debit=Sum('debit'), credit=Sum('credit'))
         change = ((line['credit'] or Decimal('0')) - (line['debit'] or Decimal('0'))) if normal_credit else ((line['debit'] or Decimal('0')) - (line['credit'] or Decimal('0')))
-        entries.append({'id': str(item.pk), 'kind': item.source_type, 'amount': str(abs(change)),
+        entries.append({'id': str(item.pk), 'kind': item.source_type, 'amount': decimal_text(abs(change)),
             'account_id': account_id, 'destination_id': None, 'contact_id': None, 'note': item.description,
             'event_date': item.event_date.isoformat(), 'created_at': item.created_at.isoformat(),
-            'reversed': bool(item.reverses_id), 'debit': str(line['debit'] or Decimal('0')),
-            'credit': str(line['credit'] or Decimal('0')), 'change': str(change),
+            'reversed': bool(item.reverses_id), 'debit': decimal_text(line['debit'] or Decimal('0')),
+            'credit': decimal_text(line['credit'] or Decimal('0')), 'change': decimal_text(change),
             'direction': 'in' if change >= 0 else 'out'})
     closing = opening + total_in - total_out
     account_data = serialize_account(money_account) if money_account else serialize_ledger_account(ledger_account)
-    return JsonResponse({'account': account_data, 'opening_balance': str(opening),
-        'total_in': str(total_in), 'total_out': str(total_out), 'total_debit': str(total_debit),
-        'total_credit': str(total_credit), 'change': str(total_in - total_out),
-        'closing_balance': str(closing), 'transactions': entries, 'truncated': truncated})
+    return JsonResponse({'account': account_data, 'opening_balance': decimal_text(opening),
+        'total_in': decimal_text(total_in), 'total_out': decimal_text(total_out), 'total_debit': decimal_text(total_debit),
+        'total_credit': decimal_text(total_credit), 'change': decimal_text(total_in - total_out),
+        'closing_balance': decimal_text(closing), 'transactions': entries, 'truncated': truncated})
 
 
 @csrf_exempt

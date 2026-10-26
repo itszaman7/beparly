@@ -1,6 +1,6 @@
 import { router, useLocalSearchParams, type Href } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol, symbols } from '@/components/app-symbol';
@@ -14,11 +14,11 @@ import { sumMoney } from '@/features/dashboard/money';
 import { weekStart } from '@/features/dashboard/week';
 import { formatBdt } from '@/features/products/product-rules';
 import { businessToday } from '@/features/reports/dates';
+import { blurWebFocus } from '@/utils/web-focus';
 import type { SalesHubSummary } from '@/services/api';
 
 const actions = [
-  { label: 'New Sale', icon: 'sale', color: palette.primaryDeep, background: palette.primarySoft },
-  { label: 'POS', icon: 'sale', color: palette.blue, background: palette.blueSoft },
+  { label: 'Sale', icon: 'sale', color: palette.primaryDeep, background: palette.primarySoft },
   { label: 'Purchase', icon: 'purchase', color: palette.orange, background: palette.orangeSoft },
   { label: 'Receive', icon: 'receive', color: palette.primaryDeep, background: palette.primarySoft },
   { label: 'Expense', icon: 'expense', color: palette.orange, background: palette.orangeSoft },
@@ -28,9 +28,8 @@ const actions = [
 ] as const satisfies readonly { label: string; icon: keyof typeof symbols; color: string; background: string }[];
 
 const actionRoutes: Partial<Record<(typeof actions)[number]['label'], string>> = {
-  'New Sale': '/sales/new?mode=manual',
+  Sale: '/sales-hub',
   Purchase: '/purchases/new',
-  POS: '/sales/new?mode=quick',
   Receive: '/money/new?flow=in',
   Expense: '/money/new?flow=expense',
   Products: '/products',
@@ -81,7 +80,7 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={dashboard.refreshing} onRefresh={dashboard.refresh} tintColor={palette.primaryDeep} />}>
         <View style={styles.content}>
           <View style={styles.hero}>
             <Entrance>
@@ -111,14 +110,11 @@ export default function HomeScreen() {
                   <View style={styles.datePill}><Text style={styles.dateText}>{weekLabel}</Text></View>
                 </View>
                 <Text style={styles.salesValue}>{amountOrDash(salesThisWeek)}</Text>
-                {dashboard.sales?.error ? <Text accessibilityRole="alert" style={styles.loadError}>Sales unavailable. Tap Refresh to try again.</Text> : null}
+                {dashboard.sales?.error ? <Text accessibilityRole="alert" style={styles.loadError}>Sales unavailable. Pull down to try again.</Text> : null}
                 <View style={styles.salesRule} />
                 <View style={styles.salesBottom}>
                   {owner ? <View><Text style={styles.salesMetaLabel}>Money received this week</Text><Text style={styles.salesMetaValue}>{amountOrDash(dashboard.finance?.value?.received)}</Text></View> :
                     <View><Text style={styles.salesMetaLabel}>Completed this week</Text><Text style={styles.salesMetaValue}>{completedThisWeek ?? '—'} invoices</Text></View>}
-                  <PressScale onPress={dashboard.refresh} accessibilityRole="button" accessibilityLabel="Refresh dashboard" style={styles.refreshButton}>
-                    <AppSymbol name="movements" size={18} color={palette.primaryDeep} /><Text style={styles.refreshText}>Refresh</Text>
-                  </PressScale>
                 </View>
               </View>
             </Entrance>
@@ -134,7 +130,7 @@ export default function HomeScreen() {
                     <PressScale
                       onPress={() => {
                         const route = actionRoutes[action.label];
-                        if (route) router.push(route as Href);
+                        if (route) { blurWebFocus(); router.push(route as Href); }
                       }}
                       accessibilityRole="button"
                       accessibilityLabel={`Open ${action.label === 'Stock' ? 'shops and warehouses' : action.label}`}
@@ -167,7 +163,7 @@ export default function HomeScreen() {
                 ))}
               </View>
               {owner && dashboard.finance?.value && [dashboard.finance.value.received, dashboard.finance.value.expenses, dashboard.finance.value.customerDue, dashboard.finance.value.supplierDue].some((value) => value === null) ?
-                <Text style={styles.partialNote}>Some money figures are unavailable. Refresh to try again.</Text> : null}
+                <Text style={styles.partialNote}>Some money figures are unavailable. Pull down to try again.</Text> : null}
             </Entrance>
 
             <Entrance delay={360}>
@@ -288,9 +284,6 @@ const styles = StyleSheet.create({
   salesBottom: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: spacing.sm },
   salesMetaLabel: { color: palette.muted, fontSize: typography.caption },
   salesMetaValue: { color: palette.ink, fontSize: 17, fontWeight: '700', marginTop: spacing.xs },
-  refreshButton: { minHeight: 40, backgroundColor: palette.primarySoft, borderRadius: radius.sm, paddingHorizontal: spacing.md,
-    flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
-  refreshText: { color: palette.primaryDeep, fontSize: 12, fontWeight: '700' },
   loadError: { color: '#A62925', fontSize: 12, lineHeight: 17, marginTop: spacing.sm },
   body: { paddingHorizontal: spacing.lg, paddingTop: spacing.xxl, gap: spacing.xxl },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md },

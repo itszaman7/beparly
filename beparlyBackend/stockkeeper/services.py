@@ -150,12 +150,14 @@ def consume(product, variant, location, base, batch):
     return cost, portions
 
 
-def manual_receive(product, location, quantity, unit_cost, actor, command_id, reason, batch=None, unit_id=None, variant=None, financial_reason='count_gain'):
+def manual_receive(product, location, quantity, unit_cost, actor, command_id, reason, batch=None, unit_id=None, variant=None, financial_reason=None):
     with transaction.atomic():
         Business.objects.select_for_update().get(pk=product.business_id)
         prior = StockCommand.objects.filter(business_id=product.business_id, command_id=command_id).first()
         if prior:
             return prior.result
+        if financial_reason not in ('owner_contribution', 'count_gain'):
+            raise StockError('Choose why stock was added.')
         variant = variant or resolve_variant(product)
         movement = receive(product, location, quantity, unit_cost, actor, command_id, 'manual_receipt', reason, batch, unit_id, variant, financial_reason)
         result = {'movement_id': str(movement.pk), 'product_id': str(product.pk), 'variant_id': str(variant.pk), 'quantity_change': str(movement.quantity_change)}
@@ -191,6 +193,8 @@ def post_adjustment(product, location, quantity, increase, actor, command_id, re
         prior = StockCommand.objects.filter(business_id=product.business_id, command_id=command_id).first()
         if prior:
             return prior.result
+        if financial_reason not in (('owner_contribution', 'count_gain') if increase else ('shortage', 'opening_correction')):
+            raise StockError('Choose a financial reason that matches this stock change.')
         from accounting.services import ensure_inventory_cutoff
         ensure_inventory_cutoff(product.business)
         variant = variant or resolve_variant(product)
@@ -199,7 +203,7 @@ def post_adjustment(product, location, quantity, increase, actor, command_id, re
                 raise StockError('Reactivate this product before adding stock.')
             if unit_cost is None:
                 raise StockError('Enter the actual unit cost for added stock.')
-            movement = receive(product, location, quantity, unit_cost, actor, command_id, 'adjustment', reason, batch, unit_id, variant, financial_reason or 'count_gain')
+            movement = receive(product, location, quantity, unit_cost, actor, command_id, 'adjustment', reason, batch, unit_id, variant, financial_reason)
         else:
             validate_batch(variant, batch)
             base, factor, unit_name = normalize_quantity(variant, quantity, unit_id)
@@ -217,7 +221,7 @@ def post_adjustment(product, location, quantity, increase, actor, command_id, re
                 inventory_cost=-cost, unit_name=unit_name, conversion_factor=factor,
                 reason=reason, actor=actor, reference_id=command_id, opening_movement=opening_movement)
             audit_movement(movement)
-            financial_stock_movement(movement, financial_reason or 'loss')
+            financial_stock_movement(movement, financial_reason)
         result = {'movement_id': str(movement.pk), 'product_id': str(product.pk), 'variant_id': str(variant.pk), 'quantity_change': str(movement.quantity_change)}
         StockCommand.objects.create(business_id=product.business_id, command_id=command_id, result=result)
         return result

@@ -1,6 +1,6 @@
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, ScrollView, Switch } from 'react-native';
+import { ActivityIndicator, RefreshControl, ScrollView, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Input, Text, XStack, YStack } from 'tamagui';
 
@@ -15,6 +15,7 @@ export default function AccountScreen() {
   const { session, signOut } = useAuth();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(false);
+  const [refreshCount, setRefreshCount] = useState(0);
   const [showForm, setShowForm] = useState(false);
   const [username, setUsername] = useState('');
   const [phone, setPhone] = useState('');
@@ -44,7 +45,7 @@ export default function AccountScreen() {
         .finally(() => { if (active) setLoading(false); });
     }, 0);
     return () => { active = false; clearTimeout(timeout); };
-  }, [session]);
+  }, [session, refreshCount]);
 
   if (!session) return null;
   const { account, token } = session;
@@ -136,7 +137,7 @@ export default function AccountScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#F8FAF9' }}>
-      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ alignItems: 'center', paddingBottom: 110 }}>
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ alignItems: 'center', paddingBottom: 110 }} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefreshCount((count) => count + 1)} />}>
         <YStack width="100%" maxWidth={600} paddingHorizontal={22} paddingTop={26} gap={22}>
           <YStack gap={3}>
             <Text color={ink} fontSize={28} fontWeight="700">Account & team</Text>

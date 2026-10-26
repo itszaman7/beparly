@@ -1,6 +1,6 @@
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
@@ -40,7 +40,7 @@ export default function ReportSales() {
     return () => { active = false; };
   }, [session?.token, session?.account?.role, businessId, filterKey, page, retry, key, start_date, end_date, as_of, product_id, variant_id, customer_id, location_id]);
   if (session?.account?.role !== 'owner') return null;
-  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content}>
+  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={retry > 0 && state?.key !== key} onRefresh={() => setRetry((value) => value + 1)} />}>
     <View style={styles.heading}><Pressable onPress={() => { releaseWebFocus(); router.back(); }} accessibilityRole="button" accessibilityLabel="Back to report" style={styles.back}><AppSymbol name="back" size={20} color="#15211F" /></Pressable><View style={{ flex: 1 }}><Text style={styles.eyebrow}>REPORT SALES</Text><Text style={styles.title}>Sales details</Text></View></View>
     <Text style={styles.muted}>{params.as_of ? `Posted through ${params.as_of}` : `Posted ${params.start_date} to ${params.end_date}`}</Text>
     <Text style={styles.muted}>Open a sale number to see its customer, products, payments and document details.</Text>

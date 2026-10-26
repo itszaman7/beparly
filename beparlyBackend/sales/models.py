@@ -17,6 +17,8 @@ class Sale(models.Model):
     income_category = models.ForeignKey('accounting.IncomeCategory', on_delete=models.PROTECT)
     actor = models.ForeignKey('accounts.User', on_delete=models.PROTECT)
     command_id = models.UUIDField()
+    # Empty only for sales posted before durable checkout commands were introduced.
+    request_hash = models.CharField(max_length=64, blank=True)
     quotation = models.OneToOneField('Quotation', null=True, blank=True, on_delete=models.PROTECT, related_name='completed_sale')
     mode = models.CharField(max_length=12, choices=[('quick', 'Quick sale'), ('manual', 'Manual sale')])
     price_tier = models.CharField(max_length=12, choices=[('retail', 'Retail'), ('wholesale', 'Wholesale')])
@@ -65,7 +67,22 @@ class SaleLine(models.Model):
     cost_layers = models.JSONField(default=list)
 
 
-class SalePayment(models.Model):
+class AppendOnlySaleEvent(models.Model):
+    """Normal ORM writes cannot alter recorded payment and return evidence."""
+
+    class Meta:
+        abstract = True
+
+    def save(self, *args, **kwargs):
+        if self.pk and type(self).objects.filter(pk=self.pk).exists():
+            raise ValueError('Posted sale event cannot be changed; record a correction event.')
+        return super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError('Posted sale event cannot be deleted; record a correction event.')
+
+
+class SalePayment(AppendOnlySaleEvent):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sale = models.ForeignKey(Sale, on_delete=models.PROTECT, related_name='payments')
     command_id = models.UUIDField()
@@ -74,13 +91,17 @@ class SalePayment(models.Model):
     journal = models.OneToOneField('accounting.JournalEntry', on_delete=models.PROTECT)
     actor = models.ForeignKey('accounts.User', on_delete=models.PROTECT)
     kind = models.CharField(max_length=12, default='receipt')
+    sale_return = models.ForeignKey('SaleReturn', null=True, blank=True, on_delete=models.PROTECT,
+                                    related_name='refund_payments')
+    confirmation_reference = models.CharField(max_length=120, blank=True)
+    request_hash = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         constraints = [models.UniqueConstraint(fields=['sale', 'command_id'], name='unique_sale_payment_command')]
 
 
-class SaleReturn(models.Model):
+class SaleReturn(AppendOnlySaleEvent):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     sale = models.ForeignKey(Sale, on_delete=models.PROTECT, related_name='returns')
     command_id = models.UUIDField()
@@ -92,6 +113,8 @@ class SaleReturn(models.Model):
     refund_account = models.ForeignKey('accounting.MoneyAccount', null=True, blank=True, on_delete=models.PROTECT)
     journal = models.OneToOneField('accounting.JournalEntry', on_delete=models.PROTECT)
     refund_journal = models.OneToOneField('accounting.JournalEntry', null=True, blank=True, on_delete=models.PROTECT, related_name='+')
+    delivery_credit = models.DecimalField(max_digits=18, decimal_places=2, default=0)
+    request_hash = models.CharField(max_length=64, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -101,19 +124,72 @@ class SaleReturn(models.Model):
         ]
 
 
-class SaleReturnLine(models.Model):
+class SaleReturnLine(AppendOnlySaleEvent):
     sale_return = models.ForeignKey(SaleReturn, on_delete=models.PROTECT, related_name='lines')
     sale_line = models.ForeignKey(SaleLine, on_delete=models.PROTECT, related_name='return_lines')
     quantity = models.DecimalField(max_digits=18, decimal_places=3)
     amount = models.DecimalField(max_digits=18, decimal_places=2)
     inventory_cost = models.DecimalField(max_digits=22, decimal_places=7)
-    condition = models.CharField(max_length=12, choices=[('sellable', 'Sellable'), ('damaged', 'Damaged')])
+    condition = models.CharField(max_length=12, choices=[('pending', 'Awaiting receipt'), ('sellable', 'Sellable'), ('damaged', 'Damaged')])
+    cost_layers = models.JSONField(default=list)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=['sale_return', 'sale_line'], name='unique_sale_return_line'),
             models.CheckConstraint(condition=Q(quantity__gt=0) & Q(amount__gt=0) & Q(inventory_cost__gte=0), name='sale_return_line_amounts_valid'),
         ]
+
+
+class SaleReturnReceipt(AppendOnlySaleEvent):
+    """Confirmed physical custody event for one credited sale line."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey('accounts.Business', on_delete=models.PROTECT)
+    return_line = models.ForeignKey(SaleReturnLine, on_delete=models.PROTECT, related_name='receipts')
+    location = models.ForeignKey('stockkeeper.StockLocation', on_delete=models.PROTECT)
+    quantity = models.DecimalField(max_digits=18, decimal_places=3)
+    inventory_cost = models.DecimalField(max_digits=22, decimal_places=7)
+    condition = models.CharField(max_length=12, choices=[('sellable', 'Sellable'), ('damaged', 'Damaged'),
+        ('inspection', 'Awaiting inspection')])
+    cost_layers = models.JSONField(default=list)
+    evidence_reference = models.CharField(max_length=120)
+    actor = models.ForeignKey('accounts.User', on_delete=models.PROTECT)
+    command_id = models.UUIDField()
+    request_hash = models.CharField(max_length=64)
+    journal = models.OneToOneField('accounting.JournalEntry', null=True, on_delete=models.PROTECT)
+    movement = models.OneToOneField('stockkeeper.StockMovement', null=True, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['business', 'command_id'], name='unique_sale_return_receipt_command'),
+            models.CheckConstraint(condition=Q(quantity__gt=0) & Q(inventory_cost__gte=0),
+                                   name='sale_return_receipt_values_valid'),
+        ]
+
+
+class SaleReturnDisposition(AppendOnlySaleEvent):
+    """Final custody decision for an inspection receipt; supplier credit is separate."""
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    business = models.ForeignKey('accounts.Business', on_delete=models.PROTECT)
+    receipt = models.OneToOneField(SaleReturnReceipt, on_delete=models.PROTECT,
+        related_name='disposition')
+    action = models.CharField(max_length=24, choices=[('restocked', 'Restocked'),
+        ('written_off', 'Written off'), ('returned_to_supplier', 'Returned to supplier')])
+    supplier = models.ForeignKey('accounting.Contact', null=True, blank=True,
+        on_delete=models.PROTECT)
+    evidence_reference = models.CharField(max_length=120)
+    actor = models.ForeignKey('accounts.User', on_delete=models.PROTECT)
+    command_id = models.UUIDField()
+    request_hash = models.CharField(max_length=64)
+    journal = models.OneToOneField('accounting.JournalEntry', null=True,
+        on_delete=models.PROTECT)
+    movement = models.OneToOneField('stockkeeper.StockMovement', null=True,
+        on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['business', 'command_id'],
+            name='unique_sale_return_disposition_command')]
 
 
 class SaleSequence(models.Model):

@@ -198,7 +198,7 @@ class ManualReceiptInput(serializers.Serializer):
     quantity = serializers.DecimalField(max_digits=18, decimal_places=3, min_value=Decimal('0.001'))
     unit_cost = serializers.DecimalField(max_digits=14, decimal_places=4, min_value=0)
     reason = serializers.CharField(max_length=240, allow_blank=False)
-    financial_reason = serializers.ChoiceField(choices=['owner_contribution', 'count_gain'], required=False)
+    financial_reason = serializers.ChoiceField(choices=['owner_contribution', 'count_gain'])
     batch_id = serializers.UUIDField(required=False)
     unit_id = serializers.UUIDField(required=False)
 
@@ -232,7 +232,7 @@ class ManualReceipt(APIView):
                 raise StockError('Choose a batch for this variant.')
             result = manual_receive(product, location, values['quantity'], values['unit_cost'],
                                     current_session(request).user, command_id, values['reason'], batch, values.get('unit_id'), variant,
-                                    values.get('financial_reason', 'count_gain'))
+                                     values['financial_reason'])
         except (StockError, AccountingError) as exc:
             return error('invalid_stock', str(exc), 409)
         return JsonResponse(result, status=201)
@@ -362,7 +362,7 @@ class AdjustmentInput(StockDeductionInput):
     increase = serializers.BooleanField()
     unit_cost = serializers.DecimalField(max_digits=14, decimal_places=4, min_value=0, required=False)
     reason = serializers.CharField(max_length=240)
-    financial_reason = serializers.ChoiceField(choices=['owner_contribution', 'count_gain', 'shortage', 'opening_correction'], required=False)
+    financial_reason = serializers.ChoiceField(choices=['owner_contribution', 'count_gain', 'shortage', 'opening_correction'])
     opening_movement_id = serializers.UUIDField(required=False)
 
 

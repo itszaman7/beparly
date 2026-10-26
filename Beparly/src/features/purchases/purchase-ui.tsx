@@ -7,9 +7,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol, type AppSymbolName } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { RecordAttachments } from '@/features/attachments/record-attachments';
 import { PartyAvatar, PartyButton, PartyInfo, PartyMetric } from '@/features/contacts/party-ui';
 import { useAuth } from '@/features/auth/auth-context';
+import { SelectionToolbar, useRecordSelection } from '@/features/documents/record-selection';
 import { api, resolveAssetUrl, type PurchasePaymentAccount, type PurchaseRecord, type Supplier, type SupplierAction,
   type PendingAttachment, type RecordAttachment } from '@/services/api';
 import { displayDocumentNumber } from '@/utils/document-number';
@@ -21,9 +23,10 @@ const command = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c
 const message = (cause: unknown) => cause instanceof Error ? cause.message : 'Could not connect. Try again.';
 const currency = (value: string | number) => Number(value || 0).toLocaleString('en-BD', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-function Screen({ title, icon = 'purchase', backTo = '/purchases', wide = false, children }: {
-  title: string; icon?: AppSymbolName; backTo?: string; wide?: boolean; children: React.ReactNode;
+function Screen({ title, icon = 'purchase', backTo = '/purchases', wide = false, children, onRefresh }: {
+  title: string; icon?: AppSymbolName; backTo?: string; wide?: boolean; children: React.ReactNode; onRefresh?: () => Promise<unknown> | void;
 }) {
+  const Scroller = onRefresh ? RefreshableScrollView : ScrollView;
   return <SafeAreaView style={styles.safe}>
     <View style={styles.headerShell}><View style={[styles.header, wide && { maxWidth: 1076 }]}>
       <Pressable accessibilityRole="button" accessibilityLabel="Go back"
@@ -33,9 +36,9 @@ function Screen({ title, icon = 'purchase', backTo = '/purchases', wide = false,
       <View style={styles.headerIcon}><AppSymbol name={icon} size={22} color="#006D64" /></View>
       <Text style={styles.title} numberOfLines={1}>{title}</Text>
     </View></View>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
+    <Scroller onRefresh={onRefresh!} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
       <View style={[styles.content, wide && { maxWidth: 1040 }]}>{children}</View>
-    </ScrollView>
+    </Scroller>
   </SafeAreaView>;
 }
 function Field({ label, value, onChangeText, placeholder, keyboardType, multiline }: {
@@ -87,7 +90,7 @@ export function SuppliersScreen() {
     finally { if (request === requestId.current) setLoading(false); }
   }, [session, appliedSearch]);
   useFocusEffect(useCallback(() => { void load(1); }, [load]));
-  return <Screen title="Suppliers" icon="parties" backTo="/more" wide>
+  return <Screen title="Suppliers" icon="parties" backTo="/more" wide onRefresh={() => load(1)}>
     <View style={supplierStyles.topRow}><View style={{ flex: 1, minWidth: 180 }}><Text style={supplierStyles.pageHeading}>Supplier directory</Text><Text style={styles.muted}>Check payables, purchases and supplier account history.</Text></View><PartyButton label="+ Add supplier" primary onPress={() => router.push('/suppliers/new')} /></View>
     <TextInput value={search} onChangeText={setSearch} placeholder="Search supplier name or phone" placeholderTextColor="#83918B" style={supplierStyles.search} accessibilityLabel="Search suppliers" />
     <ErrorText value={error} />
@@ -170,6 +173,8 @@ export function SupplierDetailScreen() {
   const { session } = useAuth();
   const [supplier, setSupplier] = useState<Supplier | null>(null);
   const [purchases, setPurchases] = useState<PurchaseRecord[]>([]);
+  const selection = useRecordSelection();
+  const clearSelection = selection.clear;
   const [nextPurchases, setNextPurchases] = useState<number | null>(null);
   const [activity, setActivity] = useState<{ id: number; description: string; account: string; debit: string; credit: string; created_at: string }[]>([]);
   const [nextActivity, setNextActivity] = useState<number | null>(null);
@@ -194,7 +199,7 @@ export function SupplierDetailScreen() {
       setAccountId(current => current || accountResult.accounts.find(item => item.is_default)?.id || ''); setError('');
     } catch (cause) { setError(message(cause)); }
   }, [session, id]);
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
+  useFocusEffect(useCallback(() => { void load(); return clearSelection; }, [load, clearSelection]));
   async function postAction() {
     if (!session?.account || !supplier) return;
     const needsTarget = ['payment', 'payment_refund', 'apply_advance', 'allocation_reversal'].includes(kind);
@@ -208,7 +213,7 @@ export function SupplierDetailScreen() {
     } catch (cause) { setError(message(cause)); }
     finally { setBusy(false); }
   }
-  return <Screen title="Supplier details" icon="parties" backTo="/suppliers" wide>
+  return <Screen title="Supplier details" icon="parties" backTo="/suppliers" wide onRefresh={load}>
     <ErrorText value={error} />
     {supplier ? <>
       <View style={supplierStyles.profileHeader}>
@@ -225,9 +230,10 @@ export function SupplierDetailScreen() {
           {!!supplier.notes && <View style={styles.card}><Text style={styles.heading}>Notes</Text><Text style={styles.muted}>{supplier.notes}</Text></View>}
         </View>
         <View style={supplierStyles.mainColumn}>
-          <View style={supplierStyles.tabs}><Choice label="Purchases" selected={detailTab === 'purchases'} onPress={() => setDetailTab('purchases')} /><Choice label="Activity" selected={detailTab === 'activity'} onPress={() => setDetailTab('activity')} /><Choice label="Supplier money" selected={detailTab === 'money'} onPress={() => setDetailTab('money')} /></View>
+           <View style={supplierStyles.tabs}><Choice label="Purchases" selected={detailTab === 'purchases'} onPress={() => setDetailTab('purchases')} /><Choice label="Activity" selected={detailTab === 'activity'} onPress={() => { selection.clear(); setDetailTab('activity'); }} /><Choice label="Supplier money" selected={detailTab === 'money'} onPress={() => { selection.clear(); setDetailTab('money'); }} /></View>
           {detailTab === 'purchases' && <>
-            {purchases.length ? purchases.map(item => <Pressable key={item.id} style={styles.card} onPress={() => router.push(`/purchases/${item.id}` as Href)}><View style={supplierStyles.purchaseRow}><View style={{ flex: 1 }}><Text style={supplierStyles.link}>{item.number ? displayDocumentNumber(item.number) : 'Draft purchase'}</Text><Text style={styles.muted}>{item.created_at.slice(0, 10)} · {item.status}</Text></View><View style={{ alignItems: 'flex-end' }}><Text style={supplierStyles.balance}>৳{currency(item.total)}</Text><Text style={styles.muted}>Due ৳{currency(item.due)}</Text></View></View></Pressable>)
+             <SelectionToolbar type="purchase" rows={purchases} {...selection} onChanged={() => void load()} />
+             {purchases.length ? purchases.map(item => <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.number || 'Draft purchase'}, ${item.status}${selection.selecting ? ', tap to select' : ', long press to select'}`} accessibilityState={{ selected: selection.selected.includes(item.id) }} style={[styles.card, selection.selected.includes(item.id) && { borderColor: '#006D64', backgroundColor: '#DDF3EF' }]} onLongPress={() => selection.longPress(item.id)} onPress={() => selection.press(item.id, () => router.push(`/purchases/${item.id}` as Href))}><View style={supplierStyles.purchaseRow}><View style={{ flex: 1 }}><Text style={supplierStyles.link}>{item.number ? displayDocumentNumber(item.number) : 'Draft purchase'}</Text><Text style={styles.muted}>{item.created_at.slice(0, 10)} · {item.status}</Text></View><View style={{ alignItems: 'flex-end' }}><Text style={supplierStyles.balance}>৳{currency(item.total)}</Text><Text style={styles.muted}>Due ৳{currency(item.due)}</Text></View></View></Pressable>)
               : <View style={styles.card}><Text style={styles.muted}>No purchases yet.</Text></View>}
             {nextPurchases && <Action label="More purchases" secondary onPress={() => {
               if (!session?.account) return;
@@ -269,6 +275,8 @@ export function SupplierDetailScreen() {
 
 export function PurchasesScreen() {
   const { session } = useAuth();
+  const selection = useRecordSelection();
+  const clearSelection = selection.clear;
   const [rows, setRows] = useState<PurchaseRecord[]>([]);
   const [next, setNext] = useState<number | null>(1);
   const [error, setError] = useState('');
@@ -280,10 +288,11 @@ export function PurchasesScreen() {
       setNext(result.next_page); setError('');
     } catch (cause) { setError(message(cause)); }
   }, [session]);
-  useFocusEffect(useCallback(() => { void load(); }, [load]));
-  return <Screen title="Purchases" backTo="/more"><Action label="New purchase" icon="plus" onPress={() => router.push('/purchases/new')} />
-    <ErrorText value={error} />{rows.length === 0 && !error && <Text style={styles.muted}>No purchases yet.</Text>}
-    {rows.map(item => <Pressable key={item.id} style={styles.card} onPress={() => router.push(`/purchases/${item.id}` as Href)}>
+  useFocusEffect(useCallback(() => { void load(); return clearSelection; }, [load, clearSelection]));
+  return <Screen title="Purchases" backTo="/more" onRefresh={() => load()}><Action label="New purchase" icon="plus" onPress={() => router.push('/purchases/new')} />
+     <SelectionToolbar type="purchase" rows={rows} {...selection} onChanged={() => void load()} />
+     <ErrorText value={error} />{rows.length === 0 && !error && <Text style={styles.muted}>No purchases yet.</Text>}
+     {rows.map(item => <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.number || 'Draft purchase'}, ${item.status}${selection.selecting ? ', tap to select' : ', long press to select'}`} accessibilityState={{ selected: selection.selected.includes(item.id) }} style={[styles.card, selection.selected.includes(item.id) && { borderColor: '#006D64', backgroundColor: '#DDF3EF' }]} onLongPress={() => selection.longPress(item.id)} onPress={() => selection.press(item.id, () => router.push(`/purchases/${item.id}` as Href))}>
       <Text style={styles.heading}>{item.number ? displayDocumentNumber(item.number) : 'Draft purchase'} · {item.supplier_name}</Text>
       <Text>৳{item.total} · Due ৳{item.due} · {item.status}</Text></Pressable>)}
     {next && <Action label="Load more" secondary onPress={() => void load(next)} />}
@@ -291,7 +300,7 @@ export function PurchasesScreen() {
 }
 
 export function PurchaseDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, action } = useLocalSearchParams<{ id: string; action?: string }>();
   const { session } = useAuth();
   const [purchase, setPurchase] = useState<PurchaseRecord | null>(null);
   const [attachments, setAttachments] = useState<RecordAttachment[]>([]);
@@ -317,10 +326,11 @@ export function PurchaseDetailScreen() {
       api.purchasePaymentAccounts(session.token, session.account.business.id),
       api.recordAttachments(session.token, session.account.business.id, 'purchase', id)]);
       setPurchase(record.purchase); setAccounts(money.accounts);
+      if (action === 'cancel' && record.purchase.status !== 'cancelled') setCancelOpen(true);
       setAttachments(documents.attachments);
       setAccountId(current => current || money.accounts.find(item => item.is_default)?.id || ''); setError('');
     } catch (cause) { setError(message(cause)); }
-  }, [session, id]);
+  }, [session, id, action]);
   useFocusEffect(useCallback(() => { void load(); }, [load]));
   async function complete() {
     if (!session?.account || !purchase) return;
@@ -369,7 +379,7 @@ export function PurchaseDetailScreen() {
   const selectedAccount = activeAccounts.find(item => item.id === accountId);
   const willGoNegative = !!selectedAccount && Number(paymentAmount) > Number(selectedAccount.balance);
 
-  return <Screen title={purchase?.number ? displayDocumentNumber(purchase.number) : 'Purchase draft'} backTo="/purchases"><ErrorText value={error} />
+  return <Screen title={purchase?.number ? displayDocumentNumber(purchase.number) : 'Purchase draft'} backTo="/purchases" onRefresh={load}><ErrorText value={error} />
     {purchase && <>
       <View style={detailStyles.metaHeader}>
         <View style={detailStyles.metaCopy}>
@@ -407,6 +417,7 @@ export function PurchaseDetailScreen() {
         <View style={detailStyles.itemCopy}><Text style={detailStyles.itemName} numberOfLines={2}>{line.product_name}{line.variant_name ? ` · ${line.variant_name}` : ''}</Text><Text style={detailStyles.itemMeta}>{line.quantity} {line.unit_name || 'unit'} × ৳{line.unit_cost}</Text>{!!line.lot_code && <Text style={styles.muted}>Batch {line.lot_code}</Text>}</View>
         <Text style={detailStyles.itemTotal}>৳{Number(line.line_total).toFixed(2)}</Text>
       </View>)}
+      {(purchase.notes || purchase.added_notes?.length) && <View style={styles.card}><Text style={styles.heading}>Notes</Text>{!!purchase.notes && <Text style={styles.muted}>{purchase.notes}</Text>}{purchase.added_notes?.map((item, index) => <View key={`${item.created_at}-${index}`}><Text style={styles.muted}>{new Date(item.created_at).toLocaleString()} · {item.actor}</Text><Text>{item.text}</Text></View>)}</View>}
       <View style={styles.card}><RecordAttachments kind="purchase" pending={pendingAttachments} onChange={setPendingAttachments}
         existing={attachments} token={session?.token} businessId={session?.account?.business.id} recordId={purchase.id}
         onUploaded={() => { void load(); }} /></View>

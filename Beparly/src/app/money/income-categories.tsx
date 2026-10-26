@@ -1,10 +1,11 @@
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView } from 'react-native';
+import { ActivityIndicator, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Input, Text, XStack, YStack } from 'tamagui';
 
 import { AppSymbol } from '@/components/app-symbol';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { palette } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
 import { api } from '@/services/api';
@@ -18,16 +19,8 @@ export default function IncomeCategoriesScreen() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  useFocusEffect(useCallback(() => {
-    if (!token || !businessId) return;
-    let active = true;
-    setLoading(true);
-    void api.incomeCategories(token, businessId)
-      .then((result) => { if (active) { setCategories(result.categories); setError(''); } })
-      .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : 'Could not load income categories.'); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [token, businessId]));
+  const load = useCallback(async () => { if (!token || !businessId) return; setLoading(true); try { const result = await api.incomeCategories(token, businessId); setCategories(result.categories); setError(''); } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not load income categories.'); } finally { setLoading(false); } }, [token, businessId]);
+  useFocusEffect(useCallback(() => { void load(); }, [load]));
   async function add() {
     if (!token || !businessId || !name.trim() || busy) return;
     setBusy(true); setError('');
@@ -42,7 +35,7 @@ export default function IncomeCategoriesScreen() {
       <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.canGoBack() ? router.back() : router.replace('/more' as Href)} style={{ width: 42, height: 42, justifyContent: 'center' }}><AppSymbol name="back" size={23} color={palette.primaryDeep} /></Pressable>
       <Text color={palette.ink} fontSize={22} fontWeight="800">Income categories</Text>
     </XStack>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, alignItems: 'center' }}>
+    <RefreshableScrollView onRefresh={load} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, alignItems: 'center' }}>
       <YStack width="100%" maxWidth={560} gap={14}>
         <Text color={palette.secondary} fontSize={13}>Sales uses its own category. Money In uses categories for receipts outside a product sale.</Text>
         {loading ? <ActivityIndicator color={palette.primaryDeep} /> : categories.map((item) => <YStack key={item.id} backgroundColor={palette.surface} borderWidth={1} borderColor={palette.border} borderRadius={14} padding={16}><Text color={palette.ink} fontWeight="700">{item.name}{item.name.toLowerCase() === 'sales' ? ' · Used by Sales' : ''}</Text></YStack>)}
@@ -53,6 +46,6 @@ export default function IncomeCategoriesScreen() {
           <Button backgroundColor={palette.primaryDeep} height={50} disabled={busy || !name.trim()} onPress={() => void add()}><Text color="white" fontWeight="700">{busy ? 'Saving…' : 'Add category'}</Text></Button>
         </YStack>
       </YStack>
-    </ScrollView>
+    </RefreshableScrollView>
   </SafeAreaView>;
 }

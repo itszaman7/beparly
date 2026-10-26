@@ -1,11 +1,13 @@
 from django.urls import path
 
-from .views import CategoryDetailView, CategoryView, CatalogView, CatalogSummaryView, PurchaseCatalogView, ProductDetailView, ProductImageView, ProductUnitsView, ProductUnitDetailView, ProductBatchesView, ProductMovementsView, ProductAttributesView, ProductAttributeDetailView, ProductVariantsView, ProductVariantDetailView, VariantBatchesView, VariantMovementsView
+from .views import BarcodeLookupView, ProductBarcodeLabelView, CategoryDetailView, CategoryView, CatalogView, CatalogSummaryView, PurchaseCatalogView, ProductDetailView, ProductImageView, ProductUnitsView, ProductUnitDetailView, ProductBatchesView, ProductMovementsView, ProductAttributesView, ProductAttributeDetailView, ProductVariantsView, ProductVariantDetailView, VariantBatchesView, VariantMovementsView
 
 urlpatterns = [
     path('businesses/<int:business_id>/categories/', CategoryView.as_view()),
     path('businesses/<int:business_id>/categories/<uuid:category_id>/', CategoryDetailView.as_view()),
     path('businesses/<int:business_id>/products/', CatalogView.as_view()),
+    path('businesses/<int:business_id>/products/barcodes/lookup/', BarcodeLookupView.as_view()),
+    path('businesses/<int:business_id>/products/<uuid:product_id>/barcode-labels/', ProductBarcodeLabelView.as_view()),
     path('businesses/<int:business_id>/products/purchase-catalog/', PurchaseCatalogView.as_view()),
     path('businesses/<int:business_id>/products/summary/', CatalogSummaryView.as_view()),
     path('businesses/<int:business_id>/products/<uuid:product_id>/', ProductDetailView.as_view()),

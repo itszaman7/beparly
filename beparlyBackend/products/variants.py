@@ -6,6 +6,7 @@ from rest_framework import serializers
 
 from .models import ProductAttribute, ProductAttributeValue, ProductVariant, VariantSelection
 from .serializers import ProductVariantSerializer
+from .barcodes import generated_barcode
 
 
 def make_attributes(product, definitions):
@@ -54,7 +55,7 @@ def make_variant(product, data, attributes):
     if not fields.get('sku'):
         fields['sku'] = 'V-' + fields['id'].hex[:12].upper()
     if not fields.get('barcode'):
-        fields['barcode'] = 'B-' + fields['id'].hex[:16].upper()
+        fields['barcode'] = generated_barcode(fields['id'])
     variant = ProductVariant.objects.create(
         product=product, business_id=product.business_id, combination_key=key,
         label=fields.get('label') or ' / '.join(value.value for _, value in selected),

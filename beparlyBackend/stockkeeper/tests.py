@@ -151,7 +151,9 @@ class LocationApiTests(TestCase):
         default_path = f'{self.list_path}{self.default.id}/'
         self.assertEqual(self.request('patch', default_path, self.owner_token, {'is_active': False}).status_code, 409)
         self.assertEqual(self.request('post', self.list_path, self.owner_token,
-                                      {'name': 'main shop', 'type': 'shop'}).status_code, 409)
+                                      {'name': 'main shop', 'type': 'shop', 'address': 'Main Shop, Dhaka'}).status_code, 409)
+        self.assertEqual(self.request('post', self.list_path, self.owner_token,
+                                      {'name': 'Address required', 'type': 'shop'}).status_code, 400)
         self.assertEqual(self.request('post', self.list_path, self.owner_token,
                                       {'name': 'New', 'type': 'invalid'}).status_code, 400)
         self.assertEqual(StockLocation.objects.filter(business=self.business).count(), 1)
@@ -168,7 +170,7 @@ class LocationApiTests(TestCase):
         self.assertEqual(granted.status_code, 200, granted.content)
         self.assertTrue(granted.json()['employee']['can_manage_locations'])
         self.assertEqual(self.request('post', self.list_path, self.staff_token,
-                                      {'name': 'Branch', 'type': 'shop'}).status_code, 201)
+                                      {'name': 'Branch', 'type': 'shop', 'address': 'Branch, Dhaka'}).status_code, 201)
         other_location = StockLocation.objects.get(business=self.other_business, is_default=True)
         self.assertEqual(self.request('get', f'{self.list_path}{other_location.id}/', self.staff_token).status_code, 404)
         self.assertEqual(self.request('patch', permission_path, self.owner_token,

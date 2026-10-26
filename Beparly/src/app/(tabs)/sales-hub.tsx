@@ -1,1 +1,1 @@
-export { SalesHub as default } from '@/features/hubs/section-hubs';
+export { default } from '../sales';

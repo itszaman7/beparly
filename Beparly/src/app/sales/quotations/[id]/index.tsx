@@ -1,6 +1,6 @@
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
 import { AppSymbol } from '@/components/app-symbol';
@@ -21,14 +21,17 @@ export default function QuotationDetail() {
   const customerRequest = useRef(0); const [paid, setPaid] = useState(''); const [dueDate, setDueDate] = useState('');
   const [prices, setPrices] = useState<string[]>([]); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
   const checkoutCommand = useRef(uuid());
+  const [refreshCount, setRefreshCount] = useState(0); const [refreshing, setRefreshing] = useState(false);
   useFocusEffect(useCallback(() => { if (!session || !businessId || !id) return; let active = true;
     void Promise.all([api.quotation(session.token, businessId, id), api.salesOptions(session.token, businessId, false)]).then(([result, options]) => {
       if (!active) return; setQuote(result.quotation); setPrices((result.quotation.lines ?? []).map(line => line.unit_price));
       setAccounts(options.accounts.filter(row => row.is_active));
       setAccountId(options.accounts.find(row => row.is_default)?.id ?? options.accounts[0]?.id ?? '');
       setCustomerId(result.quotation.customer_id ?? ''); setCustomerName(result.quotation.customer_name); setError('');
-    }).catch(problem => { if (active) setError(problem.message); }); return () => { active = false; };
-  }, [session, businessId, id]));
+    }).catch(problem => { if (active) setError(problem.message); }).finally(() => { if (active) setRefreshing(false); }); return () => { active = false; };
+  // Pull-to-refresh changes this generation to rerun the focused request.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session, businessId, id, refreshCount]));
   const fetchCustomers = useCallback(async (term: string, page: number, append: boolean) => {
     if (!session || !businessId) return;
     const request = ++customerRequest.current; setCustomerLoading(true);
@@ -84,7 +87,7 @@ export default function QuotationDetail() {
     finally { setBusy(false); }
   }
   if (!session?.account) return null;
-  return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}><><ScrollView contentContainerStyle={styles.page}>
+  return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}><><ScrollView contentContainerStyle={styles.page} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); setRefreshCount((count) => count + 1); }} />}>
     <View style={styles.header}><Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/sales/quotations' as Href)} style={styles.back} accessibilityLabel="Back to quotations"><AppSymbol name="back" size={20} color={palette.ink} /></Pressable><View style={styles.headerCopy}><Text style={styles.eyebrow}>QUOTATION DETAILS</Text><Text style={styles.title}>{quote?.number || 'Draft quotation'}</Text></View>{quote && <View style={styles.statusPill}><Text style={styles.statusText}>{quote.status.toUpperCase()}</Text></View>}</View>
     {quote ? <>
       <View style={styles.summaryGrid}><View style={styles.summaryStat}><AppSymbol name="price" size={17} color={palette.primaryDeep} /><Text style={styles.hint}>Offer total</Text><Text style={styles.summaryValue}>{money(quote.total)}</Text></View><View style={styles.summaryStat}><AppSymbol name="products" size={17} color={palette.primaryDeep} /><Text style={styles.hint}>Products</Text><Text style={styles.summaryValue}>{quote.lines?.length ?? 0}</Text></View></View>

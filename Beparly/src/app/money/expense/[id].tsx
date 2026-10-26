@@ -1,9 +1,10 @@
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { RecordAttachments } from '@/features/attachments/record-attachments';
+import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { useAuth } from '@/features/auth/auth-context';
 import { formatBdt } from '@/features/products/product-rules';
 import { api, type MoneyTransaction, type PendingAttachment, type RecordAttachment } from '@/services/api';
@@ -34,7 +35,7 @@ export default function ExpenseDetailScreen() {
         style={{ minWidth: 44, minHeight: 44, justifyContent: 'center' }}><Text style={{ color: '#006D64', fontSize: 24 }}>‹</Text></Pressable>
       <Text style={{ color: '#15211F', fontWeight: '800', fontSize: 21 }}>Expense</Text>
     </View>
-    <ScrollView contentContainerStyle={{ padding: 18, alignItems: 'center' }}>
+    <RefreshableScrollView onRefresh={load} contentContainerStyle={{ padding: 18, alignItems: 'center' }}>
       <View style={{ width: '100%', maxWidth: 560, gap: 17 }}>
         {loading ? <ActivityIndicator color="#006D64" /> : null}
         {error ? <Text accessibilityRole="alert" style={{ color: '#A62925' }}>{error}</Text> : null}
@@ -54,6 +55,6 @@ export default function ExpenseDetailScreen() {
           </View>
         </>}
       </View>
-    </ScrollView>
+    </RefreshableScrollView>
   </SafeAreaView>;
 }

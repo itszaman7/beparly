@@ -56,6 +56,7 @@ export function useDashboard({ token, businessId, today, owner }: {
   }, [token, businessId, today, owner, scope]));
 
   return {
+    refreshing: refreshCount > 0 && (sales?.scope !== scope || stock?.scope !== scope || activity?.scope !== scope || (owner && finance?.scope !== scope)),
     sales: sales?.scope === scope ? sales : null,
     stock: stock?.scope === scope ? stock : null,
     finance: finance?.scope === scope ? finance : null,

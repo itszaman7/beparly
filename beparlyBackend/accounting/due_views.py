@@ -39,7 +39,7 @@ def due_amount(document, cutoff, kind):
         amount = document.total
         allocations = SalePayment.objects.filter(sale=document, journal__event_date__lte=cutoff)
         amount -= total(allocations.filter(kind='receipt'), 'amount')
-        amount += total(allocations.exclude(kind='receipt'), 'amount')
+        # Executed refunds settle the separate refund liability; they do not recreate AR.
         amount -= total(SaleReturn.objects.filter(sale=document, journal__event_date__lte=cutoff), 'due_reduction')
     else:
         posted = JournalEntry.objects.filter(business=document.business, source_type='purchase', source_id=str(document.pk), event_date__lte=cutoff).exists()

@@ -21,7 +21,7 @@ function recentDays(today: string) {
 
 const salesActions: HubAction[] = [
   { title: 'Sales', caption: 'Invoices and history', icon: 'sale', href: '/sales', color: palette.primaryDeep, background: palette.primarySoft },
-  { title: 'POS', caption: 'Fast retail checkout', icon: 'receipt', href: '/sales/new?mode=quick', color: palette.blue, background: palette.blueSoft },
+  { title: 'New sale', caption: 'Choose retail or wholesale from the sales list', icon: 'receipt', href: '/sales-hub', color: palette.blue, background: palette.blueSoft },
   { title: 'Quotations', caption: 'Offers and estimates', icon: 'duplicate', href: '/sales/quotations', color: palette.purple, background: palette.purpleSoft },
 ];
 
@@ -51,7 +51,7 @@ export function SalesHub() {
   const paid = number(sales?.collected_against_sales ?? 0);
   const due = number(sales?.customer_due ?? 0);
   if (!businessId) return <HubPage eyebrow="SELLING" title="Sales" subtitle="Set up a business on Home to see sales." />;
-  return <HubPage eyebrow="SELLING" title="Sales" subtitle="Checkout, quotations, and a clear view of recent sales.">
+  return <HubPage eyebrow="SELLING" title="Sales" subtitle="Checkout, quotations, and a clear view of recent sales." onRefresh={() => setRetry((value) => value + 1)} refreshing={retry > 0 && loadedScope !== `${businessId}:${retry}`}>
     <HubSectionTitle title="Quick actions" />
     <HubActions actions={salesActions} />
     <HubSectionTitle title="At a glance" detail="Live business data" />
@@ -100,7 +100,7 @@ export function InventoryHub() {
   const out = summary?.out_of_stock ?? 0;
   const actions = session?.account?.role === 'owner' || session?.account?.can_manage_purchases ? inventoryActions : inventoryActions.filter((action) => action.title !== 'Suppliers');
   if (!businessId) return <HubPage eyebrow="CATALOG & STORAGE" title="Inventory" subtitle="Set up a business on Home to see inventory." />;
-  return <HubPage eyebrow="CATALOG & STORAGE" title="Inventory" subtitle="Products and the places you keep them.">
+  return <HubPage eyebrow="CATALOG & STORAGE" title="Inventory" subtitle="Products and the places you keep them." onRefresh={() => setRetry((value) => value + 1)} refreshing={retry > 0 && loadedScope !== `${businessId}:${retry}`}>
     <HubSectionTitle title="Quick actions" />
     <HubActions actions={actions} />
     <HubSectionTitle title="Stock snapshot" detail="Live business data" />
@@ -154,7 +154,7 @@ export function FinanceHub() {
   const dates = recentDays(today);
   const incomeBars: ChartBar[] = dates.map(({ key, label }) => ({ label, value: number(summary?.rows.find((row) => row.period === key)?.income ?? 0) }));
   const expenseBars: ChartBar[] = dates.map(({ key, label }) => ({ label, value: number(summary?.rows.find((row) => row.period === key)?.other_expenses ?? 0) }));
-  return <HubPage eyebrow="MONEY & REPORTS" title="Finance" subtitle="Track balances, dues, income, and expenses.">
+  return <HubPage eyebrow="MONEY & REPORTS" title="Finance" subtitle="Track balances, dues, income, and expenses." onRefresh={() => setRetry((value) => value + 1)} refreshing={retry > 0 && loadedScope !== `${businessId}:${today}:${retry}`}>
     <HubSectionTitle title="Quick actions" />
     <HubActions actions={financeActions} />
     <HubSectionTitle title="This month" detail="Posted financial data" />

@@ -1,6 +1,6 @@
 import { router, type Href } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
@@ -23,6 +23,7 @@ export default function ReportsHome() {
   const [summary, setSummary] = useState<FinancialSummary | null>(null);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const end = businessToday(session?.account?.business.timezone);
   const start = periodStart(end, 'month');
   const businessId = session?.account?.business.id;
@@ -31,12 +32,12 @@ export default function ReportsHome() {
     let active = true;
     void api.financialSummary(session.token, businessId, start, end, 'month').then((result) => {
       if (active) { setSummary(result); setError(''); }
-    }).catch((problem: Error) => { if (active) setError(problem.message); });
+    }).catch((problem: Error) => { if (active) setError(problem.message); }).finally(() => { if (active) setRefreshing(false); });
     return () => { active = false; };
   }, [session?.token, session?.account?.role, businessId, start, end, retry]);
   if (session?.account?.role !== 'owner') return null;
   const theme = colors[group];
-  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content}>
+  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); setRetry((n) => n + 1); }} />}>
     <Pressable onPress={() => { releaseWebFocus(); router.back(); }} accessibilityRole="button" accessibilityLabel="Back to dashboard" style={styles.back}><AppSymbol name="back" size={20} color="#15211F" /></Pressable>
     <Text style={styles.eyebrow}>YOUR BUSINESS</Text><Text style={styles.title}>Reports</Text>
     <View style={styles.hero}>
