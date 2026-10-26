@@ -199,11 +199,8 @@ function BusinessStart({ name }: { name: string }) {
               <View style={styles.startAvatar}><AppSymbol name="account" color={palette.primary} size={23} /></View>
             </PressScale>
           </View>
-          <Text style={styles.startTitle}>Set up your first business</Text>
-          <Text style={styles.startSubtitle}>Your dashboard will show its sales, stock, and dues here.</Text>
-          <PressScale onPress={() => router.push('/businesses/new')} accessibilityRole="button" accessibilityLabel="Add your first business">
-            <View style={styles.startButton}><AppSymbol name="plus" color="#FFFFFF" size={20} /><Text style={styles.startButtonText}>Add your first business</Text></View>
-          </PressScale>
+          <Text style={styles.startTitle}>No business assigned yet</Text>
+          <Text style={styles.startSubtitle}>Ask your administrator to assign your account to a business, then sign in again.</Text>
         </View>
       </ScrollView>
     </SafeAreaView>

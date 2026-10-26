@@ -1,77 +1,13 @@
-import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
 import { PressScale } from '@/components/motion';
-import { appFontFamily, elevation, palette, radius, spacing } from '@/constants/design-system';
+import { elevation, palette, radius, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
 import { api, type BusinessSwitcherStat } from '@/services/api';
-
-export function BusinessCreateForm({ onCreated }: { onCreated?: () => void }) {
-  const { createBusiness } = useAuth();
-  const [name, setName] = useState('');
-  const [openingCash, setOpeningCash] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  async function submit() {
-    if (!name.trim()) {
-      setError('Enter a business name.');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      await createBusiness(name.trim(), openingCash.trim() || undefined);
-      setName('');
-      setOpeningCash('');
-      onCreated?.();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not create business.');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <View style={styles.form}>
-      <Text style={styles.formTitle}>Add a business</Text>
-      <Text style={styles.formHint}>Each business keeps its own products, stock, and team.</Text>
-      <Text style={styles.label}>Business name</Text>
-      <TextInput
-        style={styles.input}
-        value={name}
-        onChangeText={setName}
-        placeholder="e.g. Rahman Traders"
-        placeholderTextColor="#93A29C"
-        maxLength={160}
-        autoCapitalize="words"
-        returnKeyType="next"
-        accessibilityLabel="Business name"
-      />
-      <Text style={styles.label}>Opening cash (optional)</Text>
-      <Text style={styles.formHint}>Cash already in the business when you start. Add later money through a recorded activity.</Text>
-      <TextInput
-        style={styles.input}
-        value={openingCash}
-        onChangeText={setOpeningCash}
-        placeholder="৳ 0.00"
-        placeholderTextColor="#93A29C"
-        keyboardType="decimal-pad"
-        accessibilityLabel="Opening cash balance"
-      />
-      {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
-      <PressScale onPress={submit} disabled={busy} accessibilityRole="button" accessibilityLabel="Create business profile">
-        <View style={[styles.createButton, busy && styles.disabled]}>
-          {busy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.createText}>Create business</Text>}
-        </View>
-      </PressScale>
-    </View>
-  );
-}
 
 export function BusinessPicker({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const { session, selectBusiness } = useAuth();
@@ -93,11 +29,6 @@ export function BusinessPicker({ visible, onClose }: { visible: boolean; onClose
   const statByBusiness = new Map(currentStats?.map((item) => [item.business_id, item]));
   const products = currentStats?.reduce((total, item) => total + item.products, 0);
   const locations = currentStats?.reduce((total, item) => total + item.locations, 0);
-  function addBusiness() {
-    onClose();
-    router.push('/businesses/new');
-  }
-
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modal}>
@@ -107,9 +38,6 @@ export function BusinessPicker({ visible, onClose }: { visible: boolean; onClose
           <View style={styles.sheetHeading}>
             <View><Text style={styles.title}>Your businesses</Text><Text style={styles.subtitle}>Choose where you want to work.</Text></View>
             <View style={styles.headingActions}>
-              <Pressable onPress={addBusiness} accessibilityRole="button" accessibilityLabel="Add business" style={styles.addButton}>
-                <AppSymbol name="plus" color={palette.primaryDeep} size={22} />
-              </Pressable>
               <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" style={styles.close}><Text style={styles.closeText}>Close</Text></Pressable>
             </View>
           </View>
@@ -142,13 +70,6 @@ export function BusinessPicker({ visible, onClose }: { visible: boolean; onClose
                 </View>
               </PressScale>
             ))}
-            <PressScale onPress={addBusiness} accessibilityRole="button" accessibilityLabel="Add a new business">
-              <View style={styles.addRow}>
-                <View style={styles.addAvatar}><AppSymbol name="plus" color={palette.primaryDeep} size={22} /></View>
-                <View style={styles.businessCopy}><Text style={styles.businessName}>Add a business</Text><Text style={styles.businessRole}>Create a separate workspace</Text></View>
-                <AppSymbol name="chevron" color={palette.muted} size={20} />
-              </View>
-            </PressScale>
           </ScrollView>
         </SafeAreaView>
       </View>
@@ -186,13 +107,4 @@ const styles = StyleSheet.create({
   businessName: { color: palette.ink, fontSize: 15, fontWeight: '700' },
   businessRole: { color: palette.muted, fontSize: 12 },
   businessStats: { color: palette.secondary, fontSize: 11 },
-  form: { marginTop: spacing.md, backgroundColor: palette.surface, borderRadius: radius.lg, borderWidth: 1, borderColor: palette.border, padding: spacing.xl, gap: spacing.md },
-  formTitle: { color: palette.ink, fontSize: 17, fontWeight: '700' },
-  formHint: { color: palette.muted, fontSize: 13, lineHeight: 19 },
-  label: { color: palette.secondary, fontSize: 13, fontWeight: '600' },
-  input: { height: 50, borderWidth: 1, borderColor: palette.border, borderRadius: radius.sm, paddingHorizontal: spacing.md, color: palette.ink, fontSize: 15, fontFamily: appFontFamily, backgroundColor: palette.surface },
-  error: { color: '#A62925', fontSize: 13 },
-  createButton: { height: 50, borderRadius: radius.sm, backgroundColor: palette.primary, alignItems: 'center', justifyContent: 'center' },
-  createText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
-  disabled: { opacity: 0.6 },
 });

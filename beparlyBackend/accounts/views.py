@@ -7,17 +7,15 @@ from uuid import uuid4
 from PIL import Image, UnidentifiedImageError
 
 from django.contrib.auth import authenticate
-from django.contrib.auth.password_validation import validate_password
 from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
-from django.db import IntegrityError, transaction
 from django.db.models import Count
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
-from .models import AuthSession, Business, BusinessMember, User, normalize_phone
+from .models import AuthSession, Business, BusinessMember, normalize_phone
 
 
 def error(code, message, status=400):
@@ -41,22 +39,6 @@ def required_text(data, key, label, limit):
     if not isinstance(value, str) or not value.strip() or len(value.strip()) > limit:
         raise ValueError(f'{label} is required (up to {limit} characters).')
     return value.strip()
-
-
-def optional_username(data):
-    value = data.get('username', '')
-    if not isinstance(value, str) or len(value.strip()) > 150:
-        raise ValueError('Username must be up to 150 characters.')
-    return value.strip()
-
-
-def valid_password(password, user):
-    if not isinstance(password, str):
-        raise ValueError('Password is required.')
-    try:
-        validate_password(password, user)
-    except ValidationError as exc:
-        raise ValueError(' '.join(exc.messages)) from None
 
 
 def current_session(request):
@@ -95,29 +77,6 @@ def account_data(user):
             for member in BusinessMember.objects.select_related('business').filter(user=user).order_by('id')
         ],
     }
-
-
-@csrf_exempt
-def register(request):
-    if request.method != 'POST':
-        return error('method_not_allowed', 'Use POST.', 405)
-    try:
-        data = body(request)
-        username = optional_username(data)
-        phone = normalize_phone(data.get('phone', ''))
-        user = User(phone=phone, first_name=username)
-        valid_password(data.get('password'), user)
-        with transaction.atomic():
-            user.set_password(data['password'])
-            user.save()
-            token = AuthSession.issue(user)
-    except ValidationError as exc:
-        return error('invalid_phone', ' '.join(exc.messages))
-    except ValueError as exc:
-        return error('invalid_input', str(exc))
-    except IntegrityError:
-        return error('phone_in_use', 'An account with this phone number already exists.', 409)
-    return JsonResponse({'token': token, **account_data(user)}, status=201)
 
 
 @csrf_exempt
@@ -168,30 +127,12 @@ def me(request):
 
 @csrf_exempt
 def businesses(request):
-    if request.method not in ('GET', 'POST'):
-        return error('method_not_allowed', 'Use GET or POST.', 405)
+    if request.method != 'GET':
+        return error('registration_disabled', 'Businesses are created by an administrator.', 405)
     session = current_session(request)
     if not session:
         return error('unauthorized', 'Please sign in.', 401)
-    if request.method == 'GET':
-        return JsonResponse(account_data(session.user))
-    try:
-        data = body(request)
-        name = required_text(data, 'name', 'Business name', 160)
-        with transaction.atomic():
-            business = Business.objects.create(name=name)
-            BusinessMember.objects.create(user=session.user, business=business, role=BusinessMember.OWNER)
-            from accounting.models import MoneyAccount
-            from accounting.services import amount, money_operation, setup_business
-            setup_business(business)
-            opening_cash = data.get('opening_cash', '')
-            if opening_cash not in ('', None):
-                cash = MoneyAccount.objects.get(business=business, is_default=True)
-                money_operation(business, session.user, uuid4(), 'opening_balance',
-                                amount(opening_cash), cash, allow_opening=True)
-    except ValueError as exc:
-        return error('invalid_input', str(exc))
-    return JsonResponse({'business': {'id': business.id, 'name': business.name, 'role': BusinessMember.OWNER}}, status=201)
+    return JsonResponse(account_data(session.user))
 
 
 def business_switcher_summary(request):
@@ -347,8 +288,8 @@ def business_logo(request, business_id):
 
 @csrf_exempt
 def employees(request, business_id):
-    if request.method not in ('GET', 'POST'):
-        return error('method_not_allowed', 'Use GET or POST.', 405)
+    if request.method != 'GET':
+        return error('registration_disabled', 'Employees are created by an administrator.', 405)
     session = current_session(request)
     if not session:
         return error('unauthorized', 'Please sign in.', 401)
@@ -357,35 +298,15 @@ def employees(request, business_id):
         return error('not_found', 'Business profile not found.', 404)
     if member.role != BusinessMember.OWNER:
         return error('forbidden', 'Only the business owner can manage employees.', 403)
-    if request.method == 'GET':
-        members = BusinessMember.objects.select_related('user').filter(
-            business=member.business, role=BusinessMember.EMPLOYEE
-        ).order_by('user__first_name', 'id')
-        return JsonResponse({'employees': [
-            {'id': item.user_id, 'name': item.user.first_name, 'phone': item.user.phone,
-             'can_manage_locations': item.can_manage_locations, 'can_post_stock': item.can_post_stock,
-             'can_manage_purchases': item.can_manage_purchases}
-            for item in members
-        ]})
-    try:
-        data = body(request)
-        username = optional_username(data)
-        phone = normalize_phone(data.get('phone', ''))
-        user = User(phone=phone, first_name=username)
-        valid_password(data.get('password'), user)
-        with transaction.atomic():
-            user.set_password(data['password'])
-            user.save()
-            BusinessMember.objects.create(user=user, business=member.business, role=BusinessMember.EMPLOYEE)
-    except ValidationError as exc:
-        return error('invalid_phone', ' '.join(exc.messages))
-    except ValueError as exc:
-        return error('invalid_input', str(exc))
-    except IntegrityError:
-        return error('phone_in_use', 'An account with this phone number already exists.', 409)
-    return JsonResponse({'employee': {'id': user.id, 'name': user.first_name, 'phone': user.phone,
-                                      'can_manage_locations': True, 'can_post_stock': True,
-                                      'can_manage_purchases': False}}, status=201)
+    members = BusinessMember.objects.select_related('user').filter(
+        business=member.business, role=BusinessMember.EMPLOYEE
+    ).order_by('user__first_name', 'id')
+    return JsonResponse({'employees': [
+        {'id': item.user_id, 'name': item.user.first_name, 'phone': item.user.phone,
+         'can_manage_locations': item.can_manage_locations, 'can_post_stock': item.can_post_stock,
+         'can_manage_purchases': item.can_manage_purchases}
+        for item in members
+    ]})
 
 
 @csrf_exempt

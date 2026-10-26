@@ -2,7 +2,7 @@ import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Button, Input, Text, XStack, YStack } from 'tamagui';
+import { Button, Text, XStack, YStack } from 'tamagui';
 
 import { useAuth } from '@/features/auth/auth-context';
 import { api, Employee } from '@/services/api';
@@ -16,10 +16,6 @@ export default function AccountScreen() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshCount, setRefreshCount] = useState(0);
-  const [showForm, setShowForm] = useState(false);
-  const [username, setUsername] = useState('');
-  const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [savingPermissionFor, setSavingPermissionFor] = useState<number | null>(null);
@@ -57,7 +53,7 @@ export default function AccountScreen() {
         <YStack backgroundColor="white" borderRadius={18} padding={20} gap={8}>
           <Text color={ink} fontSize={17} fontWeight="700">{session.user.name || session.user.phone}</Text>
           <Text color={muted} fontSize={13}>{session.user.phone}</Text>
-          <Text color={muted} fontSize={13}>Create your first business from Home to start working.</Text>
+          <Text color={muted} fontSize={13}>Ask your administrator to assign you to a business.</Text>
         </YStack>
         {!!error && <Text color="#A62925" fontSize={13}>{error}</Text>}
         <Button backgroundColor="#E5F8F4" onPress={() => router.push('/')}><Text color={green} fontWeight="600">Go to Home</Text></Button>
@@ -65,25 +61,6 @@ export default function AccountScreen() {
       </YStack>
     </SafeAreaView>
   );
-
-  async function createEmployee() {
-    if (!account) return;
-    if (!phone.trim() || !password) {
-      setError('Enter the employee phone number and password.');
-      return;
-    }
-    setBusy(true);
-    setError('');
-    try {
-      const result = await api.createEmployee(token, account.business.id, { username: username.trim(), phone: phone.trim(), password });
-      setEmployees((current) => [...current, result.employee].sort((a, b) => (a.name || a.phone).localeCompare(b.name || b.phone)));
-      setUsername(''); setPhone(''); setPassword(''); setShowForm(false);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Could not add employee.');
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function logout() {
     setBusy(true);
@@ -145,7 +122,7 @@ export default function AccountScreen() {
           </YStack>
 
           <Button height={44} borderRadius={12} backgroundColor="#E0F3EA" onPress={() => router.push('/?businessPicker=1')}>
-            <Text color={green} fontSize={14} fontWeight="700">Switch or add business profile</Text>
+            <Text color={green} fontSize={14} fontWeight="700">Switch business profile</Text>
           </Button>
 
           <YStack backgroundColor="white" borderRadius={22} borderWidth={1} borderColor="#E2EAE4" padding={20} gap={15}>
@@ -170,28 +147,13 @@ export default function AccountScreen() {
                   <Text color={ink} fontSize={20} fontWeight="700">Employees</Text>
                   <Text color={muted} fontSize={13}>A separate sign-in for each person</Text>
                 </YStack>
-                <Button height={38} borderRadius={11} backgroundColor={green} onPress={() => { setShowForm((value) => !value); setError(''); }}>
-                  <Text color="white" fontSize={13} fontWeight="700">{showForm ? 'Cancel' : '+ Add'}</Text>
-                </Button>
               </XStack>
 
-              {showForm && (
-                <YStack backgroundColor="white" borderRadius={20} borderWidth={1} borderColor="#E2EAE4" padding={18} gap={14}>
-                  <Text color={ink} fontSize={17} fontWeight="700">New employee</Text>
-                  <Field label="Phone number" value={phone} onChangeText={setPhone} placeholder="01XXXXXXXXX" keyboardType="phone-pad" />
-                  <Field label="Username (optional)" value={username} onChangeText={setUsername} placeholder="Employee name" />
-                  <Field label="Password" value={password} onChangeText={setPassword} placeholder="Set a password" secureTextEntry />
-                  <Text color={muted} fontSize={12} lineHeight={18}>Share the phone number and password directly with your employee.</Text>
-                  <Button height={48} borderRadius={12} backgroundColor={green} onPress={createEmployee} disabled={busy}>
-                    {busy ? <ActivityIndicator color="white" /> : <Text color="white" fontWeight="700">Create employee</Text>}
-                  </Button>
-                </YStack>
-              )}
 
               {loading ? <ActivityIndicator color={green} /> : employees.length === 0 ? (
                 <YStack backgroundColor="white" borderRadius={18} padding={20} borderWidth={1} borderColor="#E2EAE4" gap={5}>
                   <Text color={ink} fontSize={15} fontWeight="700">No employees yet</Text>
-                  <Text color={muted} fontSize={13}>Add someone when you are ready to share access.</Text>
+                  <Text color={muted} fontSize={13}>Ask your administrator to add employees.</Text>
                 </YStack>
               ) : employees.map((employee) => (
                 <YStack key={employee.id} backgroundColor="white" borderRadius={16} borderWidth={1} borderColor="#E2EAE4" padding={16} gap={12}>
@@ -256,16 +218,5 @@ export default function AccountScreen() {
         </YStack>
       </ScrollView>
     </SafeAreaView>
-  );
-}
-
-type FieldProps = React.ComponentProps<typeof Input> & { label: string };
-
-function Field({ label, ...props }: FieldProps) {
-  return (
-    <YStack gap={7}>
-      <Text color={ink} fontSize={13} fontWeight="700">{label}</Text>
-      <Input height={48} backgroundColor="#FAFCFA" borderColor="#DCE5DF" style={{ borderRadius: 12, paddingHorizontal: 14 }} color={ink} {...props} />
-    </YStack>
   );
 }

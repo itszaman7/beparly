@@ -1,5 +1,5 @@
-import { AuthForm } from '@/features/auth/auth-form';
+import { Redirect } from 'expo-router';
 
 export default function RegisterScreen() {
-  return <AuthForm mode="register" />;
+  return <Redirect href="/sign-in" />;
 }

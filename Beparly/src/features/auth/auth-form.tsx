@@ -1,4 +1,3 @@
-import { router } from 'expo-router';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -32,20 +31,13 @@ function Field({ label, ...inputProps }: FieldProps) {
   );
 }
 
-export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
-  const registering = mode === 'register';
-  const { signIn, register } = useAuth();
-  const [username, setUsername] = useState('');
+export function AuthForm() {
+  const { signIn } = useAuth();
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-
-  function changeMode(nextMode: 'login' | 'register') {
-    if (nextMode === mode) return;
-    router.replace(nextMode === 'login' ? '/sign-in' : '/register');
-  }
 
   async function submit() {
     setError('');
@@ -55,11 +47,7 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
     }
     setBusy(true);
     try {
-      if (registering) {
-        await register({ username: username.trim(), phone: phone.trim(), password });
-      } else {
-        await signIn(phone.trim(), password);
-      }
+      await signIn(phone.trim(), password);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Please try again.');
     } finally {
@@ -74,25 +62,9 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
           <View style={styles.content}>
             <View style={styles.header}>
               <View style={styles.logo}><Text style={styles.logoText}>ব</Text></View>
-              <Text style={styles.title}>{registering ? 'Create account' : 'Login'}</Text>
+              <Text style={styles.title}>Login</Text>
               <Text style={styles.subtitle}>Your business, simply managed.</Text>
-            </View>
-
-            <View style={styles.switcher}>
-              <Pressable
-                accessibilityRole="tab"
-                accessibilityState={{ selected: !registering }}
-                style={[styles.switchTab, !registering && styles.activeTab]}
-                onPress={() => changeMode('login')}>
-                <Text style={[styles.switchText, !registering && styles.activeTabText]}>Login</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="tab"
-                accessibilityState={{ selected: registering }}
-                style={[styles.switchTab, registering && styles.activeTab]}
-                onPress={() => changeMode('register')}>
-                <Text style={[styles.switchText, registering && styles.activeTabText]}>Register</Text>
-              </Pressable>
+              <Text style={styles.helper}>Your administrator provides your account and password.</Text>
             </View>
 
             <View style={styles.form}>
@@ -105,7 +77,6 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
                 autoComplete="tel"
                 maxLength={24}
               />
-              {registering && <Field label="Username (optional)" value={username} onChangeText={setUsername} placeholder="How should we call you?" autoCapitalize="words" maxLength={150} />}
               <View style={styles.field}>
                 <Text style={styles.label}>Password</Text>
                 <View style={styles.passwordBox}>
@@ -116,7 +87,7 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
                     placeholder="Enter password"
                     placeholderTextColor="#9AA7A3"
                     secureTextEntry={!showPassword}
-                    autoComplete={registering ? 'new-password' : 'current-password'}
+                    autoComplete="current-password"
                     autoCapitalize="none"
                     autoCorrect={false}
                   />
@@ -129,7 +100,6 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
                   </Pressable>
                 </View>
               </View>
-              {registering && <Text style={styles.helper}>Use at least 8 characters and avoid common passwords.</Text>}
               {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
               <Pressable
                 accessibilityRole="button"
@@ -137,7 +107,7 @@ export function AuthForm({ mode }: { mode: 'login' | 'register' }) {
                 style={[styles.submit, busy && styles.disabled]}
                 onPress={submit}
                 disabled={busy}>
-                {busy ? <ActivityIndicator color="white" /> : <Text style={styles.submitText}>{registering ? 'Create account' : 'Login'}</Text>}
+                {busy ? <ActivityIndicator color="white" /> : <Text style={styles.submitText}>Login</Text>}
               </Pressable>
             </View>
           </View>
@@ -159,11 +129,6 @@ const styles = StyleSheet.create({
   logoText: { color: '#FFFFFF', fontSize: 29, fontWeight: '800' },
   title: { color: '#15211F', fontSize: 27, fontWeight: '700', marginBottom: 5 },
   subtitle: { color: '#788580', fontSize: 14, textAlign: 'center' },
-  switcher: { flexDirection: 'row', backgroundColor: '#EDF2F1', borderRadius: 10, padding: 4, marginBottom: 24 },
-  switchTab: { flex: 1, height: 42, borderRadius: 7, alignItems: 'center', justifyContent: 'center' },
-  activeTab: { backgroundColor: teal },
-  switchText: { color: '#687673', fontSize: 15, fontWeight: '500' },
-  activeTabText: { color: '#FFFFFF', fontWeight: '700' },
   form: { gap: 17 },
   field: { gap: 8 },
   label: { color: '#35433F', fontSize: 13, fontWeight: '600' },

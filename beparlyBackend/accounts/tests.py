@@ -1,4 +1,5 @@
 import json
+import hashlib
 import tempfile
 from io import BytesIO
 
@@ -7,14 +8,14 @@ from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from PIL import Image
 
-from .models import Business, BusinessMember, User, normalize_phone
+from .models import AuthSession, Business, BusinessMember, User, normalize_phone
 
 
 class AccountApiTests(TestCase):
     def test_owner_can_upload_replace_and_remove_shop_logo(self):
         from .models import AuthSession
 
-        token = self.register()
+        token = self.create_user_token()
         business_id = self.create_business(token, 'Logo Shop')
         path = f'/api/v1/businesses/{business_id}/logo/'
         image = BytesIO()
@@ -53,21 +54,24 @@ class AccountApiTests(TestCase):
         headers = {'HTTP_AUTHORIZATION': f'Bearer {token}'} if token else {}
         return self.client.post(path, data=json.dumps(data), content_type='application/json', **headers)
 
-    def register(self, phone='01712345678', username=None):
-        data = {'phone': phone, 'password': 'StrongShopPass#83'}
-        if username is not None:
-            data['username'] = username
-        response = self.post_json('/api/v1/auth/register/', data)
-        self.assertEqual(response.status_code, 201, response.content)
-        return response.json()['token']
+    def create_user_token(self, phone='01712345678', username=None):
+        from .models import AuthSession
+        user = User.objects.create_user(phone, password='StrongShopPass#83', first_name=username or '')
+        return AuthSession.issue(user)
 
     def create_business(self, token, name):
-        response = self.post_json('/api/v1/businesses/', {'name': name}, token)
-        self.assertEqual(response.status_code, 201, response.content)
-        return response.json()['business']['id']
+        from accounting.services import setup_business
+        session = AuthSession.objects.get(token_hash=hashlib.sha256(token.encode()).hexdigest())
+        business = Business.objects.create(name=name)
+        BusinessMember.objects.create(user=session.user, business=business, role=BusinessMember.OWNER)
+        setup_business(business)
+        return business.id
 
-    def test_register_login_logout_without_business(self):
-        token = self.register('+8801712345678')
+    def test_admin_created_user_can_login_without_business_and_public_registration_is_closed(self):
+        token = self.create_user_token('+8801712345678')
+        self.assertEqual(self.post_json('/api/v1/auth/register/', {
+            'phone': '01812345678', 'password': 'StrongShopPass#83'}).status_code, 404)
+        self.assertEqual(User.objects.count(), 1)
         self.assertEqual(User.objects.get().phone, '01712345678')
         self.assertEqual(Business.objects.count(), 0)
         self.assertEqual(BusinessMember.objects.count(), 0)
@@ -84,7 +88,7 @@ class AccountApiTests(TestCase):
         self.assertEqual(self.client.get('/api/v1/auth/me/', HTTP_AUTHORIZATION=f'Bearer {second_token}').status_code, 200)
 
     def test_owner_creates_multiple_profiles(self):
-        owner = self.register(username='Selim')
+        owner = self.create_user_token(username='Selim')
         retail = self.create_business(owner, 'Retail Shop')
         wholesale = self.create_business(owner, 'Wholesale Shop')
         self.assertNotEqual(retail, wholesale)
@@ -97,7 +101,7 @@ class AccountApiTests(TestCase):
         from products.models import Product
         from stockkeeper.models import StockLocation
 
-        owner_token = self.register()
+        owner_token = self.create_user_token()
         first = self.create_business(owner_token, 'First shop')
         second = self.create_business(owner_token, 'Second shop')
         Product.objects.create(business_id=first, name='Soap', sku='SOAP-1')
@@ -123,7 +127,7 @@ class AccountApiTests(TestCase):
     def test_currency_symbol_setting_is_business_wide_and_owner_only(self):
         from .models import AuthSession
 
-        owner_token = self.register()
+        owner_token = self.create_user_token()
         business_id = self.create_business(owner_token, 'Currency Shop')
         profile = self.client.get(f'/api/v1/businesses/{business_id}/profile/', HTTP_AUTHORIZATION=f'Bearer {owner_token}')
         self.assertTrue(profile.json()['business']['show_currency_symbol'])
@@ -146,7 +150,7 @@ class AccountApiTests(TestCase):
     def test_invoice_footer_is_owner_editable_and_business_scoped(self):
         from .models import AuthSession
 
-        owner = self.register()
+        owner = self.create_user_token()
         first = self.create_business(owner, 'First shop')
         second = self.create_business(owner, 'Second shop')
         path = f'/api/v1/businesses/{first}/profile/'
@@ -167,33 +171,28 @@ class AccountApiTests(TestCase):
                                    content_type='application/json', HTTP_AUTHORIZATION=f'Bearer {employee_token}')
         self.assertEqual(denied.status_code, 403)
 
-    def test_opening_cash_is_posted_only_during_business_creation(self):
-        from decimal import Decimal
-        from accounting.models import JournalEntry, MoneyAccount
-        from accounting.services import balance
+    def test_business_creation_and_opening_cash_cannot_be_posted_by_app(self):
+        from accounting.models import JournalEntry
 
-        token = self.register()
+        token = self.create_user_token()
         created = self.post_json('/api/v1/businesses/', {'name': 'With cash', 'opening_cash': '1500.25'}, token)
-        self.assertEqual(created.status_code, 201, created.content)
-        business_id = created.json()['business']['id']
-        cash = MoneyAccount.objects.get(business_id=business_id, is_default=True)
-        self.assertEqual(balance(cash.ledger_account), Decimal('1500.25'))
-        self.assertEqual(JournalEntry.objects.filter(business_id=business_id, source_type='money').count(), 1)
-
-        invalid = self.post_json('/api/v1/businesses/', {'name': 'Invalid cash', 'opening_cash': '-2'}, token)
-        self.assertEqual(invalid.status_code, 400)
-        self.assertFalse(Business.objects.filter(name='Invalid cash').exists())
+        self.assertEqual(created.status_code, 405, created.content)
+        self.assertFalse(Business.objects.filter(name='With cash').exists())
+        self.assertEqual(JournalEntry.objects.count(), 0)
 
     def test_employees_are_scoped_to_business(self):
-        owner = self.register()
+        owner = self.create_user_token()
         retail = self.create_business(owner, 'Retail Shop')
         wholesale = self.create_business(owner, 'Wholesale Shop')
-        other_owner = self.register('01812345678')
+        other_owner = self.create_user_token('01812345678')
         other_business = self.create_business(other_owner, 'Other Shop')
         create = self.post_json(f'/api/v1/businesses/{retail}/employees/', {
             'username': 'Nadia', 'phone': '01912345678', 'password': 'EmployeePass#89',
         }, owner)
-        self.assertEqual(create.status_code, 201, create.content)
+        self.assertEqual(create.status_code, 405, create.content)
+        self.assertFalse(User.objects.filter(phone='01912345678').exists())
+        employee = User.objects.create_user('01912345678', password='EmployeePass#89', first_name='Nadia')
+        BusinessMember.objects.create(user=employee, business_id=retail, role=BusinessMember.EMPLOYEE)
         retail_staff = self.client.get(f'/api/v1/businesses/{retail}/employees/', HTTP_AUTHORIZATION=f'Bearer {owner}')
         self.assertEqual(retail_staff.json()['employees'][0]['name'], 'Nadia')
         wholesale_staff = self.client.get(f'/api/v1/businesses/{wholesale}/employees/', HTTP_AUTHORIZATION=f'Bearer {owner}')
@@ -209,22 +208,18 @@ class AccountApiTests(TestCase):
         self.assertEqual(self.client.get(f'/api/v1/businesses/{retail}/employees/', HTTP_AUTHORIZATION=f'Bearer {employee_token}').status_code, 403)
         self.assertEqual(self.post_json(f'/api/v1/businesses/{retail}/employees/', {
             'phone': '01612345678', 'password': 'EmployeePass#89',
-        }, employee_token).status_code, 403)
+        }, employee_token).status_code, 405)
         self.assertFalse(User.objects.filter(phone='01612345678').exists())
 
     def test_validation(self):
-        owner = self.register()
+        owner = self.create_user_token()
         self.assertEqual(self.post_json('/api/v1/auth/register/', {
-            'phone': '01712345678', 'password': 'StrongShopPass#83',
-        }).status_code, 409)
-        self.assertEqual(self.post_json('/api/v1/auth/register/', {'phone': '123', 'password': 'weak'}).status_code, 400)
-        self.assertEqual(self.post_json('/api/v1/auth/register/', {
-            'phone': '01812345678', 'password': 'StrongShopPass#83', 'username': 42,
-        }).status_code, 400)
+            'phone': '01812345678', 'password': 'StrongShopPass#83',
+        }).status_code, 404)
         self.assertEqual(User.objects.count(), 1)
         self.assertEqual(Business.objects.count(), 0)
-        self.assertEqual(self.post_json('/api/v1/businesses/', {'name': 'Unauthorized'}).status_code, 401)
-        self.assertEqual(self.post_json('/api/v1/businesses/', {'name': ''}, owner).status_code, 400)
+        self.assertEqual(self.post_json('/api/v1/businesses/', {'name': 'Unauthorized'}).status_code, 405)
+        self.assertEqual(self.post_json('/api/v1/businesses/', {'name': 'New shop'}, owner).status_code, 405)
         self.assertEqual(Business.objects.count(), 0)
 
     def test_cors_allows_only_configured_web_preview(self):
@@ -232,7 +227,7 @@ class AccountApiTests(TestCase):
         self.assertEqual(allowed.status_code, 204)
         self.assertEqual(allowed['Access-Control-Allow-Origin'], 'http://localhost:8081')
         expo = self.client.options(
-            '/api/v1/auth/register/',
+            '/api/v1/auth/login/',
             HTTP_ORIGIN='http://localhost:8082',
             HTTP_ACCESS_CONTROL_REQUEST_METHOD='POST',
             HTTP_ACCESS_CONTROL_REQUEST_HEADERS='content-type',
@@ -260,7 +255,7 @@ class AccountApiTests(TestCase):
         denied = self.client.options('/api/v1/auth/login/', HTTP_ORIGIN='https://unknown.example')
         self.assertNotIn('Access-Control-Allow-Origin', denied)
         with override_settings(DEBUG=False, API_ALLOWED_ORIGINS=set()):
-            production = self.client.options('/api/v1/auth/register/', HTTP_ORIGIN='http://localhost:8082')
+            production = self.client.options('/api/v1/auth/login/', HTTP_ORIGIN='http://localhost:8082')
             self.assertEqual(production.status_code, 405)
             self.assertNotIn('Access-Control-Allow-Origin', production)
 
@@ -269,7 +264,7 @@ class AccountApiTests(TestCase):
         from .models import AuthSession
         import re
 
-        owner = self.register()
+        owner = self.create_user_token()
         business_id = self.create_business(owner, 'Printer shop')
         other_id = self.create_business(owner, 'Other shop')
         settings = {**DEFAULT_LABEL_SETTINGS, 'paper': '2x4', 'width_mm': 50.8,
@@ -299,3 +294,56 @@ class AccountApiTests(TestCase):
         self.assertIsNotNone(box)
         self.assertAlmostEqual(float(box[1]), 50.8 * 72 / 25.4, delta=0.1)
         self.assertAlmostEqual(float(box[2]), 101.6 * 72 / 25.4, delta=0.1)
+
+
+class AdminRegistrationTests(TestCase):
+    def setUp(self):
+        self.admin_user = User.objects.create_superuser('01711111111', 'AdminPass#83')
+        self.client.force_login(self.admin_user)
+
+    def test_admin_can_create_business_then_user_with_secure_password_and_membership(self):
+        from accounting.models import MoneyAccount
+        from stockkeeper.models import StockLocation
+
+        created = self.client.post('/admin/accounts/business/add/', {'name': 'Pilot Shop'})
+        self.assertEqual(created.status_code, 302, created.context['adminform'].form.errors if created.context else None)
+        business = Business.objects.get(name='Pilot Shop')
+        self.assertTrue(MoneyAccount.objects.filter(business=business, is_default=True).exists())
+        self.assertTrue(StockLocation.objects.filter(business=business, is_default=True).exists())
+        add_user = self.client.post('/admin/accounts/user/add/', {
+            'phone': '+8801812345678', 'first_name': 'Nadia', 'last_name': '',
+            'business': business.pk, 'role': BusinessMember.OWNER,
+            'password1': 'StrongShopPass#83', 'password2': 'StrongShopPass#83',
+        })
+        self.assertEqual(add_user.status_code, 302, add_user.context['adminform'].form.errors if add_user.context else None)
+        user = User.objects.get(phone='01812345678')
+        self.assertTrue(user.check_password('StrongShopPass#83'))
+        self.assertNotEqual(user.password, 'StrongShopPass#83')
+        self.assertTrue(BusinessMember.objects.filter(user=user, business=business, role=BusinessMember.OWNER).exists())
+        login = self.client.post('/api/v1/auth/login/', data=json.dumps({
+            'phone': '01812345678', 'password': 'StrongShopPass#83'}), content_type='application/json')
+        self.assertEqual(login.status_code, 200, login.content)
+        self.assertEqual(login.json()['businesses'][0]['name'], 'Pilot Shop')
+
+    def test_admin_user_form_rejects_weak_password_and_duplicate_phone(self):
+        from .admin import AdminUserAddForm
+
+        business = Business.objects.create(name='Pilot Shop')
+        data = {'phone': '01812345678', 'business': business.pk, 'role': BusinessMember.EMPLOYEE,
+                'password1': 'weak', 'password2': 'weak'}
+        form = AdminUserAddForm(data=data)
+        self.assertFalse(form.is_valid())
+        self.assertIn('password1', form.errors)
+        self.assertFalse(User.objects.filter(phone='01812345678').exists())
+        User.objects.create_user('01812345678', password='StrongShopPass#83')
+        data.update(phone='+8801812345678', password1='AnotherStrongPass#83', password2='AnotherStrongPass#83')
+        duplicate = AdminUserAddForm(data=data)
+        self.assertFalse(duplicate.is_valid())
+        self.assertIn('phone', duplicate.errors)
+
+    def test_admin_can_assign_existing_user_when_creating_business(self):
+        owner = User.objects.create_user('01812345678', password='StrongShopPass#83')
+        created = self.client.post('/admin/accounts/business/add/', {'name': 'Second Shop', 'owner': owner.pk})
+        self.assertEqual(created.status_code, 302, created.context['adminform'].form.errors if created.context else None)
+        self.assertTrue(BusinessMember.objects.filter(business__name='Second Shop', user=owner,
+                                                       role=BusinessMember.OWNER).exists())

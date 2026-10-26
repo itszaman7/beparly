@@ -253,8 +253,6 @@ export const api = {
   quotationCheckout: (token: string, businessId: number, draftId: string, data: { paid: string; due_date?: string; account_id?: string; customer_id?: string; batch_ids?: (string | null)[]; prices?: string[] }, commandId: string) =>
     request<{ sale: SaleRecord }>(`businesses/${businessId}/quotation-sale-drafts/${draftId}/`, 'POST', data, token, commandId),
   quotationDocumentUrl: (businessId: number, id: string, size: 'a4' | 'a5') => `${apiBaseUrl()}/api/v1/businesses/${businessId}/quotations/${id}/documents/${size}/`,
-  register: (data: { username?: string; phone: string; password: string }) =>
-    request<AuthResult>('auth/register/', 'POST', data),
   login: (data: { phone: string; password: string }) => request<AuthResult>('auth/login/', 'POST', data),
   me: (token: string) => request<Omit<AuthResult, 'token'>>('auth/me/', 'GET', undefined, token),
   logout: (token: string) => request<{ ok: boolean }>('auth/logout/', 'POST', {}, token),
@@ -267,10 +265,7 @@ export const api = {
   labelCalibrationUrl: (businessId: number) => `${apiBaseUrl()}/api/v1/businesses/${businessId}/label-calibration/`,
   uploadBusinessLogo,
   removeBusinessLogo: (token: string, businessId: number) => request<{ logo_url: null }>(`businesses/${businessId}/logo/`, 'DELETE', undefined, token),
-  createBusiness: (token: string, name: string, openingCash?: string) => request<{ business: BusinessProfile }>('businesses/', 'POST', { name, ...(openingCash ? { opening_cash: openingCash } : {}) }, token),
   employees: (token: string, businessId: number) => request<{ employees: Employee[] }>(`businesses/${businessId}/employees/`, 'GET', undefined, token),
-  createEmployee: (token: string, businessId: number, data: { username?: string; phone: string; password: string }) =>
-    request<{ employee: Employee }>(`businesses/${businessId}/employees/`, 'POST', data, token),
   setLocationPermission: (token: string, businessId: number, userId: number, enabled: boolean) =>
     request<{ employee: Employee }>(`businesses/${businessId}/employees/${userId}/permissions/`, 'PATCH', { can_manage_locations: enabled }, token),
   setStockPermission: (token: string, businessId: number, userId: number, enabled: boolean) =>

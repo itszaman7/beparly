@@ -18,9 +18,7 @@ type AuthContextValue = {
   retryRestore: () => Promise<void>;
   refreshBusinesses: () => Promise<void>;
   signIn: (phone: string, password: string) => Promise<void>;
-  register: (data: { username?: string; phone: string; password: string }) => Promise<void>;
   selectBusiness: (businessId: number) => void;
-  createBusiness: (name: string, openingCash?: string) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -100,9 +98,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     async signIn(phone, password) {
       await acceptAuth(await api.login({ phone, password }));
     },
-    async register(data) {
-      await acceptAuth(await api.register(data));
-    },
     selectBusiness(businessId) {
       const business = session?.businesses.find((item) => item.id === businessId);
       if (!session || !business) return;
@@ -113,17 +108,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         can_manage_purchases: business.can_manage_purchases,
       } });
       void sessionStorage.saveBusinessId(businessId);
-    },
-    async createBusiness(name, openingCash) {
-      if (!session) throw new Error('Please sign in.');
-      const { business } = await api.createBusiness(session.token, name, openingCash);
-      setSession((current) => current && {
-        ...current,
-        businesses: [...current.businesses, business],
-        account: { user: current.user, business: { id: business.id, name: business.name, show_currency_symbol: business.show_currency_symbol ?? true, timezone: business.timezone }, role: business.role,
-          can_manage_purchases: business.can_manage_purchases },
-      });
-      await sessionStorage.saveBusinessId(business.id);
     },
     async signOut() {
       if (!session) return;
