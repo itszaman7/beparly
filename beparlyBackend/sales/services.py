@@ -4,7 +4,6 @@ import json
 from uuid import uuid4
 
 from django.db import transaction
-from django.core.files.storage import default_storage
 from django.utils.dateparse import parse_date
 
 from accounting.models import Contact, IncomeCategory, JournalEntry, LedgerAccount, MoneyAccount, MoneyTransaction
@@ -17,6 +16,7 @@ from stockkeeper.services import (StockError, business_today, consume, normalize
                                   resolve_variant, validate_batch, validate_location)
 
 from .models import Sale, SaleLine, SalePayment, SaleReturn, SaleReturnLine, SaleSequence
+from .image_snapshots import snapshot_url, snapshot_value
 
 
 class SaleError(ValueError):
@@ -182,7 +182,7 @@ def create_sale(business, actor, command_id, data, *, quotation=None):
             quoted = quoted_lines[index] if quotation else None
             SaleLine.objects.create(sale=sale, product=product, variant=variant, batch=batch,
                 product_name=quoted.product_name if quoted else product.name, variant_name=quoted.variant_name if quoted else variant.label,
-                image_url_snapshot=quoted.image_url_snapshot if quoted else (default_storage.url(product.image_key) if product.image_key else ''),
+                image_url_snapshot=quoted.image_url_snapshot if quoted else snapshot_value(product.image_key),
                 sku=quoted.sku if quoted else variant.sku, unit_name=quoted.unit_name if quoted else unit_name,
                 conversion_factor=factor, quantity=quantity, base_quantity=base, unit_price=price,
                 line_total=line_total, inventory_cost=line_cost,
@@ -346,7 +346,7 @@ def serialize_sale(sale, include_lines=False):
         'payment_account_names': [payment.account.name for payment in sale.payments.all() if payment.kind == 'receipt']}
     if include_lines:
         result['lines'] = [{'id': line.pk, 'product_id': str(line.product_id), 'variant_id': str(line.variant_id), 'name': line.product_name,
-            'variant': line.variant_name, 'image_url': line.image_url_snapshot, 'sku': line.sku, 'unit': line.unit_name, 'quantity': str(line.quantity),
+            'variant': line.variant_name, 'image_url': snapshot_url(line.image_url_snapshot), 'sku': line.sku, 'unit': line.unit_name, 'quantity': str(line.quantity),
             'unit_price': str(line.unit_price), 'inventory_cost': str(line.inventory_cost), 'line_total': str(line.line_total),
             'batch_id': str(line.batch_id) if line.batch_id else None,
             'returned_quantity': str(sum((item.quantity for row in returns for item in row.lines.all()

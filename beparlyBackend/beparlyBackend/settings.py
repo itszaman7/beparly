@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -33,7 +34,7 @@ SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-insecure-local-developm
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', '1') == '1'
 
-ALLOWED_HOSTS = os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+ALLOWED_HOSTS = [host.strip() for host in os.environ.get('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',') if host.strip()]
 if not DEBUG and 'DJANGO_SECRET_KEY' not in os.environ:
     raise RuntimeError('DJANGO_SECRET_KEY is required when DJANGO_DEBUG=0')
 if not DEBUG and not os.environ.get('DJANGO_ALLOWED_HOSTS'):
@@ -70,6 +71,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'accounts.middleware.ApiCorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -81,9 +83,18 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = 'beparlyBackend.urls'
 AUTH_USER_MODEL = 'accounts.User'
-API_ALLOWED_ORIGINS = set(os.environ.get('API_ALLOWED_ORIGINS', 'http://localhost:8081,http://127.0.0.1:8081,http://localhost:19006').split(','))
+API_ALLOWED_ORIGINS = {origin.strip() for origin in os.environ.get('API_ALLOWED_ORIGINS', 'http://localhost:8081,http://127.0.0.1:8081,http://localhost:19006').split(',') if origin.strip()}
 if not DEBUG and (not os.environ.get('API_ALLOWED_ORIGINS') or '*' in API_ALLOWED_ORIGINS):
     raise RuntimeError('Set explicit API_ALLOWED_ORIGINS when DJANGO_DEBUG=0')
+if not DEBUG and any(urlsplit(origin).scheme != 'https' or not urlsplit(origin).netloc or
+                     urlsplit(origin).path or urlsplit(origin).query or urlsplit(origin).fragment
+                     for origin in API_ALLOWED_ORIGINS):
+    raise RuntimeError('Production API_ALLOWED_ORIGINS must contain HTTPS origins only.')
+if os.environ.get('REDIS_URL'):
+    CACHES = {'default': {'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+                          'LOCATION': os.environ['REDIS_URL']}}
+elif not DEBUG:
+    raise RuntimeError('REDIS_URL is required for production login throttling.')
 
 TEMPLATES = [
     {
@@ -160,53 +171,45 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage'},
+}
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
-if os.environ.get('PRODUCT_STORAGE_BUCKET'):
-    cdn_domain = os.environ.get('PRODUCT_CDN_DOMAIN') or None
-    cdn_key_path = os.environ.get('PRODUCT_CDN_PRIVATE_KEY_PATH')
-    cdn_key = Path(cdn_key_path).read_text(encoding='utf-8') if cdn_key_path else None
-    STORAGES = {
-        'default': {
-            'BACKEND': 'storages.backends.s3.S3Storage',
-            'OPTIONS': {
-                'bucket_name': os.environ['PRODUCT_STORAGE_BUCKET'],
-                'region_name': os.environ.get('PRODUCT_STORAGE_REGION', 'ap-south-1'),
-                'endpoint_url': os.environ.get('PRODUCT_STORAGE_ENDPOINT') or None,
-                'custom_domain': cdn_domain,
-                'cloudfront_key_id': os.environ.get('PRODUCT_CDN_KEY_ID') or None,
-                'cloudfront_key': cdn_key,
-                'querystring_auth': True,
-                'object_parameters': {'CacheControl': 'max-age=86400'},
-            },
-        },
-        'attachments': {
-            'BACKEND': 'storages.backends.s3.S3Storage',
-            'OPTIONS': {
-                'bucket_name': os.environ.get('ATTACHMENT_STORAGE_BUCKET') or os.environ['PRODUCT_STORAGE_BUCKET'],
-                'region_name': os.environ.get('PRODUCT_STORAGE_REGION', 'ap-south-1'),
-                'endpoint_url': os.environ.get('PRODUCT_STORAGE_ENDPOINT') or None,
-                'location': 'private-attachments',
-                'querystring_auth': True,
-                'default_acl': None,
-                'object_parameters': {'CacheControl': 'private, no-store'},
-            },
-        },
-        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
-    }
-if not DEBUG and not all((os.environ.get('PRODUCT_STORAGE_BUCKET'), os.environ.get('PRODUCT_CDN_DOMAIN'),
-                          os.environ.get('PRODUCT_CDN_KEY_ID'), os.environ.get('PRODUCT_CDN_PRIVATE_KEY_PATH'))):
-    raise RuntimeError('Production product storage requires a bucket and signed CDN configuration.')
-if not DEBUG and not os.environ.get('ATTACHMENT_STORAGE_BUCKET'):
-    raise RuntimeError('Production supporting documents require a separate private ATTACHMENT_STORAGE_BUCKET.')
+if not DEBUG:
+    required_bunny = ('BUNNY_STORAGE_ZONE', 'BUNNY_STORAGE_PASSWORD', 'BUNNY_STORAGE_HOST',
+                      'BUNNY_CDN_BASE_URL', 'BUNNY_CDN_TOKEN_KEY')
+    missing_bunny = [key for key in required_bunny if not os.environ.get(key)]
+    if missing_bunny:
+        raise RuntimeError(f'Missing production Bunny settings: {", ".join(missing_bunny)}')
+    cdn_url = urlsplit(os.environ['BUNNY_CDN_BASE_URL'])
+    if cdn_url.scheme != 'https' or not cdn_url.netloc or cdn_url.path not in ('', '/'):
+        raise RuntimeError('BUNNY_CDN_BASE_URL must be an HTTPS origin.')
+    STORAGES.update({
+        'default': {'BACKEND': 'beparlyBackend.bunny_storage.BunnyImageStorage'},
+        'attachments': {'BACKEND': 'beparlyBackend.bunny_storage.BunnyPrivateStorage'},
+    })
 
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
-MAILERS = {
-    'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
-    },
-}
+if DEBUG:
+    MAILERS = {'default': {'BACKEND': 'django.core.mail.backends.console.EmailBackend'}}
+else:
+    if not all(os.environ.get(key) for key in ('EMAIL_HOST', 'EMAIL_PORT', 'DEFAULT_FROM_EMAIL')):
+        raise RuntimeError('EMAIL_HOST, EMAIL_PORT and DEFAULT_FROM_EMAIL are required in production.')
+    DEFAULT_FROM_EMAIL = os.environ['DEFAULT_FROM_EMAIL']
+    MAILERS = {'default': {
+        'BACKEND': 'django.core.mail.backends.smtp.EmailBackend',
+        'OPTIONS': {
+            'host': os.environ['EMAIL_HOST'],
+            'port': int(os.environ['EMAIL_PORT']),
+            'username': os.environ.get('EMAIL_HOST_USER', ''),
+            'password': os.environ.get('EMAIL_HOST_PASSWORD', ''),
+            'use_tls': os.environ.get('EMAIL_USE_TLS', '1') == '1',
+            'timeout': 10,
+        },
+    }}

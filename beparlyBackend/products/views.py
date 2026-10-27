@@ -33,6 +33,15 @@ PACKAGE_FIELDS = ('name', 'factor', 'selling_price', 'barcode', 'is_active')
 BATCH_FIELDS = ('lot_code', 'manufactured_on', 'expires_on')
 
 
+def delete_unreferenced_image(key):
+    # Issued documents keep an image key snapshot after the product image changes.
+    from sales.models import QuotationLine, SaleLine
+    if (QuotationLine.objects.filter(image_url_snapshot=key).exists() or
+            SaleLine.objects.filter(image_url_snapshot=key).exists()):
+        return
+    default_storage.delete(key)
+
+
 class BarcodeLookupView(APIView):
     authentication_classes = []
     permission_classes = []
@@ -650,7 +659,7 @@ class ProductImageView(APIView):
                        action='image_replaced' if old else 'image_added',
                        changes={'image': {'before': bool(old), 'after': True}})
                 if old:
-                    transaction.on_commit(lambda: default_storage.delete(old))
+                    transaction.on_commit(lambda: delete_unreferenced_image(old))
         except Exception:
             default_storage.delete(key)
             raise
@@ -672,7 +681,7 @@ class ProductImageView(APIView):
                 record(business_id=business_id, actor=current_session(request).user,
                        entity_type='product', entity_id=product.pk, subject=product.name, product_id=product.pk,
                        action='image_removed', changes={'image': {'before': True, 'after': False}})
-                transaction.on_commit(lambda: default_storage.delete(old))
+                transaction.on_commit(lambda: delete_unreferenced_image(old))
         return JsonResponse({'product': ProductSerializer(product).data})
 
 

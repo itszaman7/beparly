@@ -65,7 +65,7 @@ Migration `audit.0003` copies earlier stock movements into audit history with th
 
 Product creation may include `opening_stock` with quantity, explicit unit cost, optional location ID, and batch identifier and expiry date where tracking requires them. It posts atomically with the product. Inventory cost comes from receipt layers, not the editable buying price. Expiry dates remain sellable through that date in the business timezone (default `Asia/Dhaka`). Expiry does not write off physically present stock.
 
-Development images use `MEDIA_ROOT` and Django's debug media URL. Production requires an S3-compatible private bucket, `PRODUCT_CDN_DOMAIN`, `PRODUCT_CDN_KEY_ID`, and `PRODUCT_CDN_PRIVATE_KEY_PATH` for signed CDN URLs. Configure the CDN origin to access the private bucket, and provide storage credentials through the server environment or workload identity. The database stores only storage keys. See [django-storages S3 and CloudFront settings](https://django-storages.readthedocs.io/en/stable/backends/amazon-S3.html).
+Development images use `MEDIA_ROOT` and Django's debug media URL. Production uses Bunny Storage and signed Bunny CDN URLs. See [DEPLOYMENT.md](DEPLOYMENT.md) for the VPS setup, private attachment protection, and backup procedure.
 
 After installing requirements, review and apply migrations with `python manage.py migrate --plan` and `python manage.py migrate`. Run PostgreSQL tests with `python manage.py test accounts products stockkeeper audit`.
 

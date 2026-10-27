@@ -17,6 +17,7 @@ from stockkeeper.services import business_today, normalize_quantity, resolve_var
 
 from .models import Quotation, QuotationCommand, QuotationLine, QuotationSaleDraft, QuotationSequence, Sale
 from .services import create_sale
+from .image_snapshots import snapshot_url, snapshot_value
 
 
 class QuotationError(ValueError):
@@ -48,7 +49,7 @@ def serialize(quote, lines=True):
     if lines:
         result['lines'] = [{'id': row.pk, 'product_id': str(row.product_id), 'variant_id': str(row.variant_id),
             'unit_id': str(row.unit_id) if row.unit_id else None, 'product_name': row.product_name,
-            'variant_name': row.variant_name, 'image_url': row.image_url_snapshot or (
+            'variant_name': row.variant_name, 'image_url': snapshot_url(row.image_url_snapshot) or (
                 default_storage.url(row.product.image_key) if quote.status == 'draft' and row.product.image_key else ''),
             'sku': row.sku, 'unit_name': row.unit_name,
             'conversion_factor': str(row.conversion_factor), 'quantity': str(row.quantity),
@@ -116,7 +117,7 @@ def _clean_draft(business, actor, data):
         total = (quantity * price).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
         subtotal += total
         lines.append(dict(product=product, variant=variant, unit=unit, product_name=product.name,
-            variant_name=variant.label, image_url_snapshot=default_storage.url(product.image_key) if product.image_key else '',
+            variant_name=variant.label, image_url_snapshot=snapshot_value(product.image_key),
             sku=variant.sku, unit_name=unit_name, conversion_factor=factor,
             quantity=quantity, base_quantity=base, unit_price=price, line_total=total))
     discount = amount(data.get('discount', '0'), positive=False)
@@ -179,7 +180,7 @@ def issue(business, actor, command_id, quote_id, version):
         raise QuotationError('Validity date cannot be in the past.')
     for line in quote.lines.select_related('product').filter(image_url_snapshot=''):
         if line.product.image_key:
-            line.image_url_snapshot = default_storage.url(line.product.image_key)
+            line.image_url_snapshot = snapshot_value(line.product.image_key)
             line.save(update_fields=['image_url_snapshot'])
     sequence, _ = QuotationSequence.objects.select_for_update().get_or_create(business=business)
     sequence.value += 1

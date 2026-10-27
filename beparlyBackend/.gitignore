@@ -2,6 +2,8 @@ __pycache__/
 *.py[cod]
 db.sqlite3
 .env
+.env.production
+!.env.production.example
 .deps/
 private_attachments/
 media/
