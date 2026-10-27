@@ -15,3 +15,9 @@ Products are at Stock → Products and the Home Products action. Android offline
 Run `pnpm test:products`, `npx tsc --noEmit`, and `npx expo lint`. Use `npx expo start --web` for web preview and `npx expo start` with Expo Go or a development build for Android. Set `EXPO_PUBLIC_API_URL` to the host's LAN address for a real phone, or `http://10.0.2.2:8000` for an Android emulator. Test local image persistence, camera, SQLite recovery, keyboard and Bangla text on Android; web storage behavior does not validate those native paths.
 
 Phone number verification and password recovery are not yet included.
+
+## Production web and Android builds
+
+The web app is an Expo single-page export. Import this repository into Vercel with `Beparly` as the Root Directory. `vercel.json` runs the export to `dist` and rewrites deep links to the app entry point. In Vercel, set the Production environment variable `EXPO_PUBLIC_API_URL` to the HTTPS VPS API origin, such as `https://api.example.com` (without `/api/v1`). Add the desired frontend custom domain. The backend's `API_ALLOWED_ORIGINS` must contain that exact HTTPS frontend origin.
+
+For Android, sign in to Expo, link the project with `npx eas-cli@latest build:configure -p android`, and set `EXPO_PUBLIC_API_URL` in the EAS `preview` and `production` environments to the same HTTPS API origin. Then run `npx eas-cli@latest build -p android --profile preview` for an installable APK, or `npx eas-cli@latest build -p android --profile production` for a Play Store AAB. The existing `eas.json` contains both profiles. Test the APK on a physical Android device before release.

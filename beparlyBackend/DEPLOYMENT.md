@@ -13,7 +13,7 @@ Before allowing document uploads, check a known private-document URL through the
 
 ## Configure and start
 
-Copy `.env.production.example` to `.env.production` and replace every example domain and secret, including the SMTP settings. Set `API_ALLOWED_ORIGINS` to the exact HTTPS custom domain used by the Vercel app; do not include a path or trailing slash. Set the Vercel deployment variable `EXPO_PUBLIC_API_URL=https://api.example.com`. The frontend already reads this variable. Never commit `.env.production`. The example secret key is intentionally weak; `check --deploy` may also warn about HSTS subdomains and preload, which should stay disabled unless every subdomain is HTTPS-only.
+Copy `.env.production.example` to `.env.production` and replace every example domain and secret. Set `API_ALLOWED_ORIGINS` to the exact HTTPS custom domain used by the Vercel app; do not include a path or trailing slash. Set the Vercel deployment variable `EXPO_PUBLIC_API_URL=https://api.example.com`. The frontend already reads this variable. Outbound email is disabled because this backend has no email feature; `check --deploy` reports `mail.W001` to reflect that choice. Never commit `.env.production`. The example secret key is intentionally weak; `check --deploy` may also warn about HSTS subdomains and preload, which should stay disabled unless every subdomain is HTTPS-only.
 
 Restrict `.env.production` to the deployment account (for example, `chmod 600 .env.production`). Ensure the VPS has enough free disk for the database, image layers, and backup staging. Rotate any credentials previously used in a shared development environment before copying them to the VPS.
 
