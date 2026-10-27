@@ -196,20 +196,4 @@ if not DEBUG:
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
-if DEBUG:
-    MAILERS = {'default': {'BACKEND': 'django.core.mail.backends.console.EmailBackend'}}
-else:
-    if not all(os.environ.get(key) for key in ('EMAIL_HOST', 'EMAIL_PORT', 'DEFAULT_FROM_EMAIL')):
-        raise RuntimeError('EMAIL_HOST, EMAIL_PORT and DEFAULT_FROM_EMAIL are required in production.')
-    DEFAULT_FROM_EMAIL = os.environ['DEFAULT_FROM_EMAIL']
-    MAILERS = {'default': {
-        'BACKEND': 'django.core.mail.backends.smtp.EmailBackend',
-        'OPTIONS': {
-            'host': os.environ['EMAIL_HOST'],
-            'port': int(os.environ['EMAIL_PORT']),
-            'username': os.environ.get('EMAIL_HOST_USER', ''),
-            'password': os.environ.get('EMAIL_HOST_PASSWORD', ''),
-            'use_tls': os.environ.get('EMAIL_USE_TLS', '1') == '1',
-            'timeout': 10,
-        },
-    }}
+MAILERS = {'default': {'BACKEND': 'django.core.mail.backends.console.EmailBackend'}} if DEBUG else {}
