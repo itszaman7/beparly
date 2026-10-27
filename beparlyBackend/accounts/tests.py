@@ -301,22 +301,23 @@ class AdminRegistrationTests(TestCase):
         self.admin_user = User.objects.create_superuser('01711111111', 'AdminPass#83')
         self.client.force_login(self.admin_user)
 
-    def test_admin_can_create_business_then_user_with_secure_password_and_membership(self):
+    def test_admin_can_create_business_and_new_owner_together(self):
         from accounting.models import MoneyAccount
         from stockkeeper.models import StockLocation
 
-        created = self.client.post('/admin/accounts/business/add/', {'name': 'Pilot Shop'})
+        created = self.client.post('/admin/accounts/business/add/', {
+            'name': 'Pilot Shop', 'new_owner_phone': '+8801812345678',
+            'new_owner_first_name': 'Nadia',
+            'new_owner_password1': 'StrongShopPass#83',
+            'new_owner_password2': 'StrongShopPass#83',
+        })
         self.assertEqual(created.status_code, 302, created.context['adminform'].form.errors if created.context else None)
         business = Business.objects.get(name='Pilot Shop')
         self.assertTrue(MoneyAccount.objects.filter(business=business, is_default=True).exists())
         self.assertTrue(StockLocation.objects.filter(business=business, is_default=True).exists())
-        add_user = self.client.post('/admin/accounts/user/add/', {
-            'phone': '+8801812345678', 'first_name': 'Nadia', 'last_name': '',
-            'business': business.pk, 'role': BusinessMember.OWNER,
-            'password1': 'StrongShopPass#83', 'password2': 'StrongShopPass#83',
-        })
-        self.assertEqual(add_user.status_code, 302, add_user.context['adminform'].form.errors if add_user.context else None)
         user = User.objects.get(phone='01812345678')
+        self.assertEqual(user.first_name, 'Nadia')
+        self.assertFalse(user.is_staff)
         self.assertTrue(user.check_password('StrongShopPass#83'))
         self.assertNotEqual(user.password, 'StrongShopPass#83')
         self.assertTrue(BusinessMember.objects.filter(user=user, business=business, role=BusinessMember.OWNER).exists())
@@ -324,6 +325,47 @@ class AdminRegistrationTests(TestCase):
             'phone': '01812345678', 'password': 'StrongShopPass#83'}), content_type='application/json')
         self.assertEqual(login.status_code, 200, login.content)
         self.assertEqual(login.json()['businesses'][0]['name'], 'Pilot Shop')
+
+    def test_admin_rejects_invalid_new_owner_without_creating_business(self):
+        data = {'name': 'Invalid Shop', 'new_owner_phone': '01812345678',
+                'new_owner_password1': 'weak', 'new_owner_password2': 'weak'}
+        response = self.client.post('/admin/accounts/business/add/', data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('new_owner_password1', response.context['adminform'].form.errors)
+        self.assertFalse(Business.objects.filter(name='Invalid Shop').exists())
+        self.assertFalse(User.objects.filter(phone='01812345678').exists())
+
+        existing = User.objects.create_user('01812345678', password='StrongShopPass#83')
+        data.update(new_owner_password1='StrongShopPass#83', new_owner_password2='StrongShopPass#83')
+        response = self.client.post('/admin/accounts/business/add/', data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('new_owner_phone', response.context['adminform'].form.errors)
+        self.assertFalse(Business.objects.filter(name='Invalid Shop').exists())
+
+        data['owner'] = existing.pk
+        response = self.client.post('/admin/accounts/business/add/', data)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('owner', response.context['adminform'].form.errors)
+        self.assertFalse(Business.objects.filter(name='Invalid Shop').exists())
+
+    def test_admin_can_save_business_before_assigning_owner(self):
+        response = self.client.post('/admin/accounts/business/add/', {'name': 'Owner Later Shop'})
+        self.assertEqual(response.status_code, 302, response.context['adminform'].form.errors if response.context else None)
+        self.assertTrue(Business.objects.filter(name='Owner Later Shop').exists())
+        self.assertFalse(BusinessMember.objects.filter(business__name='Owner Later Shop').exists())
+
+    def test_admin_can_add_user_to_existing_business(self):
+        business = Business.objects.create(name='Existing Shop')
+        response = self.client.post('/admin/accounts/user/add/', {
+            'phone': '+8801912345678', 'first_name': 'Employee',
+            'business': business.pk, 'role': BusinessMember.EMPLOYEE,
+            'password1': 'EmployeePass#83', 'password2': 'EmployeePass#83',
+        })
+        self.assertEqual(response.status_code, 302, response.context['adminform'].form.errors if response.context else None)
+        user = User.objects.get(phone='01912345678')
+        self.assertTrue(user.check_password('EmployeePass#83'))
+        self.assertTrue(BusinessMember.objects.filter(user=user, business=business,
+                                                      role=BusinessMember.EMPLOYEE).exists())
 
     def test_admin_user_form_rejects_weak_password_and_duplicate_phone(self):
         from .admin import AdminUserAddForm
