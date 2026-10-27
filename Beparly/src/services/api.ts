@@ -113,7 +113,7 @@ export class ApiError extends Error {
 function apiBaseUrl() {
   const baseUrl = process.env.EXPO_PUBLIC_API_URL?.trim().replace(/\/+$/, '');
   if (!baseUrl) {
-    throw new ApiError('API address is missing from this Expo session. Reload the app from the Beparly project.', 0);
+    throw new ApiError('API address is missing from this Expo session. Reload GotiBooks.', 0);
   }
   if (!__DEV__ && !baseUrl.startsWith('https://')) {
     throw new ApiError('EXPO_PUBLIC_API_URL must use HTTPS outside development.', 0);
@@ -141,7 +141,7 @@ async function request<T>(path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELE
       ...(data ? { body: JSON.stringify(data) } : {}),
     });
   } catch {
-    throw new ApiError('Could not reach Beparly. Check your connection and API address.', 0);
+    throw new ApiError('Could not reach GotiBooks. Check your connection and API address.', 0);
   }
   const result = await response.json().catch(() => null);
   if (!response.ok) {

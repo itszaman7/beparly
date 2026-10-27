@@ -1,4 +1,4 @@
-/** Shared visual language for the Beparly mobile experience. */
+/** Shared visual language for the GotiBooks mobile experience. */
 export const appFontFamily = 'BeparlyRobotoRegular';
 export const palette = {
   primary: '#00B8A9',

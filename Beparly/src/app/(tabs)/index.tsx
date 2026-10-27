@@ -88,7 +88,7 @@ export default function HomeScreen() {
             <Entrance>
               <View style={styles.header}>
                 <View style={styles.headerCopy}>
-                  <Text style={styles.brand}>BEPARLY</Text>
+                  <Text style={styles.brand}>GOTIBOOKS</Text>
                   <PressScale onPress={() => setPickerOpen(true)} accessibilityRole="button" accessibilityLabel="Switch business" style={styles.businessButton}>
                     <View style={styles.businessRow}>
                       <Text style={styles.businessName} numberOfLines={1}>{account.business.name}</Text>
@@ -198,7 +198,7 @@ function BusinessStart({ name }: { name: string }) {
       <ScrollView contentContainerStyle={styles.startScroll} keyboardShouldPersistTaps="handled">
         <View style={styles.startContent}>
           <View style={styles.startHeader}>
-            <View><Text style={styles.startBrand}>BEPARLY</Text><Text style={styles.startGreeting}>Welcome{name ? `, ${name}` : ''}</Text></View>
+            <View><Text style={styles.startBrand}>GOTIBOOKS</Text><Text style={styles.startGreeting}>Welcome{name ? `, ${name}` : ''}</Text></View>
             <PressScale onPress={() => setProfileMenuOpen(true)} accessibilityRole="button" accessibilityLabel="Open account menu">
               <View style={styles.startAvatar}><AppSymbol name="account" color={palette.primary} size={23} /></View>
             </PressScale>
