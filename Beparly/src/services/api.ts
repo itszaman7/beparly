@@ -1,4 +1,5 @@
 import { Platform } from 'react-native';
+import { File as ExpoFile, UploadType } from 'expo-file-system';
 
 export type Account = {
   user: { id: number; name: string; phone: string };
@@ -22,6 +23,8 @@ export type PurchaseCatalogItem = { product_id: string; variant_id: string; name
 export type PurchaseInput = { supplier_id: string; location_id: number; notes?: string; lines: PurchaseLineInput[] };
 export type PurchaseRecord = { added_notes?: AddedRecordNote[]; id: string; number: string; status: 'draft' | 'completed' | 'cancelled'; supplier_id: string; supplier_name: string; location_id: number; location_name: string; total: string; paid: string; due: string; due_date?: string | null; notes: string; created_at: string; completed_at: string | null; cancellation_reason: string; lines?: (PurchaseLineInput & { id: number; product_name: string; variant_name: string; sku: string; image_url: string | null; base_unit: string; tracking_mode: Product['tracking_mode']; unit_name: string; lot_code: string; base_quantity: string; line_total: string })[]; operations?: { id: string; kind: string; amount: string; created_at: string }[] };
 export type RecordAttachment = { id: string; name: string; content_type: string; size: number; created_at: string };
+export type MediaImage = { id: string; name: string; size: number; created_at: string; image_url: string;
+  used_by?: { products: { id: string; name: string }[]; suppliers: { id: string; name: string }[]; business_logo: boolean } };
 export type PendingAttachment = { commandId: string; uri: string; name: string; contentType: string; size?: number; file?: File };
 export type AttachmentKind = 'expense' | 'purchase';
 export type SupplierAction = { kind: 'payment' | 'payment_refund' | 'advance' | 'advance_refund' | 'apply_advance' | 'allocation_reversal'; amount: string; account_id?: string; purchase_id?: string; opening_id?: string };
@@ -148,24 +151,49 @@ async function request<T>(path: string, method: 'GET' | 'POST' | 'PATCH' | 'DELE
   return result as T;
 }
 
-async function uploadImage(token: string, businessId: number, productId: string, uri: string): Promise<{ product: Product }> {
+async function uploadImage(token: string, businessId: number, productId: string, uri: string, commandId?: string): Promise<{ product: Product }> {
+  return uploadPublicImage(`businesses/${businessId}/products/${productId}/image/`, token, uri, 'product.jpg', 'Could not upload image.', commandId) as Promise<{ product: Product }>;
+}
+
+async function uploadPublicImage(path: string, token: string, uri: string, filename: string, fallback: string, commandId?: string): Promise<unknown> {
+  const url = `${apiBaseUrl()}/api/v1/${path}`;
+  if (Platform.OS !== 'web' && uri.startsWith('file:')) {
+    const file = new ExpoFile(uri);
+    if (!file.exists || !file.size) throw new ApiError('The selected photo is no longer available on this device.', 422);
+    let result: { status: number; body: string };
+    try {
+      result = await file.upload(url, { httpMethod: 'POST', uploadType: UploadType.MULTIPART,
+        fieldName: 'image', mimeType: 'image/jpeg', headers: { Authorization: `Bearer ${token}`,
+          ...(commandId ? { 'X-Command-ID': commandId } : {}) } });
+    } catch (cause) {
+      console.warn('Photo upload transport failed', cause);
+      throw new ApiError('Photo upload could not reach the server. It will retry when connected.', 0);
+    }
+    let data: { error?: { message?: string } } | null = null;
+    try { data = JSON.parse(result.body); } catch { /* An upstream proxy may return HTML. */ }
+    if (result.status < 200 || result.status >= 300) throw new ApiError(data?.error?.message ?? fallback, result.status);
+    if (!data) throw new ApiError('The server returned an unexpected photo response.', result.status);
+    return data;
+  }
   const data = new FormData();
   if (Platform.OS === 'web' || uri.startsWith('data:')) {
     const blob = await (await fetch(uri)).blob();
-    data.append('image', blob, 'product.jpg');
+    data.append('image', blob, filename);
   } else {
-    data.append('image', { uri, name: 'product.jpg', type: 'image/jpeg' } as unknown as Blob);
+    data.append('image', { uri, name: filename, type: 'image/jpeg' } as unknown as Blob);
   }
   let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl()}/api/v1/businesses/${businessId}/products/${productId}/image/`, {
-      method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: data,
+    response = await fetch(url, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`,
+        ...(commandId ? { 'X-Command-ID': commandId } : {}) }, body: data,
     });
-  } catch {
-    throw new ApiError('Image upload will retry when connected.', 0);
+  } catch (cause) {
+    console.warn('Photo upload transport failed', cause);
+    throw new ApiError('Photo upload could not reach the server. It will retry when connected.', 0);
   }
   const result = await response.json().catch(() => null);
-  if (!response.ok) throw new ApiError(result?.error?.message ?? 'Could not upload image.', response.status);
+  if (!response.ok) throw new ApiError(result?.error?.message ?? fallback, response.status);
   return result;
 }
 
@@ -199,42 +227,24 @@ async function downloadRecordAttachment(token: string, businessId: number, kind:
 }
 
 async function uploadSupplierImage(token: string, businessId: number, supplierId: string, uri: string): Promise<{ supplier: Supplier }> {
-  const data = new FormData();
-  if (Platform.OS === 'web' || uri.startsWith('data:')) {
-    data.append('image', await (await fetch(uri)).blob(), 'supplier.jpg');
-  } else {
-    data.append('image', { uri, name: 'supplier.jpg', type: 'image/jpeg' } as unknown as Blob);
-  }
-  let response: Response;
-  try {
-    response = await fetch(`${apiBaseUrl()}/api/v1/businesses/${businessId}/suppliers/${supplierId}/image/`, {
-      method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: data,
-    });
-  } catch { throw new ApiError('Supplier photo upload failed. Try again when connected.', 0); }
-  const result = await response.json().catch(() => null);
-  if (!response.ok) throw new ApiError(result?.error?.message ?? 'Could not upload supplier photo.', response.status);
-  return result;
+  return uploadPublicImage(`businesses/${businessId}/suppliers/${supplierId}/image/`, token, uri, 'supplier.jpg', 'Could not upload supplier photo.') as Promise<{ supplier: Supplier }>;
 }
 
 async function uploadBusinessLogo(token: string, businessId: number, uri: string): Promise<{ logo_url: string | null }> {
-  const data = new FormData();
-  if (Platform.OS === 'web' || uri.startsWith('data:')) {
-    data.append('image', await (await fetch(uri)).blob(), 'shop-logo.jpg');
-  } else {
-    data.append('image', { uri, name: 'shop-logo.jpg', type: 'image/jpeg' } as unknown as Blob);
-  }
-  let response: Response;
-  try {
-    response = await fetch(`${apiBaseUrl()}/api/v1/businesses/${businessId}/logo/`, {
-      method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: data,
-    });
-  } catch { throw new ApiError('Logo upload failed. Check your connection.', 0); }
-  const result = await response.json().catch(() => null);
-  if (!response.ok) throw new ApiError(result?.error?.message ?? 'Could not upload the logo.', response.status);
-  return result;
+  return uploadPublicImage(`businesses/${businessId}/logo/`, token, uri, 'shop-logo.jpg', 'Could not upload the logo.') as Promise<{ logo_url: string | null }>;
 }
 
 export const api = {
+  media: (token: string, businessId: number, page = 1) =>
+    request<{ images: MediaImage[]; next_page: number | null }>(`businesses/${businessId}/media/?page=${page}`, 'GET', undefined, token),
+  mediaDetail: (token: string, businessId: number, id: string) =>
+    request<{ image: MediaImage }>(`businesses/${businessId}/media/${id}/`, 'GET', undefined, token),
+  uploadMedia: (token: string, businessId: number, uri: string) =>
+    uploadPublicImage(`businesses/${businessId}/media/`, token, uri, 'photo.jpg', 'Could not upload photo.') as Promise<{ image: MediaImage }>,
+  attachMedia: (token: string, businessId: number, id: string, kind: 'product' | 'supplier' | 'business_logo', targetId: string) =>
+    request<{ image: MediaImage }>(`businesses/${businessId}/media/${id}/attach/`, 'POST', { kind, target_id: targetId }, token),
+  deleteMedia: (token: string, businessId: number, ids: string[]) =>
+    request<{ deleted: string[] }>(`businesses/${businessId}/media/delete/`, 'POST', { ids }, token),
   expense: (token: string, businessId: number, transactionId: string) =>
     request<{ transaction: MoneyTransaction & { category_name: string; account_name: string } }>(
       `businesses/${businessId}/money/expenses/${transactionId}/`, 'GET', undefined, token),

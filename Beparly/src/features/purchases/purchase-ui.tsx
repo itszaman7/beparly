@@ -11,6 +11,7 @@ import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { RecordAttachments } from '@/features/attachments/record-attachments';
 import { PartyAvatar, PartyButton, PartyInfo, PartyMetric } from '@/features/contacts/party-ui';
 import { useAuth } from '@/features/auth/auth-context';
+import { MediaPicker } from '@/features/media/media-picker';
 import { SelectionToolbar, useRecordSelection } from '@/features/documents/record-selection';
 import { api, resolveAssetUrl, type PurchasePaymentAccount, type PurchaseRecord, type Supplier, type SupplierAction,
   type PendingAttachment, type RecordAttachment } from '@/services/api';
@@ -116,6 +117,8 @@ export function SupplierFormScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [imageUri, setImageUri] = useState<string | null>(null);
+  const [libraryImage, setLibraryImage] = useState<{ id: string; image_url: string } | null>(null);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [existingImage, setExistingImage] = useState<string | null>(null);
   const [removeImage, setRemoveImage] = useState(false);
   const commandId = useRef(command());
@@ -132,7 +135,7 @@ export function SupplierFormScreen() {
   async function pickImage() {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.82 });
-      if (!result.canceled && result.assets[0]) { setImageUri(result.assets[0].uri); setRemoveImage(false); }
+      if (!result.canceled && result.assets[0]) { setImageUri(result.assets[0].uri); setLibraryImage(null); setRemoveImage(false); }
     } catch { setError('Could not select a supplier photo.'); }
   }
   async function save() {
@@ -143,17 +146,22 @@ export function SupplierFormScreen() {
       const { opening_payable, ...profile } = fields;
       const result = editing && id ? await api.updateSupplier(session.token, business, id, profile) :
         await api.createSupplier(session.token, business, fields, commandId.current);
-      if (imageUri) await api.uploadSupplierImage(session.token, business, result.supplier.id, imageUri);
+      if (libraryImage) await api.attachMedia(session.token, business, libraryImage.id, 'supplier', result.supplier.id);
+      else if (imageUri) await api.uploadSupplierImage(session.token, business, result.supplier.id, imageUri);
       else if (removeImage && existingImage) await api.removeSupplierImage(session.token, business, result.supplier.id);
       router.replace(`/suppliers/${result.supplier.id}` as Href);
     } catch (cause) { setError(message(cause)); }
     finally { setBusy(false); }
   }
   return <Screen title={editing ? 'Edit supplier' : 'Add supplier'} icon="parties" backTo="/suppliers">
+    <MediaPicker visible={libraryOpen} onClose={() => setLibraryOpen(false)} onSelect={(item) => {
+      setLibraryImage(item); setImageUri(null); setExistingImage(item.image_url); setRemoveImage(false);
+    }} />
     {(imageUri || !removeImage && existingImage) && <Image source={{ uri: imageUri || resolveAssetUrl(existingImage) || '' }}
       style={{ width: 84, height: 84, borderRadius: 14 }} contentFit="cover" />}
     <Action label={imageUri || existingImage ? 'Change supplier photo' : 'Add supplier photo (optional)'} icon="edit" secondary onPress={() => void pickImage()} />
-    {!!(imageUri || !removeImage && existingImage) && <Action label="Remove photo" secondary onPress={() => { setImageUri(null); setRemoveImage(true); }} />}
+    <Action label="Choose from media library" secondary onPress={() => setLibraryOpen(true)} />
+    {!!(imageUri || !removeImage && existingImage) && <Action label="Remove photo" secondary onPress={() => { setImageUri(null); setLibraryImage(null); setRemoveImage(true); }} />}
     <Field label="Name *" value={fields.name} onChangeText={set('name')} />
     <Field label="Phone (optional)" value={fields.phone} onChangeText={set('phone')} keyboardType="phone-pad" />
     <Field label="Address" value={fields.address} onChangeText={set('address')} />

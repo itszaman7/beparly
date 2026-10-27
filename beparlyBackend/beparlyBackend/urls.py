@@ -30,6 +30,7 @@ urlpatterns = [
     path('api/v1/', include('accounting.urls')),
     path('api/v1/', include('sales.urls')),
     path('api/v1/', include('purchases.urls')),
+    path('api/v1/', include('media_library.urls')),
 ]
 
 if settings.DEBUG:

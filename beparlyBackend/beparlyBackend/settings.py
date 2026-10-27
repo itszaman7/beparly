@@ -67,6 +67,7 @@ INSTALLED_APPS = [
     'accounting.apps.AccountingConfig',
     'sales.apps.SalesConfig',
     'purchases',
+    'media_library',
 ]
 
 MIDDLEWARE = [

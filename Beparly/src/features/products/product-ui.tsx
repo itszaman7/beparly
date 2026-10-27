@@ -11,6 +11,7 @@ import { AppText as Text } from '@/components/app-text';
 import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { palette, spacing, radius, appFontFamily } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
+import { MediaPicker } from '@/features/media/media-picker';
 import { cancelProduct, cancelStock, correctStock, pendingProducts, pendingStock, queueProduct, stageProductImage, syncProducts, syncStock } from '@/features/products/product-outbox';
 import { formatBdt, validDecimal } from '@/features/products/product-rules';
 import { StockUnitPicker, TrackingPicker } from '@/features/products/product-options';
@@ -197,6 +198,8 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
   const [categoryKind, setCategoryKind] = useState<'main' | 'sub'>('main'); const [categoryParent, setCategoryParent] = useState<string | null>(null);
   const [categoryParentOpen, setCategoryParentOpen] = useState(false); const [categoryParentSearch, setCategoryParentSearch] = useState('');
   const [imageUri, setImageUri] = useState<string | null>(null); const [currentImage, setCurrentImage] = useState<string | null>(null);
+  const [libraryImage, setLibraryImage] = useState<{ id: string; image_url: string } | null>(null);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [removeImage, setRemoveImage] = useState(false); const [more, setMore] = useState(false);
   const [busy, setBusy] = useState(false);
   const [duplicateLoading, setDuplicateLoading] = useState(!!duplicateId);
@@ -255,7 +258,7 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
       const context = ImageManipulator.manipulate(asset.uri);
       if (asset.width > 800 || asset.height > 800) context.resize(asset.width >= asset.height ? { width: 800, height: null } : { width: null, height: 800 });
       const image = await (await context.renderAsync()).saveAsync({ format: SaveFormat.JPEG, compress: 0.82 });
-      setImageUri(image.uri); setRemoveImage(false);
+      setImageUri(image.uri); setLibraryImage(null); setRemoveImage(false);
     } catch { toast.error('Could not prepare this photo. Try another image.'); }
   }
   async function save() {
@@ -289,8 +292,9 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
     try {
       const result = editing && id ? await api.updateProduct(token, businessId, id, input, command) : await api.createProduct(token, businessId, creationInput, command);
       savedId = result.product.id;
-      if (imageUri) {
-        try { await api.uploadProductImage(token, businessId, result.product.id, imageUri); }
+      if (libraryImage) await api.attachMedia(token, businessId, libraryImage.id, 'product', result.product.id);
+      else if (imageUri) {
+        try { await api.uploadProductImage(token, businessId, result.product.id, imageUri, command); }
         catch (cause) {
           if (Platform.OS === 'web' || !(cause instanceof ApiError) || cause.status !== 0) throw cause;
           const file = await stageProductImage(imageUri, command);
@@ -307,7 +311,7 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
         router.replace(`/products/${savedId}` as Href);
         return;
       }
-      if (Platform.OS !== 'web' && cause instanceof ApiError && cause.status === 0) {
+      if (!libraryImage && Platform.OS !== 'web' && cause instanceof ApiError && cause.status === 0) {
         try {
           const file = imageUri ? await stageProductImage(imageUri, command) : null;
           await queueProduct(command, businessId, editing ? 'update' : 'create', editing ? id ?? null : input.id ?? null, editing ? input : creationInput, file);
@@ -334,6 +338,9 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
         setLocationId((current) => locationResult.locations.some((item) => item.is_active && item.id === current) ? current : locationResult.locations.find((item) => item.is_active && item.is_default)?.id ?? null);
       } catch (cause) { toast.error(cause instanceof Error ? cause.message : 'Could not refresh product choices.'); }
     }} contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+      <MediaPicker visible={libraryOpen} onClose={() => setLibraryOpen(false)} onSelect={(item) => {
+        setLibraryImage(item); setCurrentImage(item.image_url); setImageUri(null); setRemoveImage(false);
+      }} />
       {!!duplicateId && <View style={styles.duplicateNotice}><AppSymbol name="duplicate" size={20} color={palette.purple} /><Text style={styles.muted}>Review this copy before saving. It starts with new SKU and barcode codes, no photo, stock, batches, packaging, or history.</Text></View>}
       <View style={styles.formSection}><FormHeading icon="products" title="Product details" help="Add the shared photo and name used to find this product." />
       <View style={styles.photoSection}>
@@ -347,8 +354,9 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
           <View style={styles.photoActions}>
             <Text style={styles.muted}>A clear photo helps you find this product quickly.</Text>
             <Pressable accessibilityRole="button" onPress={() => void pick(false)} style={styles.photoButton}><Text style={styles.link}>Choose from gallery</Text></Pressable>
+            <Pressable accessibilityRole="button" onPress={() => setLibraryOpen(true)} style={styles.photoButton}><Text style={styles.link}>Choose from media library</Text></Pressable>
             <Pressable accessibilityRole="button" onPress={() => void pick(true)} style={styles.photoButton}><Text style={styles.link}>Take photo</Text></Pressable>
-            {!!(imageUri || currentImage) && <Pressable accessibilityRole="button" onPress={() => { setImageUri(null); setRemoveImage(true); }} style={styles.photoButton}><Text style={styles.removeLink}>Remove photo</Text></Pressable>}
+            {!!(imageUri || currentImage) && <Pressable accessibilityRole="button" onPress={() => { setImageUri(null); setLibraryImage(null); setRemoveImage(true); }} style={styles.photoButton}><Text style={styles.removeLink}>Remove photo</Text></Pressable>}
           </View>
         </View>
       </View>

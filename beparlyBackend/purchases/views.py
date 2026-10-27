@@ -148,6 +148,9 @@ def supplier_image(request, business_id, supplier_id):
             f'suppliers/{business_id}/{supplier_id}/{uuid.uuid4().hex}.webp', ContentFile(output.getvalue()))
     try:
         with transaction.atomic():
+            if key:
+                from media_library.services import register_image
+                register_image(business_id, key, upload.name, len(output.getvalue()), session.user)
             supplier = Contact.objects.select_for_update().get(pk=supplier.pk)
             old = supplier.image_key
             if key or old:
@@ -158,7 +161,8 @@ def supplier_image(request, business_id, supplier_id):
                        action='image_replaced' if old and key else 'image_added' if key else 'image_removed',
                        changes={'image': {'before': bool(old), 'after': bool(key)}})
                 if old:
-                    transaction.on_commit(lambda: default_storage.delete(old))
+                    from media_library.services import delete_if_untracked
+                    transaction.on_commit(lambda old=old: delete_if_untracked(old))
     except Exception:
         if key:
             default_storage.delete(key)

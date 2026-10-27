@@ -282,7 +282,11 @@ def business_logo(request, business_id):
         business.logo = None
         business.save(update_fields=['logo'])
     if old_logo:
-        business.logo.storage.delete(old_logo)
+        from media_library.services import delete_if_untracked
+        delete_if_untracked(old_logo)
+    if request.method == 'POST':
+        from media_library.services import register_image
+        register_image(business_id, business.logo.name, upload.name, len(output.getvalue()), session.user)
     return JsonResponse({'logo_url': business.logo.url if business.logo else None})
 
 

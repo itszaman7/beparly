@@ -171,7 +171,7 @@ export async function syncProducts(token: string, businessId: number) {
       await api.updateProduct(token, businessId, productId, fields, item.command_id);
     }
     if (!productId) throw new Error('Pending product is missing its ID.');
-    if (item.image_uri) await api.uploadProductImage(token, businessId, productId, item.image_uri);
+    if (item.image_uri) await api.uploadProductImage(token, businessId, productId, item.image_uri, item.command_id);
     await handle.runAsync('DELETE FROM product_outbox WHERE command_id = ?', item.command_id);
     if (item.image_uri) {
       const file = new File(item.image_uri);

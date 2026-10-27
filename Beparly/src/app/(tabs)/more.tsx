@@ -14,6 +14,7 @@ export default function More() {
   const items = [
     ['Quotations', '/sales/quotations', 'duplicate'] as const,
     ['Business settings', '/business-settings', 'edit'] as const,
+    ['Media library', '/media', 'products'] as const,
     ['Print settings', '/print-settings', 'reports'] as const,
     ...(session?.account?.role === 'owner' ? [['Income categories', '/money/income-categories', 'category'] as const] : []),
     ['Account & team', '/explore', 'account'] as const,

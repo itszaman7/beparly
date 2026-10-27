@@ -35,8 +35,13 @@ BATCH_FIELDS = ('lot_code', 'manufactured_on', 'expires_on')
 
 def delete_unreferenced_image(key):
     # Issued documents keep an image key snapshot after the product image changes.
+    from media_library.models import MediaAsset
+    from accounting.models import Contact
+    from accounts.models import Business
     from sales.models import QuotationLine, SaleLine
-    if (QuotationLine.objects.filter(image_url_snapshot=key).exists() or
+    if (MediaAsset.objects.filter(key=key).exists() or Product.objects.filter(image_key=key).exists() or
+            Contact.objects.filter(image_key=key).exists() or Business.objects.filter(logo=key).exists() or
+            QuotationLine.objects.filter(image_url_snapshot=key).exists() or
             SaleLine.objects.filter(image_url_snapshot=key).exists()):
         return
     default_storage.delete(key)
@@ -629,6 +634,15 @@ class ProductImageView(APIView):
         product = Product.objects.filter(business_id=business_id, pk=product_id).first()
         if not product:
             return error('not_found', 'Product not found.', 404)
+        command_id = request.headers.get('X-Command-ID')
+        if command_id:
+            try:
+                command_id = uuid.UUID(command_id)
+            except ValueError:
+                return error('invalid_command', 'Use a valid photo command ID.')
+            from media_library.models import MediaAsset
+            if MediaAsset.objects.filter(business_id=business_id, upload_command_id=command_id).exists():
+                return JsonResponse({'product': ProductSerializer(product).data})
         upload = request.FILES.get('image')
         if not upload or upload.size > 5 * 1024 * 1024:
             return error('invalid_image', 'Choose an image smaller than 5 MB.')
@@ -650,6 +664,8 @@ class ProductImageView(APIView):
         key = default_storage.save(key, ContentFile(output.getvalue()))
         try:
             with transaction.atomic():
+                from media_library.services import register_image
+                register_image(business_id, key, upload.name, len(output.getvalue()), current_session(request).user, command_id)
                 product = Product.objects.select_for_update().get(pk=product.pk)
                 old = product.image_key
                 product.image_key = key

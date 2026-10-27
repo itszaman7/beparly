@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
 import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { useAuth } from '@/features/auth/auth-context';
+import { MediaPicker } from '@/features/media/media-picker';
 import { api, resolveAssetUrl } from '@/services/api';
 import { blurWebFocus } from '@/utils/web-focus';
 
@@ -19,6 +20,7 @@ export default function BusinessSettings() {
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [saved, setSaved] = useState({ phone: '', address: '', showSymbol: true });
   const [busy, setBusy] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [message, setMessage] = useState('');
 
   const load = useCallback(async () => {
@@ -83,6 +85,14 @@ export default function BusinessSettings() {
 
   if (!session?.account) return null;
   return <SafeAreaView style={styles.safe}><RefreshableScrollView onRefresh={() => { if (phone !== saved.phone || address !== saved.address || showSymbol !== saved.showSymbol) { setMessage('Save or discard your changes before refreshing.'); return; } return load(); }} contentContainerStyle={styles.screen}>
+    <MediaPicker visible={libraryOpen} onClose={() => setLibraryOpen(false)} onSelect={(item) => {
+      if (!id) return;
+      setBusy(true);
+      void api.attachMedia(session.token, id, item.id, 'business_logo', String(id))
+        .then(async () => { setLogoUrl(item.image_url); await refreshBusinesses(); setMessage('Shop logo saved.'); })
+        .catch((cause) => setMessage(cause instanceof Error ? cause.message : 'Could not use library photo.'))
+        .finally(() => setBusy(false));
+    }} />
     <Pressable onPress={() => { blurWebFocus(); router.back(); }}><Text style={styles.back}>‹ Back</Text></Pressable>
     <Text style={styles.title}>Business settings</Text>
     <Text style={styles.muted}>These details appear on sales invoices and receipts. Currency display applies to everyone in this business.</Text>
@@ -93,6 +103,7 @@ export default function BusinessSettings() {
         <Text style={styles.muted}>Shown on invoices and receipts. JPG, PNG or WebP, up to 5 MB.</Text>
         {owner && <View style={styles.logoButtons}>
           <Pressable onPress={() => void chooseLogo()} disabled={busy} style={styles.secondary}><Text style={styles.secondaryText}>{logoUrl ? 'Change logo' : 'Add logo'}</Text></Pressable>
+          <Pressable onPress={() => setLibraryOpen(true)} disabled={busy} style={styles.secondary}><Text style={styles.secondaryText}>Choose from library</Text></Pressable>
           {logoUrl && <Pressable onPress={() => void removeLogo()} disabled={busy} style={styles.secondary}><Text style={styles.removeText}>Remove</Text></Pressable>}
         </View>}
       </View>
