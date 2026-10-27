@@ -7,6 +7,7 @@ import { AppSymbol, symbols } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
 import { BusinessPicker } from '@/components/business-picker';
 import { Entrance, PressScale } from '@/components/motion';
+import { ProfileMenu } from '@/components/profile-menu';
 import { elevation, palette, radius, spacing, typography } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
 import { useDashboard, type DashboardActivity } from '@/features/dashboard/use-dashboard';
@@ -43,6 +44,7 @@ export default function HomeScreen() {
   const { session } = useAuth();
   const { businessPicker } = useLocalSearchParams<{ businessPicker?: string }>();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const account = session?.account;
   const owner = account?.role === 'owner';
   const timezone = account?.business.timezone ?? 'Asia/Dhaka';
@@ -95,7 +97,7 @@ export default function HomeScreen() {
                   </PressScale>
                   <Text style={styles.greeting}>Good to see you, {displayName}</Text>
                 </View>
-                <PressScale onPress={() => router.push('/explore')} accessibilityRole="button" accessibilityLabel="Account and team" style={styles.avatarHit}>
+                <PressScale onPress={() => setProfileMenuOpen(true)} accessibilityRole="button" accessibilityLabel="Open account menu" style={styles.avatarHit}>
                   <View style={styles.avatar}><Text style={styles.avatarText}>{displayName.charAt(0).toUpperCase()}</Text></View>
                 </PressScale>
               </View>
@@ -184,18 +186,20 @@ export default function HomeScreen() {
         </View>
       </ScrollView>
       <BusinessPicker visible={pickerOpen} onClose={closePicker} />
+      <ProfileMenu visible={profileMenuOpen} onClose={() => setProfileMenuOpen(false)} onSwitchBusiness={() => setPickerOpen(true)} />
     </SafeAreaView>
   );
 }
 
 function BusinessStart({ name }: { name: string }) {
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   return (
     <SafeAreaView style={styles.startSafeArea}>
       <ScrollView contentContainerStyle={styles.startScroll} keyboardShouldPersistTaps="handled">
         <View style={styles.startContent}>
           <View style={styles.startHeader}>
             <View><Text style={styles.startBrand}>BEPARLY</Text><Text style={styles.startGreeting}>Welcome{name ? `, ${name}` : ''}</Text></View>
-            <PressScale onPress={() => router.push('/explore')} accessibilityRole="button" accessibilityLabel="Account and sign out">
+            <PressScale onPress={() => setProfileMenuOpen(true)} accessibilityRole="button" accessibilityLabel="Open account menu">
               <View style={styles.startAvatar}><AppSymbol name="account" color={palette.primary} size={23} /></View>
             </PressScale>
           </View>
@@ -203,6 +207,7 @@ function BusinessStart({ name }: { name: string }) {
           <Text style={styles.startSubtitle}>Ask your administrator to assign your account to a business, then sign in again.</Text>
         </View>
       </ScrollView>
+      <ProfileMenu visible={profileMenuOpen} onClose={() => setProfileMenuOpen(false)} />
     </SafeAreaView>
   );
 }
