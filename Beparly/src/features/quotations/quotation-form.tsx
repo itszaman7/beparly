@@ -1,6 +1,6 @@
 import { router, type Href } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppText as Text } from '@/components/app-text';
@@ -216,7 +216,7 @@ export function QuotationForm({ id, initialTier, draftKey }: { id?: string; init
       setCatalogCategories(categoryResult.categories.filter((row) => row.is_active)); setError('');
       void Promise.all([cacheQuotationCatalog(businessId, catalog.products), cacheQuotationCategories(businessId, categoryResult.categories)]).catch(() => {});
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not refresh quotation choices.'); }
-  }} contentContainerStyle={styles.page}>
+  }} style={{ flex: 1 }} contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
     <View style={styles.formHeading}><Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/sales/quotations' as Href)} style={styles.backButton}><AppSymbol name="back" size={20} color={palette.ink} /></Pressable><Text style={styles.formTitle}>{step === 'catalog' ? `${input.price_tier === 'retail' ? 'Retail' : 'Wholesale'} products` : id ? 'Edit quotation' : 'Review offer'}</Text></View>
     {draft?.state === 'conflict' && <Text style={styles.notice}>Conflict · local edits kept</Text>}
     {step === 'catalog' && <>
@@ -272,7 +272,7 @@ export function QuotationForm({ id, initialTier, draftKey }: { id?: string; init
     <Pressable style={styles.primary} onPress={() => void save()} disabled={saving}><Text style={styles.primaryText}>{saving ? 'Saving…' : 'Save quotation draft'}</Text></Pressable></>}
   </RefreshableScrollView>
   <Modal visible={showCustomerPicker} transparent animationType="slide" onRequestClose={() => setShowCustomerPicker(false)}>
-    <View style={styles.modalBackdrop}><View style={styles.modalSheet}>
+    <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}><View style={styles.modalSheet}>
       <View style={styles.modalHeader}><View><Text style={styles.modalEyebrow}>CUSTOMER</Text><Text style={styles.modalTitle}>Choose a buyer</Text></View>
         <Pressable style={styles.closeButton} onPress={() => setShowCustomerPicker(false)} accessibilityRole="button" accessibilityLabel="Close customer picker"><AppSymbol name="close" size={18} color={palette.secondary} /></Pressable>
       </View>
@@ -301,7 +301,7 @@ export function QuotationForm({ id, initialTier, draftKey }: { id?: string; init
           ListFooterComponent={customerLoading ? <ActivityIndicator color={palette.primaryDeep} style={{ padding: 14 }} /> : customerNextPage ? <Pressable style={styles.loadMore} onPress={() => void fetchCustomers(customerSearch.trim(), customerNextPage, true)}><Text style={styles.link}>Load more customers</Text></Pressable> : undefined}
         />
       </View>
-    </View></View>
+    </View></KeyboardAvoidingView>
   </Modal></></SafeAreaView>;
 }
 
@@ -360,13 +360,13 @@ const styles = StyleSheet.create({
   sectionHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 },
   sectionTitle: { color: palette.ink, fontSize: 16, fontWeight: '800' },
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,25,22,.42)' },
-  modalSheet: { width: '100%', maxWidth: 640, maxHeight: '88%', alignSelf: 'center', backgroundColor: palette.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  modalSheet: { width: '100%', maxWidth: 640, maxHeight: '88%', minHeight: 0, alignSelf: 'center', backgroundColor: palette.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.lg, borderBottomWidth: 1, borderBottomColor: palette.border },
   modalEyebrow: { color: palette.primaryDeep, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
   modalTitle: { color: palette.ink, fontSize: 20, fontWeight: '800', marginTop: 3 },
   closeButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.background },
   modalContent: { padding: spacing.lg, gap: 10, paddingBottom: 24, flexShrink: 1 },
-  customerList: { flexGrow: 0, minHeight: 100 },
+  customerList: { flexGrow: 0, flexShrink: 1, minHeight: 0 },
   customerResult: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 3, borderBottomWidth: 1, borderBottomColor: palette.border },
   resultIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.primarySoft },
   resultCopy: { flex: 1, gap: 3 },

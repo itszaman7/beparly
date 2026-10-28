@@ -67,11 +67,11 @@ export function variantInputs(drafts: VariantDraft[], defaultLocationId: number 
 
 function EditorModal({ title, visible, onClose, onSave, children }: { title: string; visible: boolean; onClose: () => void; onSave: () => void; children: ReactNode }) {
   return <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-    <KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={styles.modalCard}>
         <View style={styles.modalHeader}><Text style={styles.heading}>{title}</Text>
           <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} style={styles.iconButton}><AppSymbol name="close" size={22} color={palette.secondary} /></Pressable></View>
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalBody}>{children}</ScrollView>
+        <ScrollView style={{ flexShrink: 1, minHeight: 0 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.modalBody}>{children}</ScrollView>
         <Pressable accessibilityRole="button" onPress={onSave} style={styles.saveButton}><Text style={styles.saveText}>Done</Text></Pressable>
       </View>
     </KeyboardAvoidingView>

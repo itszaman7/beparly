@@ -84,7 +84,7 @@ export default function BusinessSettings() {
   }
 
   if (!session?.account) return null;
-  return <SafeAreaView style={styles.safe}><RefreshableScrollView onRefresh={() => { if (phone !== saved.phone || address !== saved.address || showSymbol !== saved.showSymbol) { setMessage('Save or discard your changes before refreshing.'); return; } return load(); }} contentContainerStyle={styles.screen}>
+  return <SafeAreaView style={styles.safe}><RefreshableScrollView onRefresh={() => { if (phone !== saved.phone || address !== saved.address || showSymbol !== saved.showSymbol) { setMessage('Save or discard your changes before refreshing.'); return; } return load(); }} style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.screen}>
     <MediaPicker visible={libraryOpen} onClose={() => setLibraryOpen(false)} onSelect={(item) => {
       if (!id) return;
       setBusy(true);

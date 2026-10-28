@@ -223,6 +223,8 @@ def complete_purchase(purchase, actor, command_id, paid=0, account=None, due_dat
         raise PurchaseError('Choose a due date for this credit purchase.')
     if due_date and not hasattr(due_date, 'isoformat'):
         raise PurchaseError('Choose a valid due date.')
+    if due_date and due_date < business_today(business):
+        raise PurchaseError('Choose a due date of today or later.')
     if paid and (not account or account.business_id != business.pk or not account.is_active):
         raise PurchaseError('Choose an active money account.')
     setup_business(business)

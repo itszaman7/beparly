@@ -4,6 +4,7 @@ import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-ro
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useKeyboardVisible } from '@/hooks/use-keyboard-visible';
 import { toast } from 'tamagui/toast';
 
 import { AppSymbol } from '@/components/app-symbol';
@@ -44,10 +45,10 @@ function Field({ label, value, onChangeText, keyboardType = 'default', placehold
 }
 function ChoiceModal({ visible, title, onClose, children }: { visible: boolean; title: string; onClose: () => void; children: React.ReactNode }) {
   return <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-    <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={styles.modalCard}>
         <View style={styles.modalHeader}><Text style={styles.modalTitle}>{title}</Text><Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} style={styles.modalClose}><AppSymbol name="close" size={22} color={palette.secondary} /></Pressable></View>
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.modalContent}>{children}</ScrollView>
+        <ScrollView style={{ flexShrink: 1, minHeight: 0 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.modalContent}>{children}</ScrollView>
       </View>
     </KeyboardAvoidingView>
   </Modal>;
@@ -180,6 +181,7 @@ export function ProductListScreen() {
 }
 
 export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
+  const keyboardVisible = useKeyboardVisible();
   const { id, type, duplicateId } = useLocalSearchParams<{ id: string; type?: string; duplicateId?: string }>();
   const { session } = useAuth(); const token = session?.token; const businessId = session?.account?.business.id;
   const [name, setName] = useState(''); const [buying, setBuying] = useState(''); const [selling, setSelling] = useState('');
@@ -337,7 +339,7 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
         setCategories(categoryResult.categories); setLocations(locationResult.locations.filter((item) => item.is_active));
         setLocationId((current) => locationResult.locations.some((item) => item.is_active && item.id === current) ? current : locationResult.locations.find((item) => item.is_active && item.is_default)?.id ?? null);
       } catch (cause) { toast.error(cause instanceof Error ? cause.message : 'Could not refresh product choices.'); }
-    }} contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
+    }} style={{ flex: 1 }} contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
       <MediaPicker visible={libraryOpen} onClose={() => setLibraryOpen(false)} onSelect={(item) => {
         setLibraryImage(item); setCurrentImage(item.image_url); setImageUri(null); setRemoveImage(false);
       }} />
@@ -395,7 +397,7 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
         <TrackingPicker value={tracking} onChange={setTracking} /></>}
         <Field label="Description" value={description} onChangeText={setDescription} />
       </>}
-    </RefreshableScrollView><View style={styles.footer}><Action label={duplicateLoading ? 'Loading product…' : busy ? 'Saving…' : duplicateId ? 'Create copy' : 'Save product'} onPress={() => void save()} disabled={busy || !duplicateReady} /></View>
+    </RefreshableScrollView>{!keyboardVisible && <View style={styles.footer}><Action label={duplicateLoading ? 'Loading product…' : busy ? 'Saving…' : duplicateId ? 'Create copy' : 'Save product'} onPress={() => void save()} disabled={busy || !duplicateReady} /></View>}
   </KeyboardAvoidingView>
     <ChoiceModal visible={categoryPickerOpen} title="Choose category" onClose={() => setCategoryPickerOpen(false)}>
       <Pressable accessibilityRole="button" onPress={() => { setCategory(null); setCategoryPickerOpen(false); }} style={[styles.choiceRow, !category && styles.choiceSelected]}><Text style={styles.choiceText}>No category</Text></Pressable>

@@ -192,7 +192,7 @@ export default function SaleReturnPage() {
   if (!session?.account) return null;
   const isOwner = session.account.role === 'owner';
   return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-    <RefreshableScrollView onRefresh={() => refresh().catch((problem) => setError(problem instanceof Error ? problem.message : 'Could not load sale.'))} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+    <RefreshableScrollView onRefresh={() => refresh().catch((problem) => setError(problem instanceof Error ? problem.message : 'Could not load sale.'))} style={{ flex: 1 }} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
       <View style={styles.heading}><Pressable onPress={() => router.back()} accessibilityRole="button"><Text style={styles.link}>Back</Text></Pressable><Text style={styles.title}>Return / Refund</Text></View>
       {!sale ? <Text style={styles.muted}>{error || 'Loading sale…'}</Text> : <>
         <View style={styles.card}><Text style={styles.cardTitle}>{displayDocumentNumber(sale.invoice_number)}</Text><Text style={styles.muted}>Customer due {money(sale.due)} · Refund still owed {money(sale.refund_outstanding ?? 0)}</Text><Text style={styles.muted}>A sale credit, goods receipt and executed refund are recorded separately.</Text></View>

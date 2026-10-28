@@ -94,7 +94,7 @@ export default function ReportDetail() {
   }
   if (session?.account?.role !== 'owner' || !item) return null;
   const rows: Record<string, unknown>[] = data?.rows ?? (data?.groups ? Object.values(data.groups).flat() : []);
-  return <SafeAreaView style={styles.safe}><ScrollView contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={retry > 0 && loading && !invalid} onRefresh={() => setRetry((value) => value + 1)} />}>
+  return <SafeAreaView style={styles.safe}><ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.content} refreshControl={<RefreshControl refreshing={retry > 0 && loading && !invalid} onRefresh={() => setRetry((value) => value + 1)} />}>
     <View style={styles.heading}><Pressable onPress={() => { releaseWebFocus(); router.back(); }} accessibilityRole="button" accessibilityLabel="Back to reports" style={styles.back}><AppSymbol name="back" size={20} color="#15211F" /></Pressable><View style={{ flex: 1 }}><Text style={styles.eyebrow}>{item.group.toUpperCase()}</Text><Text style={styles.title}>{item.title}</Text></View></View>
     <Text style={styles.muted}>{item.subtitle}</Text>
     <View style={styles.controls}><Text style={styles.label}>{balance ? 'AS OF DATE' : 'DATE RANGE'}</Text><View style={styles.choices}>{([['today', 'Today'], ['month', 'This Month'], ['year', 'This Year'], ['custom', 'Custom']] as const).map(([id, label]) => <Pressable key={id} onPress={() => selectPreset(id)} accessibilityRole="button" accessibilityState={{ selected: preset === id }} style={[styles.choice, preset === id && styles.chosen]}><Text style={[styles.choiceText, preset === id && styles.chosenText]}>{label}</Text></Pressable>)}</View>

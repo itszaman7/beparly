@@ -303,7 +303,7 @@ export function ProductDetailScreen() {
       <View style={styles.helpCard}><View style={styles.helpTitleRow}><AppSymbol name="info" size={22} color={palette.primaryDeep} /><Text style={styles.helpTitle}>{help?.title}</Text></View><Text style={styles.helpText}>{help?.message}</Text><Pressable accessibilityRole="button" onPress={() => setHelp(null)} style={styles.modalDone}><Text style={styles.link}>Got it</Text></Pressable></View>
     </Pressable></Modal>
 
-    <Modal transparent visible={addingUnit} animationType="fade" onRequestClose={() => setAddingUnit(false)}><KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <Modal transparent visible={addingUnit} animationType="fade" onRequestClose={() => setAddingUnit(false)}><KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView style={styles.unitCard} contentContainerStyle={styles.unitContent} keyboardShouldPersistTaps="handled"><View style={styles.modalHeader}><Text style={styles.helpTitle}>Add packaging unit</Text><Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={() => setAddingUnit(false)} style={styles.close}><AppSymbol name="close" size={22} color={palette.secondary} /></Pressable></View>
         <Text style={styles.fieldLabel}>Package name *</Text><TextInput style={styles.input} value={unitName} onChangeText={setUnitName} placeholder="e.g. Tray" placeholderTextColor={palette.muted} />
         <Text style={styles.fieldLabel}>How many {product?.base_unit ?? 'units'}? *</Text><TextInput style={styles.input} value={unitFactor} onChangeText={setUnitFactor} keyboardType="decimal-pad" placeholder="e.g. 30" placeholderTextColor={palette.muted} />

@@ -145,7 +145,7 @@ export function ExpenseScreen() {
         style={{ width: 42, height: 42, justifyContent: 'center' }}><AppSymbol name="back" size={23} color={palette.primaryDeep} /></Pressable>
       <Text color={palette.ink} fontSize={22} fontWeight="800">Add Expense</Text>
     </XStack>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, paddingBottom: 40, alignItems: 'center' }} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefreshCount((count) => count + 1)} />}>
+    <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={{ padding: 18, paddingBottom: 40, alignItems: 'center' }} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefreshCount((count) => count + 1)} />}>
       <YStack width="100%" maxWidth={560} gap={18}>
         {postedId ? <Text color={palette.ink}>Expense saved. Retry the document upload below.</Text> : <YStack backgroundColor={palette.surface} borderWidth={1} borderColor={palette.border} borderRadius={20} padding={20} gap={12} {...elevation.card}>
           <Text color={palette.secondary} fontSize={13} fontWeight="700">Amount spent</Text>
@@ -192,15 +192,15 @@ export function ExpenseScreen() {
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
         <Pressable accessibilityRole="button" accessibilityLabel="Dismiss choices" onPress={closePicker}
           style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(15, 25, 22, 0.42)' }} />
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ maxHeight: '90%' }}>
           <View style={{ backgroundColor: palette.surface, borderTopLeftRadius: 24,
-            borderTopRightRadius: 24, maxHeight: '80%', minHeight: 310, padding: 20 }}>
+            borderTopRightRadius: 24, maxHeight: '100%', minHeight: 0, padding: 20 }}>
             <XStack justifyContent="space-between" alignItems="center" marginBottom={14}>
               <Text color={palette.ink} fontSize={20} fontWeight="800">{adding ? `Add ${picker === 'category' ? 'Category' : 'Money Account'}` : picker === 'category' ? 'Category' : 'Paid from'}</Text>
               <Pressable accessibilityRole="button" accessibilityLabel="Close choices" onPress={closePicker}
                 style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}><AppSymbol name="close" size={20} color={palette.secondary} /></Pressable>
             </XStack>
-            {adding ? <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 14, paddingBottom: 12 }}>
+            {adding ? <ScrollView style={{ flexShrink: 1, minHeight: 0 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={{ gap: 14, paddingBottom: 12 }}>
               <Input value={newName} onChangeText={(value) => { setNewName(value); setCreateCommand(commandId()); setSheetError(''); }}
                 placeholder={picker === 'category' ? 'Category name' : 'Account name'} aria-label={picker === 'category' ? 'Category name' : 'Account name'}
                 height={52} backgroundColor={palette.surface} borderColor={palette.border} color={palette.ink} />

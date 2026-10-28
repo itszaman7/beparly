@@ -2,6 +2,7 @@ import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-ro
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useKeyboardVisible } from '@/hooks/use-keyboard-visible';
 import { toast } from 'tamagui/toast';
 
 import { AppSymbol } from '@/components/app-symbol';
@@ -18,6 +19,7 @@ const quantity = (value: string) => value.replace(/(\.\d*?)0+$/, '$1').replace(/
 const trackingLabel = { simple: 'Simple stock', batch: 'Batch tracking', expiry: 'Batch + expiry' };
 
 export default function VariantDetailScreen() {
+  const keyboardVisible = useKeyboardVisible();
   const { id, variantId } = useLocalSearchParams<{ id: string; variantId: string }>();
   const { session } = useAuth(); const token = session?.token; const businessId = session?.account?.business.id;
   const [product, setProduct] = useState<Product | null>(null);
@@ -194,17 +196,17 @@ export default function VariantDetailScreen() {
       <View style={styles.helpTitle}><AppSymbol name="info" size={21} color={palette.primaryDeep} /><Text style={styles.heading}>{help?.title}</Text></View><Text style={styles.body}>{help?.message}</Text>
       <Text style={styles.link}>Close</Text></View></Pressable></Modal>
 
-    <Modal transparent visible={addingUnit} animationType="slide" onRequestClose={() => setAddingUnit(false)}><KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-      <View style={styles.unitCard}><View style={styles.helpTitle}><Text style={styles.heading}>Add packaging unit</Text><Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={() => setAddingUnit(false)}><AppSymbol name="close" size={22} color={palette.secondary} /></Pressable></View>
+    <Modal transparent visible={addingUnit} animationType="slide" onRequestClose={() => setAddingUnit(false)}><KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <ScrollView style={[styles.unitCard, { padding: 0 }]} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.unitContent}><View style={styles.helpTitle}><Text style={styles.heading}>Add packaging unit</Text><Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={() => setAddingUnit(false)}><AppSymbol name="close" size={22} color={palette.secondary} /></Pressable></View>
         <Text style={styles.label}>Package name *</Text><TextInput style={styles.input} value={unitName} onChangeText={setUnitName} placeholder="Carton" placeholderTextColor={palette.muted} />
         <Text style={styles.label}>How many {variant?.base_unit ?? 'base units'}? *</Text><TextInput style={styles.input} value={factor} onChangeText={setFactor} keyboardType="decimal-pad" placeholder="12" placeholderTextColor={palette.muted} />
         <Text style={styles.label}>Selling price (৳, optional)</Text><TextInput style={styles.input} value={unitPrice} onChangeText={setUnitPrice} keyboardType="decimal-pad" placeholderTextColor={palette.muted} />
         <Pressable accessibilityRole="button" disabled={busy} onPress={() => void addUnit()} style={styles.primaryAction}><Text style={styles.primaryText}>{busy ? 'Saving…' : 'Add package'}</Text></Pressable>
-      </View></KeyboardAvoidingView></Modal>
+      </ScrollView></KeyboardAvoidingView></Modal>
 
-    <Modal transparent visible={editing} animationType="slide" onRequestClose={() => setEditing(false)}><KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <Modal transparent visible={editing} animationType="slide" onRequestClose={() => setEditing(false)}><KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={styles.unitCard}><View style={styles.helpTitle}><Text style={styles.heading}>Edit variant</Text><Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={() => setEditing(false)}><AppSymbol name="close" size={22} color={palette.secondary} /></Pressable></View>
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.editBody}>
+        <ScrollView style={{ flexShrink: 1, minHeight: 0 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.editBody}>
           <EditField label="Buying price (৳)" value={editValues.buying} onChange={(buying) => setEditValues({ ...editValues, buying })} numeric />
           <EditField label="Selling price (৳)" value={editValues.selling} onChange={(selling) => setEditValues({ ...editValues, selling })} numeric />
           <EditField label="Wholesale price (৳)" value={editValues.wholesale} onChange={(wholesale) => setEditValues({ ...editValues, wholesale })} numeric />
@@ -213,7 +215,7 @@ export default function VariantDetailScreen() {
           <EditField label="Barcode (auto if blank)" value={editValues.barcode} onChange={(barcode) => setEditValues({ ...editValues, barcode })} />
           <Text style={styles.soft}>Attribute values and stock units are fixed once stock history exists.</Text>
         </ScrollView>
-        <Pressable accessibilityRole="button" disabled={busy} onPress={() => void saveVariant()} style={styles.primaryAction}><Text style={styles.primaryText}>{busy ? 'Saving…' : 'Save changes'}</Text></Pressable>
+        {!keyboardVisible && <Pressable accessibilityRole="button" disabled={busy} onPress={() => void saveVariant()} style={styles.primaryAction}><Text style={styles.primaryText}>{busy ? 'Saving…' : 'Save changes'}</Text></Pressable>}
       </View></KeyboardAvoidingView></Modal>
   </SafeAreaView>;
 }
@@ -244,7 +246,7 @@ const styles = StyleSheet.create({
   actions: { gap: 8, paddingBottom: 12 }, primaryAction: { minHeight: 50, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: radius.sm, backgroundColor: palette.primary },
   primaryText: { color: palette.surface, fontWeight: '700' }, backdrop: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.lg, backgroundColor: 'rgba(21,33,31,0.45)' },
   helpCard: { width: '100%', maxWidth: 440, padding: spacing.lg, gap: 12, borderRadius: radius.md, backgroundColor: palette.surface }, helpTitle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  heading: { flex: 1, color: palette.ink, fontSize: 18, fontWeight: '700' }, unitCard: { width: '100%', maxWidth: 440, padding: spacing.lg, gap: 10, borderRadius: radius.md, backgroundColor: palette.surface },
+  heading: { flex: 1, color: palette.ink, fontSize: 18, fontWeight: '700' }, unitCard: { width: '100%', maxWidth: 440, maxHeight: '85%', minHeight: 0, padding: spacing.lg, gap: 10, borderRadius: radius.md, backgroundColor: palette.surface },
   input: { minHeight: 48, paddingHorizontal: 12, borderWidth: 1, borderColor: palette.border, borderRadius: radius.sm, color: palette.ink },
-  editBody: { gap: 10, paddingBottom: 12 },
+  editBody: { gap: 10, paddingBottom: 12 }, unitContent: { padding: spacing.lg, gap: 10 },
 });

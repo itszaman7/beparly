@@ -123,7 +123,7 @@ export default function PrintSettings() {
   }
 
   if (!session?.account) return null;
-  return <SafeAreaView style={styles.safe}><RefreshableScrollView onRefresh={() => { if (dirty) { setMessage('Save or discard your changes before refreshing.'); return; } return load(); }} contentContainerStyle={styles.content}>
+  return <SafeAreaView style={styles.safe}><RefreshableScrollView onRefresh={() => { if (dirty) { setMessage('Save or discard your changes before refreshing.'); return; } return load(); }} style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.content}>
     <Pressable onPress={() => router.back()}><Text style={styles.back}>‹ Back</Text></Pressable>
     <Text style={styles.title}>Print settings</Text>
     <View style={styles.card}>

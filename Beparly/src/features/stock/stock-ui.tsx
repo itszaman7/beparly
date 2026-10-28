@@ -2,6 +2,7 @@ import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-ro
 import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useKeyboardVisible } from '@/hooks/use-keyboard-visible';
 
 import { AppSymbol, type symbols } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
@@ -40,6 +41,7 @@ function useLocation() {
 }
 
 function Page({ title, subtitle, children, floatingAction, root = false, onRefresh }: { title: string; subtitle?: string; children: React.ReactNode; floatingAction?: React.ReactNode; root?: boolean; onRefresh?: () => Promise<unknown> | void }) {
+  const keyboardVisible = useKeyboardVisible();
   const Scroller = onRefresh ? RefreshableScrollView : ScrollView;
   return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
     <View style={styles.pageHeader}>
@@ -48,13 +50,13 @@ function Page({ title, subtitle, children, floatingAction, root = false, onRefre
       </Pressable>
       <Text style={styles.headerTitle}>{title}</Text>
     </View>
-    <Scroller onRefresh={onRefresh!} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
+    <Scroller onRefresh={onRefresh!} style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.scroll}>
       <View style={styles.content}>
         {subtitle && <Entrance><Text style={styles.subtitle}>{subtitle}</Text></Entrance>}
         <View style={styles.body}>{children}</View>
       </View>
     </Scroller>
-    {floatingAction && <View style={styles.floatingWrap}>{floatingAction}</View>}
+    {floatingAction && !keyboardVisible && <View style={styles.floatingWrap}>{floatingAction}</View>}
   </SafeAreaView>;
 }
 

@@ -2,6 +2,7 @@ import { router, useLocalSearchParams, type Href } from 'expo-router';
 import { type ComponentRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Image, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useKeyboardVisible } from '@/hooks/use-keyboard-visible';
 
 import { AppSymbol, type AppSymbolName } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
@@ -23,6 +24,7 @@ const salePrice = ({ product, variant, retailPrice, wholesalePrice }: CatalogIte
   : (wholesalePrice ?? (variant ? variant.wholesale_price : product.wholesale_price));
 
 export default function NewSale() {
+  const keyboardVisible = useKeyboardVisible();
   const { session } = useAuth();
   const params = useLocalSearchParams<{ mode?: string; scan?: string; camera?: string }>();
   const mode = params.mode === 'manual' ? 'manual' : 'quick';
@@ -440,12 +442,12 @@ export default function NewSale() {
           </View> : null}
         </RefreshableScrollView>
         {error ? <Text style={styles.error}>{error}</Text> : null}
-        <View style={styles.cartBar}>
+        {!keyboardVisible && <View style={styles.cartBar}>
           <View style={styles.cartSummary}><View style={styles.cartCount}><Text style={styles.cartCountText}>{cartCount}</Text></View><View><Text style={styles.cartLabel}>{cartCount === 1 ? '1 item' : `${cartCount} items`}</Text><Text style={styles.cartTotal}>৳{subtotal.toFixed(2)}</Text></View></View>
           <Pressable disabled={!cartCount} onPress={() => { setError(''); setStep('confirm'); }} style={[styles.nextButton, !cartCount && styles.buttonDisabled]}><Text style={styles.nextText}>Review sale</Text><AppSymbol name="chevron" size={18} color="white" /></Pressable>
-        </View>
+        </View>}
       </> : <>
-        <RefreshableScrollView onRefresh={refreshChoices} style={styles.confirmScroll} contentContainerStyle={styles.confirmContent} keyboardShouldPersistTaps="handled">
+        <RefreshableScrollView onRefresh={refreshChoices} style={styles.confirmScroll} contentContainerStyle={styles.confirmContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
           <View style={styles.customerCard}><View style={styles.locationIcon}><AppSymbol name="location" size={17} color={palette.primaryDeep} /></View><View style={styles.customerCopy}><Text style={styles.customerName}>{selectedLocation?.name ?? 'Selected shop'}</Text><Text style={styles.customerHint}>Stock location for this sale</Text></View></View>
           <View style={styles.invoiceMeta}>
             <View style={styles.metaCell}><Text style={styles.metaLabel}>INVOICE</Text><Text style={styles.metaValue}>Assigned on save</Text></View>
@@ -503,19 +505,19 @@ export default function NewSale() {
           <View style={{ gap: 8 }}><Text style={styles.fieldLabel}>Sale source <Text style={styles.muted}>(optional)</Text></Text><TextInput value={saleSource} onChangeText={setSaleSource} placeholder="e.g. Facebook, phone, counter" placeholderTextColor={palette.muted} style={styles.formInput} /><Text style={styles.fieldLabel}>Sales notes <Text style={styles.muted}>(optional)</Text></Text><TextInput value={saleNotes} onChangeText={setSaleNotes} placeholder="Add a note for this sale" placeholderTextColor={palette.muted} style={[styles.formInput, { minHeight: 68 }]} multiline /></View>
           {error ? <><Text style={styles.error}>{error}</Text>{error.toLowerCase().includes('income category') ? <Pressable onPress={() => router.push('/money/income-categories' as Href)} style={{ minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 6 }}><AppSymbol name="plus" size={15} color={palette.primaryDeep} /><Text style={styles.changeText}>Set up income category</Text></Pressable> : null}</> : null}
         </RefreshableScrollView>
-        <View style={styles.confirmFooter}>
+        {!keyboardVisible && <View style={styles.confirmFooter}>
           <Pressable onPress={() => setStep('catalog')} style={styles.cancelButton}><Text style={styles.cancelText}>Back to items</Text></Pressable>
           <Pressable disabled={saving || cartCount === 0} onPress={() => void submit()} style={[styles.saveButton, (saving || cartCount === 0) && styles.buttonDisabled]}><Text style={styles.saveText}>{saving ? 'Saving…' : `Complete · ৳${total.toFixed(2)}`}</Text></Pressable>
-        </View>
+        </View>}
       </>}
       <Modal visible={cameraOpen} animationType="slide" onRequestClose={() => setCameraOpen(false)}>
         <BarcodeScanner onClose={() => setCameraOpen(false)} onScan={code => { setCameraOpen(false); scanBarcode(code); }} />
       </Modal>
       <Modal visible={showAddCustomer} transparent animationType="slide" onRequestClose={() => { blurWebFocus(); setShowAddCustomer(false); }}>
-        <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <View style={styles.customerModal}>
             <View style={styles.modalHeader}><View><Text style={styles.modalEyebrow}>CUSTOMER</Text><Text style={styles.modalTitle}>Register customer</Text></View><Pressable onPress={() => { blurWebFocus(); setShowAddCustomer(false); }} style={styles.closeButton}><AppSymbol name="close" size={18} color={palette.ink} /></Pressable></View>
-            <ScrollView contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled">
+            <ScrollView style={{ flexShrink: 1, minHeight: 0 }} contentContainerStyle={styles.modalContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
               <Text style={styles.modalHint}>Phone is required. Save will immediately select this customer for the sale.</Text>
               <TextInput value={customerPhone} onChangeText={setCustomerPhone} keyboardType="phone-pad" placeholder="Phone number *" placeholderTextColor={palette.muted} style={styles.formInput} autoFocus />
               <TextInput value={customerName} onChangeText={setCustomerName} placeholder="Name (optional)" placeholderTextColor={palette.muted} style={styles.formInput} />

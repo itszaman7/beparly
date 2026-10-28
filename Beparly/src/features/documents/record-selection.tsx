@@ -1,6 +1,6 @@
 import { router, type Href } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
-import { Modal, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { AppText as Text } from '@/components/app-text';
 import { useAuth } from '@/features/auth/auth-context';
 import { api } from '@/services/api';
@@ -91,7 +91,7 @@ export function SelectionToolbar({ type, rows, selected, selecting, limitReached
       </View></View>
     </Modal>
     <Modal visible={noteOpen} transparent animationType="fade" onRequestClose={() => setNoteOpen(false)}>
-      <View style={styles.backdrop}><View style={styles.sheet}>
+      <KeyboardAvoidingView style={styles.backdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}><ScrollView style={styles.noteSheet} contentContainerStyle={styles.noteContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         <Text style={styles.title}>Add note to {selected.length} {selected.length === 1 ? 'record' : 'records'}</Text>
         <Text style={styles.hint}>The note is dated and attributed. Original document notes stay unchanged.</Text>
         <TextInput accessibilityLabel="Note text" multiline maxLength={2000} value={note}
@@ -99,7 +99,7 @@ export function SelectionToolbar({ type, rows, selected, selecting, limitReached
         {!!issue && <Text style={styles.error}>{issue}</Text>}
         <Action label={busy ? 'Saving…' : 'Add note'} onPress={() => void addNote()} disabled={busy || !note.trim()} />
         <Action label="Close" onPress={() => setNoteOpen(false)} />
-      </View></View>
+      </ScrollView></KeyboardAvoidingView>
     </Modal>
   </View>;
 }
@@ -108,4 +108,4 @@ function Action({ label, onPress, disabled }: { label: string; onPress: () => vo
   return <Pressable accessibilityRole="button" accessibilityLabel={label} disabled={disabled} onPress={onPress} style={[styles.action, disabled && { opacity: 0.5 }]}><Text style={styles.actionText}>{label}</Text></Pressable>;
 }
 
-const styles = StyleSheet.create({ shell: { gap: 5 }, row: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 12 }, count: { flex: 1, fontWeight: '800', color: '#15211F' }, link: { color: '#006D64', fontWeight: '800' }, round: { minWidth: 74, minHeight: 44, borderRadius: 22, backgroundColor: '#006D64', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 }, roundText: { color: 'white', fontSize: 11, fontWeight: '800' }, backdrop: { flex: 1, backgroundColor: 'rgba(15,25,22,.45)', justifyContent: 'flex-end' }, sheet: { width: '100%', maxWidth: 620, alignSelf: 'center', padding: 20, paddingBottom: 30, gap: 10, borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: 'white' }, title: { color: '#15211F', fontSize: 18, fontWeight: '800' }, hint: { color: '#52635E', fontSize: 12 }, action: { minHeight: 46, borderRadius: 12, backgroundColor: '#DDF3EF', justifyContent: 'center', paddingHorizontal: 14 }, actionText: { color: '#006D64', fontWeight: '800' }, input: { minHeight: 90, borderWidth: 1, borderColor: '#CED9D5', borderRadius: 12, padding: 12, textAlignVertical: 'top' }, error: { color: '#B42318', fontSize: 12 } });
+const styles = StyleSheet.create({ shell: { gap: 5 }, row: { minHeight: 42, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 12 }, count: { flex: 1, fontWeight: '800', color: '#15211F' }, link: { color: '#006D64', fontWeight: '800' }, round: { minWidth: 74, minHeight: 44, borderRadius: 22, backgroundColor: '#006D64', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 10 }, roundText: { color: 'white', fontSize: 11, fontWeight: '800' }, backdrop: { flex: 1, backgroundColor: 'rgba(15,25,22,.45)', justifyContent: 'flex-end' }, sheet: { width: '100%', maxWidth: 620, alignSelf: 'center', padding: 20, paddingBottom: 30, gap: 10, borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: 'white' }, noteSheet: { width: '100%', maxWidth: 620, maxHeight: '85%', alignSelf: 'center', borderTopLeftRadius: 22, borderTopRightRadius: 22, backgroundColor: 'white' }, noteContent: { padding: 20, paddingBottom: 30, gap: 10 }, title: { color: '#15211F', fontSize: 18, fontWeight: '800' }, hint: { color: '#52635E', fontSize: 12 }, action: { minHeight: 46, borderRadius: 12, backgroundColor: '#DDF3EF', justifyContent: 'center', paddingHorizontal: 14 }, actionText: { color: '#006D64', fontWeight: '800' }, input: { minHeight: 90, borderWidth: 1, borderColor: '#CED9D5', borderRadius: 12, padding: 12, textAlignVertical: 'top' }, error: { color: '#B42318', fontSize: 12 } });

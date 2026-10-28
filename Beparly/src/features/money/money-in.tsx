@@ -1,6 +1,6 @@
 import { router, useFocusEffect, type Href } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, RefreshControl, ScrollView, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Input, Text, XStack, YStack } from 'tamagui';
 
@@ -148,7 +148,7 @@ export function MoneyInScreen() {
       </Pressable>
       <Text color={palette.ink} fontSize={22} fontWeight="800">Money In</Text>
     </XStack>
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, paddingBottom: 28, alignItems: 'center' }} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefreshCount((count) => count + 1)} />}>
+    <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={{ padding: 18, paddingBottom: 28, alignItems: 'center' }} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefreshCount((count) => count + 1)} />}>
       <YStack width="100%" maxWidth={560} gap={18}>
         <YStack backgroundColor={palette.surface} borderWidth={1} borderColor={focused === 'amount' ? palette.primaryDeep : palette.border} borderRadius={20} padding={20} gap={12} {...elevation.card}>
           <Text color={palette.secondary} fontSize={13} fontWeight="700">Amount received</Text>
@@ -194,13 +194,14 @@ export function MoneyInScreen() {
       </YStack>
     </YStack>
     <Modal visible={picker !== null} transparent animationType="fade" onRequestClose={() => setPicker(null)}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <Pressable onPress={() => setPicker(null)} style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15, 25, 22, 0.42)' }}>
-        <Pressable onPress={(event) => event.stopPropagation()} style={{ backgroundColor: palette.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '75%', padding: 20 }}>
+        <Pressable onPress={(event) => event.stopPropagation()} style={{ backgroundColor: palette.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '75%', minHeight: 0, padding: 20 }}>
           <XStack justifyContent="space-between" alignItems="center" marginBottom={14}>
             <Text color={palette.ink} fontSize={20} fontWeight="800">{pickerTitle}</Text>
             <Pressable accessibilityRole="button" accessibilityLabel="Close choices" onPress={() => setPicker(null)} style={{ width: 38, height: 38, alignItems: 'center', justifyContent: 'center' }}><AppSymbol name="close" size={20} color={palette.secondary} /></Pressable>
           </XStack>
-          <ScrollView keyboardShouldPersistTaps="handled">
+          <ScrollView style={{ flexShrink: 1, minHeight: 0 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
             {addingAccount && picker === 'account' ? <YStack gap={16} paddingBottom={10}>
               <YStack gap={7}><Text color={palette.secondary} fontSize={12} fontWeight="700">Account name</Text>
                 <Input value={newAccountName} onChangeText={(value) => { setNewAccountName(value); setAccountCommand(commandId()); setAccountError(''); }}
@@ -251,7 +252,7 @@ export function MoneyInScreen() {
             </>}
           </ScrollView>
         </Pressable>
-      </Pressable>
+      </Pressable></KeyboardAvoidingView>
     </Modal>
   </SafeAreaView>;
 }

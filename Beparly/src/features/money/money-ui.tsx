@@ -1,6 +1,6 @@
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Modal, ScrollView, Pressable, View } from 'react-native';
+import { ActivityIndicator, KeyboardAvoidingView, Modal, Platform, ScrollView, Pressable, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Input, Text, XStack, YStack } from 'tamagui';
 
@@ -33,7 +33,7 @@ function Page({ title, children, onRefresh }: { title: string; children: React.R
       </Pressable>
       <Text color={ink} fontSize={22} fontWeight="700">{title}</Text>
     </XStack>
-    <Scroller onRefresh={onRefresh!} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, paddingBottom: 110, alignItems: 'center' }}>
+    <Scroller onRefresh={onRefresh!} style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={{ padding: 18, paddingBottom: 110, alignItems: 'center' }}>
       <YStack width="100%" maxWidth={560} gap={14}>{children}</YStack>
     </Scroller>
   </SafeAreaView>;
@@ -138,6 +138,7 @@ export function MoneyHome() {
         {!item.reversed && !item.kind.startsWith('asset_') && !item.kind.endsWith('_reversal') && <Button backgroundColor="#FFF5E1" onPress={() => { setReverseId(item.id); setReverseReason(''); setReverseCommand(id()); }}><Text color="#8B5E15">Correct this transaction</Text></Button>}
       </Card>) : <Card><Text color={muted}>No money movements yet.</Text></Card>}
       <Modal visible={Boolean(reverseId)} transparent animationType="fade" onRequestClose={() => setReverseId('')}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
         <Pressable style={{ flex: 1, justifyContent: 'center', padding: 20, backgroundColor: 'rgba(15, 25, 22, 0.48)' }} onPress={() => setReverseId('')}>
           <Pressable onPress={(event) => event.stopPropagation()} style={{ width: '100%', maxWidth: 480, alignSelf: 'center' }}>
             <YStack backgroundColor="white" borderRadius={20} padding={20} gap={14}>
@@ -147,7 +148,7 @@ export function MoneyHome() {
               <XStack gap={9}><Button flex={1} height={48} backgroundColor="#F6F8F7" onPress={() => setReverseId('')}><Text color={ink} fontWeight="700">Keep transaction</Text></Button><Button flex={1} height={48} backgroundColor="#A62925" disabled={reversing || !reverseReason.trim()} onPress={() => void submitReversal()}><Text color="white" fontWeight="700">{reversing ? 'Reversing…' : 'Yes, reverse'}</Text></Button></XStack>
             </YStack>
           </Pressable>
-        </Pressable>
+        </Pressable></KeyboardAvoidingView>
       </Modal>
     </>}
   </Page>;

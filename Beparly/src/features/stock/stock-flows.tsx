@@ -121,7 +121,7 @@ export function ManualStockScreen() {
     } else toast.error(cause instanceof Error ? cause.message : 'Could not post stock.'); }
     finally { setBusy(false); }
   }
-  return <Page title="Adjust Stock"><RefreshableScrollView onRefresh={refreshChoices} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+  return <Page title="Adjust Stock"><RefreshableScrollView onRefresh={refreshChoices} style={{ flex: 1 }} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
     {increase && <><Text style={styles.name}>How is stock coming in?</Text>
       <Pressable style={[styles.card, styles.selected]}><Text>Add Stock Manually</Text></Pressable>
       {(session?.account?.role === 'owner' || session?.account?.can_manage_purchases) &&
@@ -210,7 +210,7 @@ export function StockActionScreen({ kind }: { kind: 'waste' | 'transfer' }) {
     } else toast.error(cause instanceof Error ? cause.message : 'Could not post stock change.'); }
     finally { setBusy(false); }
   }
-  return <Page title={kind === 'waste' ? 'Record Waste' : 'Transfer Stock'}><RefreshableScrollView onRefresh={refreshChoices} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+  return <Page title={kind === 'waste' ? 'Record Waste' : 'Transfer Stock'}><RefreshableScrollView onRefresh={refreshChoices} style={{ flex: 1 }} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
     <Text style={styles.name}>Product *</Text><TextInput style={styles.input} placeholder="Search name, SKU or barcode" value={productSearch} onChangeText={setProductSearch} />{products.map((item) => <Pressable key={item.id} onPress={() => { setSelected(item.id); setSelectedVariant(''); setBatchId(''); setUnitId(''); }} style={[styles.card, selected === item.id && styles.selected]}><Text>{item.name}</Text></Pressable>)}
     {product?.product_type === 'variant' && <><Text style={styles.name}>Variant *</Text>{variants.map((item) => <Pressable key={item.id} onPress={() => { setSelectedVariant(item.id); setBatchId(''); setUnitId(''); }} style={[styles.card, selectedVariant === item.id && styles.selected]}><Text>{item.label} · {item.sku}</Text></Pressable>)}</>}
     <Text style={styles.name}>From location *</Text>{locations.map((item) => <Pressable key={item.id} onPress={() => setSource(item.id)} style={[styles.card, source === item.id && styles.selected]}><Text>{item.name}</Text></Pressable>)}

@@ -1,6 +1,6 @@
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, Modal, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
 import { AppSymbol } from '@/components/app-symbol';
@@ -87,7 +87,7 @@ export default function QuotationDetail() {
     finally { setBusy(false); }
   }
   if (!session?.account) return null;
-  return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}><><ScrollView contentContainerStyle={styles.page} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); setRefreshCount((count) => count + 1); }} />}>
+  return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}><><ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.page} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); setRefreshCount((count) => count + 1); }} />}>
     <View style={styles.header}><Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/sales/quotations' as Href)} style={styles.back} accessibilityLabel="Back to quotations"><AppSymbol name="back" size={20} color={palette.ink} /></Pressable><View style={styles.headerCopy}><Text style={styles.eyebrow}>QUOTATION DETAILS</Text><Text style={styles.title}>{quote?.number || 'Draft quotation'}</Text></View>{quote && <View style={styles.statusPill}><Text style={styles.statusText}>{quote.status.toUpperCase()}</Text></View>}</View>
     {quote ? <>
       <View style={styles.summaryGrid}><View style={styles.summaryStat}><AppSymbol name="price" size={17} color={palette.primaryDeep} /><Text style={styles.hint}>Offer total</Text><Text style={styles.summaryValue}>{money(quote.total)}</Text></View><View style={styles.summaryStat}><AppSymbol name="products" size={17} color={palette.primaryDeep} /><Text style={styles.hint}>Products</Text><Text style={styles.summaryValue}>{quote.lines?.length ?? 0}</Text></View></View>
@@ -115,7 +115,7 @@ export default function QuotationDetail() {
     {!!error && <Text style={styles.error}>{error}</Text>}{busy && <Text style={styles.hint}>Working…</Text>}
   </ScrollView>
   <Modal visible={customerPickerOpen} transparent animationType="slide" onRequestClose={() => setCustomerPickerOpen(false)}>
-    <View style={styles.modalBackdrop}><View style={styles.modalSheet}>
+    <KeyboardAvoidingView style={styles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}><View style={styles.modalSheet}>
       <View style={styles.modalHeader}><View><Text style={styles.modalEyebrow}>SALE CHECKOUT</Text><Text style={styles.modalTitle}>Choose a customer</Text></View>
         <Pressable style={styles.closeButton} onPress={() => setCustomerPickerOpen(false)} accessibilityRole="button" accessibilityLabel="Close customer picker"><AppSymbol name="close" size={18} color={palette.secondary} /></Pressable>
       </View>
@@ -133,7 +133,7 @@ export default function QuotationDetail() {
           ListFooterComponent={customerLoading ? <ActivityIndicator color={palette.primaryDeep} style={{ padding: 14 }} /> : customerNextPage ? <Pressable style={styles.loadMore} onPress={() => void fetchCustomers(customerSearch.trim(), customerNextPage, true)}><Text style={styles.link}>Load more customers</Text></Pressable> : undefined}
         />
       </View>
-    </View></View>
+    </View></KeyboardAvoidingView>
   </Modal></></SafeAreaView>;
 }
 function Button({ label, onPress }: { label: string; onPress: () => void }) { return <Pressable style={styles.button} onPress={onPress} accessibilityRole="button"><Text style={styles.buttonText}>{label}</Text></Pressable>; }
@@ -189,13 +189,13 @@ const styles = StyleSheet.create({
   customerHint: { color: palette.muted, fontSize: 11 },
   changeText: { color: palette.primaryDeep, fontSize: 12, fontWeight: '700' },
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,25,22,.42)' },
-  modalSheet: { width: '100%', maxWidth: 640, maxHeight: '88%', alignSelf: 'center', backgroundColor: palette.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  modalSheet: { width: '100%', maxWidth: 640, maxHeight: '88%', minHeight: 0, alignSelf: 'center', backgroundColor: palette.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: spacing.lg, borderBottomWidth: 1, borderBottomColor: palette.border },
   modalEyebrow: { color: palette.primaryDeep, fontSize: 9, fontWeight: '800', letterSpacing: 1 },
   modalTitle: { color: palette.ink, fontSize: 20, fontWeight: '800', marginTop: 3 },
   closeButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.background },
   modalContent: { padding: spacing.lg, gap: 10, paddingBottom: 24, flexShrink: 1 },
-  customerList: { flexGrow: 0, minHeight: 100 },
+  customerList: { flexGrow: 0, flexShrink: 1, minHeight: 0 },
   customerResult: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 3, borderBottomWidth: 1, borderBottomColor: palette.border },
   resultIcon: { width: 34, height: 34, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.primarySoft },
   resultCopy: { flex: 1, gap: 3 },

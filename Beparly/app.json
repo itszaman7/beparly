@@ -12,6 +12,7 @@
     },
     "android": {
       "package": "com.beparly.app",
+      "softwareKeyboardLayoutMode": "resize",
       "adaptiveIcon": {
         "backgroundColor": "#00B7AC",
         "foregroundImage": "./assets/images/android-chrome-512x512.png"
@@ -20,6 +21,9 @@
       "permissions": [
         "android.permission.CAMERA"
       ]
+    },
+    "androidStatusBar": {
+      "translucent": false
     },
     "web": {
       "output": "single",

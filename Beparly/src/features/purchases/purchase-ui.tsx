@@ -2,7 +2,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol, type AppSymbolName } from '@/components/app-symbol';
@@ -37,7 +37,7 @@ function Screen({ title, icon = 'purchase', backTo = '/purchases', wide = false,
       <View style={styles.headerIcon}><AppSymbol name={icon} size={22} color="#006D64" /></View>
       <Text style={styles.title} numberOfLines={1}>{title}</Text>
     </View></View>
-    <Scroller onRefresh={onRefresh!} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}>
+    <Scroller onRefresh={onRefresh!} style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.scroll}>
       <View style={[styles.content, wide && { maxWidth: 1040 }]}>{children}</View>
     </Scroller>
   </SafeAreaView>;
@@ -145,7 +145,8 @@ export function SupplierFormScreen() {
       const business = session.account.business.id;
       const { opening_payable, ...profile } = fields;
       const result = editing && id ? await api.updateSupplier(session.token, business, id, profile) :
-        await api.createSupplier(session.token, business, fields, commandId.current);
+        await api.createSupplier(session.token, business,
+          { ...profile, opening_payable: opening_payable.trim() || '0' }, commandId.current);
       if (libraryImage) await api.attachMedia(session.token, business, libraryImage.id, 'supplier', result.supplier.id);
       else if (imageUri) await api.uploadSupplierImage(session.token, business, result.supplier.id, imageUri);
       else if (removeImage && existingImage) await api.removeSupplierImage(session.token, business, result.supplier.id);
@@ -433,7 +434,7 @@ export function PurchaseDetailScreen() {
     </>}
 
     <Modal visible={paymentOpen} transparent animationType="slide" onRequestClose={() => setPaymentOpen(false)}>
-      <View style={detailStyles.modalBackdrop}><View style={detailStyles.sheet}>
+      <KeyboardAvoidingView style={detailStyles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}><ScrollView style={detailStyles.sheet} contentContainerStyle={detailStyles.sheetContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         <View style={detailStyles.sheetHeader}><View><Text style={detailStyles.sheetTitle}>Pay Supplier</Text><Text style={styles.muted}>৳{due.toFixed(2)} due · {purchase?.supplier_name}</Text></View><Pressable onPress={() => setPaymentOpen(false)} style={detailStyles.closeButton}><AppSymbol name="close" size={18} color="#52635E" /></Pressable></View>
         <Text style={detailStyles.fieldLabel}>Amount to Pay</Text>
         <Field label="৳" value={paymentAmount} onChangeText={setPaymentAmount} keyboardType="decimal-pad" />
@@ -442,7 +443,7 @@ export function PurchaseDetailScreen() {
         {willGoNegative && <Text style={detailStyles.balanceWarning}>Warning: this payment exceeds {selectedAccount?.name}&apos;s available balance of ৳{currency(selectedAccount?.balance ?? 0)}. The accounting balance will become negative.</Text>}
         <View style={detailStyles.remainingBox}><Text style={styles.muted}>Remaining After Payment</Text><Text style={detailStyles.remainingValue}>৳{Math.max(0, due - (Number(paymentAmount) || 0)).toFixed(2)}</Text></View>
         <Action label={busy ? 'Recording payment…' : 'Confirm Payment'} disabled={busy || activeAccounts.length === 0} onPress={() => void paySupplier()} />
-      </View></View>
+      </ScrollView></KeyboardAvoidingView>
     </Modal>
 
     <Modal visible={moreOpen} transparent animationType="fade" onRequestClose={() => setMoreOpen(false)}>
@@ -451,11 +452,11 @@ export function PurchaseDetailScreen() {
       </View></Pressable>
     </Modal>
     <Modal visible={cancelOpen} transparent animationType="slide" onRequestClose={() => setCancelOpen(false)}>
-      <View style={detailStyles.modalBackdrop}><View style={detailStyles.sheet}>
+      <KeyboardAvoidingView style={detailStyles.modalBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}><ScrollView style={detailStyles.sheet} contentContainerStyle={detailStyles.sheetContent} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
         <View style={detailStyles.sheetHeader}><View><Text style={detailStyles.sheetTitle}>Cancel Purchase</Text><Text style={styles.muted}>This reverses its posted stock and balance effects.</Text></View><Pressable onPress={() => setCancelOpen(false)} style={detailStyles.closeButton}><AppSymbol name="close" size={18} color="#52635E" /></Pressable></View>
         <Field label="Cancellation reason *" value={reason} onChangeText={setReason} multiline />
         <Action label={busy ? 'Cancelling…' : 'Confirm Cancellation'} secondary disabled={busy || !reason.trim()} onPress={() => { void cancel().then(cancelled => { if (cancelled) setCancelOpen(false); }); }} />
-      </View></View>
+      </ScrollView></KeyboardAvoidingView>
     </Modal>
   </Screen>;
 }
@@ -513,6 +514,6 @@ const detailStyles = StyleSheet.create({
   paymentCard: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#DCE8E2', borderRadius: 18, padding: 17, gap: 14 }, paymentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 }, sectionTitle: { color: '#15211F', fontSize: 17, fontWeight: '800' }, badge: { borderRadius: 14, paddingHorizontal: 10, paddingVertical: 6 }, paidBadge: { backgroundColor: '#E5F8F4' }, partialBadge: { backgroundColor: '#FFF5E1' }, unpaidBadge: { backgroundColor: '#FCEBE9' }, badgeText: { fontSize: 10, fontWeight: '800' }, paidBadgeText: { color: '#006D64' }, partialBadgeText: { color: '#AE741B' }, unpaidBadgeText: { color: '#A62925' },
   totalLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, totalLabel: { color: '#52635E', fontSize: 13 }, totalValue: { color: '#15211F', fontSize: 15, fontWeight: '700' }, duePanel: { backgroundColor: '#F6F8F7', borderRadius: 14, padding: 14, gap: 4 }, dueCaption: { color: '#52635E', fontSize: 10, fontWeight: '800', letterSpacing: 0.7 }, dueValue: { color: '#15211F', fontSize: 30, fontWeight: '800', letterSpacing: -0.6 }, progressTrack: { height: 7, overflow: 'hidden', borderRadius: 4, backgroundColor: '#E5ECE9' }, progress: { height: '100%', borderRadius: 4, backgroundColor: '#00A18F' }, paidLine: { flexDirection: 'row', justifyContent: 'space-between' }, paidText: { color: '#52635E', fontSize: 12, fontWeight: '600' },
   itemsHeader: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', paddingTop: 5 }, itemRow: { minHeight: 82, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 11, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2EAE4', borderRadius: 15 }, itemImage: { width: 56, height: 56, borderRadius: 11, backgroundColor: '#F6F8F7' }, itemPlaceholder: { width: 56, height: 56, borderRadius: 11, backgroundColor: '#F1F5F3', alignItems: 'center', justifyContent: 'center' }, itemCopy: { flex: 1, gap: 4, minWidth: 0 }, itemName: { color: '#15211F', fontSize: 13, fontWeight: '700' }, itemMeta: { color: '#52635E', fontSize: 11 }, itemTotal: { color: '#15211F', fontSize: 13, fontWeight: '800' },
-  modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,25,22,.45)' }, sheet: { width: '100%', maxWidth: 620, alignSelf: 'center', padding: 20, paddingBottom: 28, gap: 13, borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: '#FFFFFF' }, sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }, sheetTitle: { color: '#15211F', fontSize: 21, fontWeight: '800', marginBottom: 3 }, closeButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F3' }, fieldLabel: { color: '#344943', fontSize: 13, fontWeight: '700', marginBottom: -7 }, balanceWarning: { color: '#8A4B08', backgroundColor: '#FFF5E1', borderWidth: 1, borderColor: '#F2D7A0', padding: 11, borderRadius: 11, fontSize: 12, lineHeight: 18 }, remainingBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 13, borderRadius: 12, backgroundColor: '#F6F8F7' }, remainingValue: { color: '#15211F', fontSize: 16, fontWeight: '800' },
+  modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,25,22,.45)' }, sheet: { width: '100%', maxWidth: 620, maxHeight: '85%', alignSelf: 'center', borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: '#FFFFFF' }, sheetContent: { padding: 20, paddingBottom: 28, gap: 13 }, sheetHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }, sheetTitle: { color: '#15211F', fontSize: 21, fontWeight: '800', marginBottom: 3 }, closeButton: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F1F5F3' }, fieldLabel: { color: '#344943', fontSize: 13, fontWeight: '700', marginBottom: -7 }, balanceWarning: { color: '#8A4B08', backgroundColor: '#FFF5E1', borderWidth: 1, borderColor: '#F2D7A0', padding: 11, borderRadius: 11, fontSize: 12, lineHeight: 18 }, remainingBox: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 13, borderRadius: 12, backgroundColor: '#F6F8F7' }, remainingValue: { color: '#15211F', fontSize: 16, fontWeight: '800' },
   menuBackdrop: { flex: 1, justifyContent: 'flex-start', alignItems: 'flex-end', paddingTop: 105, paddingHorizontal: 18, backgroundColor: 'rgba(15,25,22,.22)' }, menu: { width: 210, backgroundColor: '#FFFFFF', borderRadius: 13, padding: 6, elevation: 5 }, menuItem: { minHeight: 45, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 10 }, cancelText: { color: '#A62925', fontSize: 13, fontWeight: '700' },
 });

@@ -35,7 +35,7 @@ export default function IncomeCategoriesScreen() {
       <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.canGoBack() ? router.back() : router.replace('/more' as Href)} style={{ width: 42, height: 42, justifyContent: 'center' }}><AppSymbol name="back" size={23} color={palette.primaryDeep} /></Pressable>
       <Text color={palette.ink} fontSize={22} fontWeight="800">Income categories</Text>
     </XStack>
-    <RefreshableScrollView onRefresh={load} keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 18, alignItems: 'center' }}>
+    <RefreshableScrollView onRefresh={load} style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={{ padding: 18, alignItems: 'center' }}>
       <YStack width="100%" maxWidth={560} gap={14}>
         <Text color={palette.secondary} fontSize={13}>Sales uses its own category. Money In uses categories for receipts outside a product sale.</Text>
         {loading ? <ActivityIndicator color={palette.primaryDeep} /> : categories.map((item) => <YStack key={item.id} backgroundColor={palette.surface} borderWidth={1} borderColor={palette.border} borderRadius={14} padding={16}><Text color={palette.ink} fontWeight="700">{item.name}{item.name.toLowerCase() === 'sales' ? ' · Used by Sales' : ''}</Text></YStack>)}

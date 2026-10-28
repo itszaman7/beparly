@@ -3,7 +3,7 @@ import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FlatList, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
@@ -11,9 +11,12 @@ import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { RecordAttachments, uploadPendingAttachments } from '@/features/attachments/record-attachments';
 import { AppText as Text } from '@/components/app-text';
 import { useAuth } from '@/features/auth/auth-context';
+import { useKeyboardVisible } from '@/hooks/use-keyboard-visible';
+import { PurchaseDueDate } from '@/features/purchases/purchase-due-date';
 import { cachePurchaseCatalog, clearPurchaseDraft, loadPurchaseDraft, savePurchaseDraft,
   searchCachedPurchaseCatalog } from '@/features/purchases/purchase-draft';
 import { lineAmountCents, purchaseAmountCents } from '@/features/purchases/purchase-rules';
+import { businessToday } from '@/features/reports/dates';
 import { api, resolveAssetUrl, type PurchasePaymentAccount, type ProductUnit, type PurchaseCatalogItem,
   type PurchaseInput, type StockBatch, type StockLocation, type Supplier, type PendingAttachment, type RecordAttachment } from '@/services/api';
 
@@ -41,6 +44,7 @@ const initial: Stored = { lines: [], supplier: '', location: '', notes: '', paid
 const err = (cause: unknown) => cause instanceof Error ? cause.message : 'Please try again.';
 
 export function PurchaseFlowScreen() {
+  const keyboardVisible = useKeyboardVisible();
   const { id, locationId } = useLocalSearchParams<{ id?: string; locationId?: string }>();
   const { session } = useAuth();
   const business = session?.account?.business.id;
@@ -65,6 +69,7 @@ export function PurchaseFlowScreen() {
   const [newLot, setNewLot] = useState('');
   const [newExpiry, setNewExpiry] = useState('');
   const [supplierAdd, setSupplierAdd] = useState(false);
+  const [supplierMoreOpen, setSupplierMoreOpen] = useState(false);
   const [supplierPickerOpen, setSupplierPickerOpen] = useState(false);
   const [supplierName, setSupplierName] = useState('');
   const [supplierPhone, setSupplierPhone] = useState('');
@@ -142,7 +147,7 @@ export function PurchaseFlowScreen() {
       if (id || preserveForProduct.current) return;
       setDraft(initial); setStage('picker'); setQuery(''); queryRef.current = '';
       setSupplierPickerOpen(false); setSupplierQuery(''); setLoadedSupplier(null);
-      setSupplierAdd(false); setSupplierName(''); setSupplierPhone(''); setSupplierAddress('');
+      setSupplierAdd(false); setSupplierMoreOpen(false); setSupplierName(''); setSupplierPhone(''); setSupplierAddress('');
       setSupplierArea(''); setSupplierDistrict(''); setSupplierTerms(''); setSupplierNotes('');
       setSupplierImage(null); setEditing(null); setNotesOpen(false); setAttachments([]); setExistingAttachments([]); setPreviewItem(null); setError('');
       draftCommand.current = uid(); completeCommand.current = uid(); supplierCommand.current = uid(); savedInput.current = '';
@@ -308,7 +313,7 @@ export function PurchaseFlowScreen() {
       const supplier = supplierImage ? (await api.uploadSupplierImage(session.token, session.account.business.id,
         result.supplier.id, supplierImage)).supplier : result.supplier;
       setSuppliers(current => [supplier, ...current]); change({ supplier: supplier.id });
-      setSupplierAdd(false); setSupplierName(''); setSupplierPhone(''); setSupplierAddress(''); setSupplierArea('');
+      setSupplierAdd(false); setSupplierMoreOpen(false); setSupplierName(''); setSupplierPhone(''); setSupplierAddress(''); setSupplierArea('');
       setSupplierDistrict(''); setSupplierTerms(''); setSupplierNotes(''); setSupplierImage(null);
       supplierCommand.current = uid(); setError('');
     } catch (cause) { setError(err(cause)); }
@@ -336,7 +341,10 @@ export function PurchaseFlowScreen() {
       setError('Enter a valid payment no greater than the purchase total.'); return;
     }
     if (complete && numeric(paid) > 0 && !draft.accountId) { setError('Choose a money account.'); return; }
-    if (complete && numeric(paid) < total && !/^\d{4}-\d{2}-\d{2}$/.test(draft.dueDate || '')) { setError('Enter a due date as YYYY-MM-DD.'); return; }
+    if (complete && numeric(paid) < total && (!/^\d{4}-\d{2}-\d{2}$/.test(draft.dueDate || '') ||
+      draft.dueDate < businessToday(session.account.business.timezone))) {
+      setError('Choose a due date of today or later.'); return;
+    }
     setBusy(true); setError('');
     try {
       let serverId = draft.serverId;
@@ -450,7 +458,7 @@ export function PurchaseFlowScreen() {
         <View style={{ flex: 1 }}><Text style={styles.productName}>{chosenSupplier?.name || 'Search suppliers'}</Text>
           <Text style={styles.meta}>{chosenSupplier?.phone || 'Choose an existing supplier'}</Text></View>
         <AppSymbol name="chevron" size={20} color="#006D64" /></Pressable>
-      <Pressable onPress={() => setSupplierAdd(true)}><Text style={styles.link}>+ Quick add supplier</Text></Pressable>
+      <Pressable onPress={() => { setSupplierMoreOpen(false); setSupplierAdd(true); }}><Text style={styles.link}>+ Quick add supplier</Text></Pressable>
       <Text style={styles.sectionTitle}>Receive at *</Text><View style={styles.optionsRow}>{locations.filter(row => row.is_active).map(row =>
         <Pressable key={row.id} style={[styles.pill, draft.location === String(row.id) && styles.selected]}
           onPress={() => change({ location: String(row.id) })}><Text style={styles.pillText}>{row.name}</Text></Pressable>)}</View>
@@ -469,7 +477,9 @@ export function PurchaseFlowScreen() {
             onPress={() => change({ payment: value })}><Text style={styles.pillText}>{label}</Text></Pressable>)}</View>
       {draft.payment === 'partial' && <View><Text style={styles.fieldLabel}>Paid now ৳</Text><TextInput style={styles.input} value={draft.paid}
         onChangeText={value => change({ paid: value })} keyboardType="decimal-pad" placeholder="0.00" /></View>}
-      {draft.payment !== 'full' && <View><Text style={styles.fieldLabel}>Due date *</Text><TextInput style={styles.input} value={draft.dueDate || ''} onChangeText={dueDate => change({ dueDate })} keyboardType="numbers-and-punctuation" placeholder="YYYY-MM-DD" accessibilityLabel="Supplier due date" /></View>}
+      {draft.payment !== 'full' && <View><Text style={styles.fieldLabel}>Due date *</Text>
+        <PurchaseDueDate value={draft.dueDate} minimum={businessToday(session?.account?.business.timezone)}
+          onChange={dueDate => change({ dueDate })} /></View>}
       {draft.payment !== 'due' && <><Text style={styles.fieldLabel}>Money account *</Text><View style={styles.optionsRow}>
         {accounts.filter(row => row.is_active).map(row => <Pressable key={row.id}
           style={[styles.pill, draft.accountId === row.id && styles.selected]} onPress={() => change({ accountId: row.id })}>
@@ -484,19 +494,19 @@ export function PurchaseFlowScreen() {
       </View>}
       <Text style={styles.hint}>Stock and supplier balances change only after online completion.</Text>
     </RefreshableScrollView>}
-    <View style={styles.footer}><View><Text style={styles.meta}>{selectedCount} products · {draft.lines.length} lines</Text>
+    {!keyboardVisible && <View style={styles.footer}><View><Text style={styles.meta}>{selectedCount} products · {draft.lines.length} lines</Text>
       <Text style={styles.footerTotal}>{money(total)}</Text></View><Pressable disabled={busy || !ready || stage !== 'review' && !draft.lines.length}
       onPress={() => stage === 'picker' ? setStage('cart') : stage === 'cart' ? (setStage('review'), !draft.supplier && setSupplierPickerOpen(true)) : void submit(true)}
       style={[styles.primary, (busy || !ready || stage !== 'review' && !draft.lines.length) && { opacity: 0.5 }]}>
       <Text style={styles.primaryText}>{busy ? 'Working…' : stage === 'picker' ? 'Review cart' : stage === 'cart' ? 'Continue' : 'Complete purchase'}</Text>
-      <AppSymbol name="chevron" size={18} color="#fff" /></Pressable></View>
-    {stage === 'review' && <Pressable disabled={busy} onPress={() => void submit(false)} style={styles.saveDraft}>
+      <AppSymbol name="chevron" size={18} color="#fff" /></Pressable></View>}
+    {stage === 'review' && !keyboardVisible && <Pressable disabled={busy} onPress={() => void submit(false)} style={styles.saveDraft}>
       <Text style={styles.link}>Save server draft for later</Text></Pressable>}
-    <Modal visible={!!currentLine} transparent animationType="slide" onRequestClose={() => setEditing(null)}><View style={styles.scrim}>
+    <Modal visible={!!currentLine} transparent animationType="slide" onRequestClose={() => setEditing(null)}><KeyboardAvoidingView style={styles.scrim} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={styles.sheet}><View style={styles.sheetHeader}><View style={{ flex: 1 }}><Text style={styles.sectionTitle}>{currentLine?.item.name}</Text>
         <Text style={styles.meta}>{currentLine?.item.variant_label} · {currentLine?.item.sku}</Text></View>
         <Pressable onPress={() => setEditing(null)}><AppSymbol name="close" size={24} color="#415850" /></Pressable></View>
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 14 }}>
+        <ScrollView style={styles.sheetScroll} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={{ gap: 14, paddingBottom: 16 }}>
           {!!currentLine?.item.image_url && <Pressable onPress={() => setPreviewItem(currentLine.item)}>
             <Image source={{ uri: resolveAssetUrl(currentLine.item.image_url) || '' }}
               style={{ width: 86, height: 86, borderRadius: 12 }} contentFit="cover" cachePolicy="disk" />
@@ -525,30 +535,45 @@ export function PurchaseFlowScreen() {
           {!!error && <Text style={styles.errorText}>{error}</Text>}
           <Pressable onPress={() => { setDraft(current => ({ ...current, lines: current.lines.filter(row => row.id !== currentLine?.id) })); setEditing(null); }}>
             <Text style={styles.remove}>Remove line</Text></Pressable>
-        </ScrollView><View style={styles.editRow}><Pressable style={[styles.primaryWide, { flex: 1 }]} onPress={() => finishLine(false)}>
+        </ScrollView>{!keyboardVisible && <View style={styles.editRow}><Pressable style={[styles.primaryWide, { flex: 1 }]} onPress={() => finishLine(false)}>
           <Text style={styles.primaryText}>Save line</Text></Pressable>
           {draft.lines.findIndex(row => row.id === currentLine?.id) < draft.lines.length - 1 &&
             <Pressable style={[styles.primaryWide, { flex: 1 }]} onPress={() => finishLine(true)}>
-              <Text style={styles.primaryText}>Save & next</Text></Pressable>}</View>
-      </View></View></Modal>
-    <Modal visible={supplierAdd} transparent animationType="slide" onRequestClose={() => setSupplierAdd(false)}><View style={styles.scrim}>
+              <Text style={styles.primaryText}>Save & next</Text></Pressable>}</View>}
+      </View></KeyboardAvoidingView></Modal>
+    <Modal visible={supplierAdd} transparent animationType="slide" onRequestClose={() => setSupplierAdd(false)}><KeyboardAvoidingView style={styles.scrim} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={styles.sheet}><View style={styles.sheetHeader}><Text style={styles.sectionTitle}>Quick add supplier</Text>
         <Pressable onPress={() => setSupplierAdd(false)}><AppSymbol name="close" size={24} color="#415850" /></Pressable></View>
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ gap: 10 }}>
-        {!!supplierImage && <Image source={{ uri: supplierImage }} style={{ width: 76, height: 76, borderRadius: 12 }} contentFit="cover" />}
-        <Pressable style={styles.outline} onPress={() => void pickSupplierImage()}><Text style={styles.link}>+ Photo (optional)</Text></Pressable>
-        {!!supplierImage && <Pressable onPress={() => setSupplierImage(null)}><Text style={styles.remove}>Remove photo</Text></Pressable>}
-        <TextInput style={styles.input} value={supplierName} onChangeText={setSupplierName} placeholder="Supplier name *" />
-        <TextInput style={styles.input} value={supplierPhone} onChangeText={setSupplierPhone} keyboardType="phone-pad" placeholder="Phone (optional)" />
-        <TextInput style={styles.input} value={supplierAddress} onChangeText={setSupplierAddress} placeholder="Address (optional)" />
-        <TextInput style={styles.input} value={supplierArea} onChangeText={setSupplierArea} placeholder="Area (optional)" />
-        <TextInput style={styles.input} value={supplierDistrict} onChangeText={setSupplierDistrict} placeholder="District (optional)" />
-        <TextInput style={styles.input} value={supplierTerms} onChangeText={setSupplierTerms} placeholder="Payment terms (optional)" />
-        <TextInput style={[styles.input, { minHeight: 65 }]} value={supplierNotes} onChangeText={setSupplierNotes}
-          multiline placeholder="Notes (optional)" />
+        <ScrollView style={styles.sheetScroll} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={[styles.supplierFields, { paddingBottom: 16 }]}>
+          <View><Text style={styles.fieldLabel}>Supplier name *</Text>
+            <TextInput style={styles.input} value={supplierName} onChangeText={setSupplierName} accessibilityLabel="Supplier name, required" /></View>
+          <Pressable accessibilityRole="button" accessibilityLabel="More info" accessibilityState={{ expanded: supplierMoreOpen }}
+            style={styles.moreInfo} onPress={() => setSupplierMoreOpen(current => !current)}>
+            <Text style={styles.link}>More info (optional)</Text>
+            <AppSymbol name={supplierMoreOpen ? 'up' : 'down'} size={20} color="#006D64" />
+          </Pressable>
+          {supplierMoreOpen && <View style={styles.supplierFields}>
+            <View><Text style={styles.fieldLabel}>Photo</Text>
+              {!!supplierImage && <Image source={{ uri: supplierImage }} style={styles.supplierPhoto} contentFit="cover" />}
+              <Pressable style={styles.outline} onPress={() => void pickSupplierImage()}><Text style={styles.link}>{supplierImage ? 'Change photo' : '+ Add photo'}</Text></Pressable>
+              {!!supplierImage && <Pressable onPress={() => setSupplierImage(null)}><Text style={styles.remove}>Remove photo</Text></Pressable>}</View>
+            <View><Text style={styles.fieldLabel}>Phone</Text>
+              <TextInput style={styles.input} value={supplierPhone} onChangeText={setSupplierPhone} keyboardType="phone-pad" accessibilityLabel="Phone" /></View>
+            <View><Text style={styles.fieldLabel}>Address</Text>
+              <TextInput style={styles.input} value={supplierAddress} onChangeText={setSupplierAddress} accessibilityLabel="Address" /></View>
+            <View><Text style={styles.fieldLabel}>Area</Text>
+              <TextInput style={styles.input} value={supplierArea} onChangeText={setSupplierArea} accessibilityLabel="Area" /></View>
+            <View><Text style={styles.fieldLabel}>District</Text>
+              <TextInput style={styles.input} value={supplierDistrict} onChangeText={setSupplierDistrict} accessibilityLabel="District" /></View>
+            <View><Text style={styles.fieldLabel}>Payment terms</Text>
+              <TextInput style={styles.input} value={supplierTerms} onChangeText={setSupplierTerms} accessibilityLabel="Payment terms" /></View>
+            <View><Text style={styles.fieldLabel}>Notes</Text>
+              <TextInput style={[styles.input, styles.notesInput]} value={supplierNotes} onChangeText={setSupplierNotes}
+                multiline accessibilityLabel="Notes" /></View>
+          </View>}
         </ScrollView>
-        <Pressable style={styles.primaryWide} disabled={busy} onPress={() => void addSupplier()}><Text style={styles.primaryText}>Add supplier</Text></Pressable>
-      </View></View></Modal>
+        {!keyboardVisible && <Pressable style={styles.primaryWide} disabled={busy} onPress={() => void addSupplier()}><Text style={styles.primaryText}>Add supplier</Text></Pressable>}
+      </View></KeyboardAvoidingView></Modal>
     <Modal visible={!!previewItem} transparent animationType="fade" onRequestClose={() => setPreviewItem(null)}>
       <View style={styles.scrim}><View style={styles.sheet}>
         <View style={styles.sheetHeader}><Text style={styles.sectionTitle}>Product preview</Text>
@@ -572,7 +597,7 @@ export function PurchaseFlowScreen() {
             placeholder="Name or phone" placeholderTextColor="#82938D" /></View>
         <Pressable style={[styles.outline, { marginHorizontal: 16, marginBottom: 8 }]} onPress={() => {
           setSupplierPickerOpen(false);
-          supplierAddTimer.current = setTimeout(() => { supplierAddTimer.current = null; setSupplierAdd(true); }, 300);
+          supplierAddTimer.current = setTimeout(() => { supplierAddTimer.current = null; setSupplierMoreOpen(false); setSupplierAdd(true); }, 300);
         }}><Text style={styles.link}>+ Add a new supplier</Text></Pressable>
         <FlatList style={styles.list} contentContainerStyle={styles.listContent} keyboardShouldPersistTaps="handled"
           data={suppliers} keyExtractor={row => row.id}
@@ -651,9 +676,14 @@ const styles = StyleSheet.create({
   total: { color: '#0B4E42', fontSize: 21, fontWeight: '700' }, fieldLabel: { color: '#354D43', fontSize: 13, fontWeight: '700', marginBottom: 5 },
   input: { minHeight: 46, borderWidth: 1, borderColor: '#DCE6DF', backgroundColor: '#fff', borderRadius: 10,
     paddingHorizontal: 12, paddingVertical: 9, color: '#142A23', fontSize: 15 },
+  supplierFields: { gap: 10 }, supplierPhoto: { width: 76, height: 76, borderRadius: 12, marginBottom: 10 },
+  moreInfo: { minHeight: 46, borderWidth: 1, borderColor: '#B9D7C8', borderRadius: 10, paddingHorizontal: 12,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  notesInput: { minHeight: 65, textAlignVertical: 'top' },
   hint: { color: '#66786F', fontSize: 12 }, saveDraft: { alignItems: 'center', paddingVertical: 9, backgroundColor: '#fff' },
-  scrim: { flex: 1, justifyContent: 'flex-end', backgroundColor: '#0008' }, sheet: { maxHeight: '85%', backgroundColor: '#F7F9F7',
+  scrim: { flex: 1, justifyContent: 'flex-end', backgroundColor: '#0008' }, sheet: { maxHeight: '85%', minHeight: 0, backgroundColor: '#F7F9F7',
     borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: 20, gap: 14 },
+  sheetScroll: { flexShrink: 1, minHeight: 0 },
   sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }, editRow: { flexDirection: 'row', gap: 12 },
   outline: { borderWidth: 1, borderColor: '#B9D7C8', padding: 12, borderRadius: 10, alignItems: 'center' },
   remove: { color: '#A12D25', fontSize: 14, fontWeight: '700', textAlign: 'center', paddingVertical: 8 },

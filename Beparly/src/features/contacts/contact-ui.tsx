@@ -23,7 +23,7 @@ function Shell({ title, children, onRefresh }: { title: string; children: React.
       <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.canGoBack() ? router.back() : router.replace('/more' as Href)} style={styles.back}><AppSymbol name="back" size={20} color="#006D64" /></Pressable>
       <Text style={styles.title}>{title}</Text>
     </View></View>
-    <Scroller onRefresh={onRefresh!} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroll}><View style={styles.content}>{children}</View></Scroller>
+    <Scroller onRefresh={onRefresh!} style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.scroll}><View style={styles.content}>{children}</View></Scroller>
   </SafeAreaView>;
 }
 

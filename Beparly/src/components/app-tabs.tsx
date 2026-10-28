@@ -9,6 +9,7 @@ import { AppSymbol } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
 import { palette, radius, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
+import { useKeyboardVisible } from '@/hooks/use-keyboard-visible';
 import { blurWebFocus } from '@/utils/web-focus';
 
 export default function AppTabs() {
@@ -36,6 +37,7 @@ export default function AppTabs() {
 }
 
 function AppTabList({ selected, count, children, ...props }: TabListProps & { selected: number; count: number }) {
+  const keyboardVisible = useKeyboardVisible();
   const insets = useSafeAreaInsets();
   const reducedMotion = useReducedMotion();
   const [width, setWidth] = useState(0);
@@ -50,7 +52,7 @@ function AppTabList({ selected, count, children, ...props }: TabListProps & { se
   }));
 
   return (
-    <View {...props} style={[styles.bar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+    <View {...props} style={[styles.bar, { paddingBottom: Math.max(insets.bottom, 8) }, keyboardVisible && styles.hiddenBar]}>
       <View style={styles.inner} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
         {width > 0 && <Animated.View pointerEvents="none" style={[styles.indicator, { width: width / count - 6, left: 3 }, indicator]} />}
         {children}
@@ -79,6 +81,7 @@ function TabButton({ label, icon, isFocused, ref: _ref, ...props }: TabTriggerSl
 const styles = StyleSheet.create({
   slot: { flex: 1 },
   bar: { width: '100%', backgroundColor: palette.surface, borderTopWidth: 1, borderTopColor: palette.border, paddingTop: spacing.sm, paddingHorizontal: spacing.lg, alignItems: 'center' },
+  hiddenBar: { height: 0, paddingTop: 0, paddingBottom: 0, borderTopWidth: 0, overflow: 'hidden' },
   inner: { width: '100%', maxWidth: 480, minHeight: 52, flexDirection: 'row', alignItems: 'center' },
   indicator: { position: 'absolute', top: 2, height: 49, borderRadius: radius.sm, backgroundColor: palette.primarySoft },
   trigger: { flex: 1, minHeight: 52, alignItems: 'center', justifyContent: 'center' },
