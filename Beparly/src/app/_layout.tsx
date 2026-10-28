@@ -1,6 +1,6 @@
-import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider, useSegments } from 'expo-router';
+import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider, useRootNavigationState, useSegments } from 'expo-router';
 import { useFonts } from 'expo-font';
-import { ActivityIndicator, Pressable, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { useEffect } from 'react';
 import { TamaguiProvider } from 'tamagui';
 import { Toast } from 'tamagui/toast';
@@ -22,6 +22,7 @@ export function SuspenseFallback() {
 function Navigation() {
   const { session, restoring, restoreError, retryRestore } = useAuth();
   const segments = useSegments();
+  const rootNavigationState = useRootNavigationState();
   const [fontsLoaded, fontError] = useFonts({
     BeparlyRobotoRegular: require('../../assets/fonts/Roboto-Regular.ttf'),
     BeparlyRobotoMedium: require('../../assets/fonts/Roboto-Medium.ttf'),
@@ -29,21 +30,12 @@ function Navigation() {
   });
   const colorScheme = useColorScheme();
   useEffect(() => {
-    if (restoring || restoreError) return;
+    if (restoring || restoreError || !rootNavigationState?.key) return;
     const authRoute = segments[0] === 'sign-in' || segments[0] === 'register';
     if (!session && !authRoute) void router.replace('/sign-in');
     if (session && authRoute) void router.replace('/');
-  }, [restoreError, restoring, session, segments]);
-  if ((!fontsLoaded && !fontError) || restoring) return <SuspenseFallback />;
-  if (restoreError) return (
-    <View style={{ flex: 1, backgroundColor: '#F6F8F7', alignItems: 'center', justifyContent: 'center', padding: 28 }}>
-      <AppText style={{ color: '#15211F', fontSize: 20, fontWeight: '700', textAlign: 'center' }}>Could not reconnect</AppText>
-      <AppText style={{ color: '#52635E', fontSize: 14, textAlign: 'center', marginTop: 10 }}>{restoreError}</AppText>
-      <Pressable accessibilityRole="button" onPress={() => void retryRestore()} style={{ backgroundColor: '#006D64', paddingHorizontal: 28, paddingVertical: 14, borderRadius: 12, marginTop: 24 }}>
-        <AppText style={{ color: '#FFFFFF', fontSize: 15, fontWeight: '700' }}>Try again</AppText>
-      </Pressable>
-    </View>
-  );
+  }, [restoreError, restoring, rootNavigationState?.key, session, segments]);
+  const showLoading = (!fontsLoaded && !fontError) || restoring;
   return (
     <TamaguiProvider config={tamaguiConfig} defaultTheme={colorScheme ?? 'light'}>
       <Toast position="top-center" duration={4000}>
@@ -66,6 +58,16 @@ function Navigation() {
             <Stack.Screen name="sign-in" />
             <Stack.Screen name="register" />
           </Stack>
+          {showLoading && <View style={StyleSheet.absoluteFill}><SuspenseFallback /></View>}
+          {!showLoading && restoreError && (
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: '#F6F8F7', alignItems: 'center', justifyContent: 'center', padding: 28 }]}>
+              <AppText style={{ color: '#15211F', fontSize: 20, fontWeight: '700', textAlign: 'center' }}>Could not reconnect</AppText>
+              <AppText style={{ color: '#52635E', fontSize: 14, textAlign: 'center', marginTop: 10 }}>{restoreError}</AppText>
+              <Pressable accessibilityRole="button" onPress={() => void retryRestore()} style={{ backgroundColor: '#006D64', paddingHorizontal: 28, paddingVertical: 14, borderRadius: 12, marginTop: 24 }}>
+                <AppText style={{ color: '#FFFFFF', fontSize: 15, fontWeight: '700' }}>Try again</AppText>
+              </Pressable>
+            </View>
+          )}
         </ThemeProvider>
       </Toast>
     </TamaguiProvider>
