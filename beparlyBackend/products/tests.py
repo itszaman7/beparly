@@ -375,6 +375,37 @@ class ProductApiTests(TestCase):
         self.assertEqual(summary.json(), {'active_products': 3, 'low_stock': 1, 'out_of_stock': 1})
         self.assertEqual(self.call('get', base + 'summary/', token=self.other_token).status_code, 404)
 
+    def test_sale_catalog_and_barcode_stock_follow_selected_location(self):
+        shop = StockLocation.objects.get(business=self.business, is_default=True)
+        warehouse = StockLocation.objects.create(business=self.business, name='Warehouse', type='warehouse')
+        other_shop = StockLocation.objects.get(business=self.other_business, is_default=True)
+        rice = Product.objects.create(business=self.business, name='Rice', sku='RICE', barcode='RICE-CODE', retail_price=Decimal('50'))
+        phone = Product.objects.create(business=self.business, name='Phone', sku='PHONE', product_type='variant')
+        blue = ProductVariant.objects.create(business=self.business, product=phone, label='Blue', sku='PHONE-BLUE',
+                                             barcode='BLUE-CODE', combination_key='blue', retail_price=Decimal('100'))
+        red = ProductVariant.objects.create(business=self.business, product=phone, label='Red', sku='PHONE-RED',
+                                            barcode='RED-CODE', combination_key='red', retail_price=Decimal('100'))
+        StockBalance.objects.create(business=self.business, product=rice, variant=rice.variants.get(),
+                                    location=warehouse, quantity=Decimal('4'))
+        StockBalance.objects.create(business=self.business, product=phone, variant=blue,
+                                    location=warehouse, quantity=Decimal('2'))
+        StockBalance.objects.create(business=self.business, product=phone, variant=red,
+                                    location=shop, quantity=Decimal('3'))
+        base = self.base + 'products/'
+        shop_items = self.call('get', base + f'?location_id={shop.pk}&stock=in_stock').json()['products']
+        self.assertEqual([item['name'] for item in shop_items], ['Phone'])
+        self.assertEqual([(row['label'], row['sellable_stock']) for row in shop_items[0]['variants']],
+                         [('Blue', '0'), ('Red', '3')])
+        warehouse_items = self.call('get', base + f'?location_id={warehouse.pk}&stock=in_stock').json()['products']
+        self.assertEqual([item['name'] for item in warehouse_items], ['Phone', 'Rice'])
+        self.assertEqual(warehouse_items[0]['variants'][0]['sellable_stock'], '2')
+        self.assertEqual(self.call('get', base + f'?location_id={shop.pk}&stock=in_stock&search=RICE').json()['products'], [])
+        lookup = base + 'barcodes/lookup/?code=RICE-CODE&location_id='
+        self.assertEqual(self.call('get', lookup + str(shop.pk)).json()['target']['sellable_stock'], '0')
+        self.assertEqual(self.call('get', lookup + str(warehouse.pk)).json()['target']['sellable_stock'], '4')
+        self.assertEqual(self.call('get', base + f'?location_id={other_shop.pk}').status_code, 404)
+        self.assertEqual(self.call('get', lookup + str(other_shop.pk)).status_code, 404)
+
     def test_opening_stock_atomic_multiple_locations_and_receipt_retry(self):
         location = StockLocation.objects.get(business=self.business, is_default=True)
         warehouse = StockLocation.objects.create(business=self.business, name='Godown', type='warehouse')

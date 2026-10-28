@@ -7,6 +7,7 @@ import { FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView,
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
+import { DateField } from '@/components/date-field';
 import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { RecordAttachments, uploadPendingAttachments } from '@/features/attachments/record-attachments';
 import { AppText as Text } from '@/components/app-text';
@@ -291,7 +292,7 @@ export function PurchaseFlowScreen() {
   };
   const createBatch = async () => {
     if (!currentLine || !session?.account || !newLot.trim()) { setError('Enter a batch identifier.'); return; }
-    if (currentLine.item.tracking_mode === 'expiry' && !/^\d{4}-\d{2}-\d{2}$/.test(newExpiry)) { setError('Enter expiry as YYYY-MM-DD.'); return; }
+    if (currentLine.item.tracking_mode === 'expiry' && !/^\d{4}-\d{2}-\d{2}$/.test(newExpiry)) { setError('Choose an expiry date.'); return; }
     setBusy(true);
     try {
       const result = await api.createBatch(session.token, session.account.business.id, currentLine.item.product_id,
@@ -527,8 +528,8 @@ export function PurchaseFlowScreen() {
               onPress={() => currentLine && changeLine(currentLine.id, { batchId: row.id, batchLabel: row.lot_code })}>
               <Text style={styles.pillText}>{row.lot_code}{row.expires_on ? ` · ${row.expires_on}` : ''}</Text></Pressable>)}</View>
             <TextInput style={styles.input} value={newLot} onChangeText={setNewLot} placeholder="New batch identifier" />
-            {currentLine?.item.tracking_mode === 'expiry' && <TextInput style={styles.input} value={newExpiry}
-              onChangeText={setNewExpiry} placeholder="Expiry YYYY-MM-DD" />}
+            {currentLine?.item.tracking_mode === 'expiry' && <><Text style={styles.fieldLabel}>Expiry date *</Text>
+              <DateField label="New batch expiry date" value={newExpiry} onChange={setNewExpiry} /></>}
             <Pressable onPress={() => void createBatch()} disabled={busy} style={styles.outline}><Text style={styles.link}>Create batch</Text></Pressable></>}
           <View style={styles.summaryRow}><Text style={styles.fieldLabel}>Line total</Text>
             <Text style={styles.total}>{money(numeric(currentLine?.quantity || '') * numeric(currentLine?.unitCost || ''))}</Text></View>

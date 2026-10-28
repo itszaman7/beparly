@@ -366,6 +366,55 @@ class AccountingTests(TestCase):
             money_operation(self.business, self.owner, uuid.uuid4(), 'other_income', 10, self.cash,
                             income_category=sales_category)
 
+    def test_income_category_rename_keeps_ledger_history_and_is_owner_scoped(self):
+        from accounts.models import AuthSession
+
+        owner_headers = {'HTTP_AUTHORIZATION': f'Bearer {AuthSession.issue(self.owner)}'}
+        list_path = f'/api/v1/businesses/{self.business.pk}/money/income-categories/'
+        created = self.client.post(list_path, data=json.dumps({'name': 'Commission', 'type': 'income'}),
+                                   content_type='application/json', **owner_headers)
+        self.assertEqual(created.status_code, 201, created.content)
+        category = IncomeCategory.objects.get(pk=created.json()['category']['id'])
+        listing = self.client.get(list_path, **owner_headers)
+        self.assertEqual(listing.status_code, 200)
+        self.assertTrue(next(row for row in listing.json()['categories'] if row['id'] == category.pk)['can_edit'])
+        transaction = money_operation(self.business, self.owner, uuid.uuid4(), 'other_income', '15',
+                                      self.cash, income_category=category)
+        path = f'/api/v1/businesses/{self.business.pk}/money/income-categories/{category.pk}/'
+        response = self.client.patch(path, data=json.dumps({'name': 'Service fees'}),
+                                     content_type='application/json', **owner_headers)
+        self.assertEqual(response.status_code, 200, response.content)
+        category.refresh_from_db()
+        category.ledger_account.refresh_from_db()
+        self.assertEqual((category.name, category.ledger_account.name), ('Service fees', 'Service fees'))
+        self.assertEqual(transaction.journal.lines.get(account=category.ledger_account).credit, Decimal('15'))
+        self.assertEqual(AuditEvent.objects.filter(business=self.business, entity_type='income_category',
+                                                 entity_id=category.pk, action='updated').count(), 1)
+        self.assertEqual(self.client.patch(path, data=json.dumps({'name': 'Service fees'}),
+                                           content_type='application/json', **owner_headers).status_code, 200)
+        self.assertEqual(AuditEvent.objects.filter(business=self.business, entity_type='income_category',
+                                                 entity_id=category.pk, action='updated').count(), 1)
+        other_category = create_financial_category(self.business, self.owner, 'Rent rebate', 'income')
+        self.assertEqual(self.client.patch(path, data=json.dumps({'name': other_category.name}),
+                                           content_type='application/json', **owner_headers).status_code, 400)
+        miscellaneous = IncomeCategory.objects.get(business=self.business, name='Miscellaneous income')
+        self.assertFalse(next(row for row in listing.json()['categories'] if row['id'] == miscellaneous.pk)['can_edit'])
+        misc_path = f'/api/v1/businesses/{self.business.pk}/money/income-categories/{miscellaneous.pk}/'
+        self.assertEqual(self.client.patch(misc_path, data=json.dumps({'name': 'Renamed'}),
+                                           content_type='application/json', **owner_headers).status_code, 400)
+        employee = User.objects.create_user(phone='01712345679', password='StaffPass#83')
+        BusinessMember.objects.create(user=employee, business=self.business, role=BusinessMember.EMPLOYEE)
+        staff_headers = {'HTTP_AUTHORIZATION': f'Bearer {AuthSession.issue(employee)}'}
+        self.assertEqual(self.client.post(list_path, data=json.dumps({'name': 'Staff income'}),
+                                          content_type='application/json', **staff_headers).status_code, 403)
+        self.assertEqual(self.client.patch(path, data=json.dumps({'name': 'Staff change'}),
+                                           content_type='application/json', **staff_headers).status_code, 403)
+        other = Business.objects.create(name='Other category business')
+        setup_business(other)
+        self.assertEqual(self.client.patch(f'/api/v1/businesses/{other.pk}/money/income-categories/{category.pk}/',
+                                           data=json.dumps({'name': 'Cross-business change'}),
+                                           content_type='application/json', **owner_headers).status_code, 404)
+
     def test_money_in_api_uses_miscellaneous_income_and_retries_once(self):
         token = self.client.post('/api/v1/auth/login/', json.dumps({'phone': self.owner.phone,
             'password': 'OwnerPass#83'}), content_type='application/json').json()['token']

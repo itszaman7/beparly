@@ -60,7 +60,7 @@ export type VariantInput = { id: string; sku: string; barcode?: string; base_uni
   minimum_stock?: string; tracking_mode?: Product['tracking_mode']; selections: Record<string, string>;
   opening_stock?: { quantity: string; unit_cost: string; location_id?: number; lot_code?: string; expires_on?: string } };
 export type ProductListOptions = {
-  search?: string; page?: number; category?: string;
+  search?: string; page?: number; category?: string; locationId?: number;
   active?: 'all' | 'true' | 'false';
   stock?: 'all' | 'in_stock' | 'low_stock' | 'out_of_stock';
   tracking?: 'all' | Product['tracking_mode'];
@@ -326,6 +326,7 @@ export const api = {
   products: (token: string, businessId: number, options: ProductListOptions = {}) => {
     const query = new URLSearchParams({ search: options.search ?? '', page: String(options.page ?? 1), sort: options.sort ?? 'name' });
     if (options.category) query.set('category', options.category);
+    if (options.locationId) query.set('location_id', String(options.locationId));
     if (options.active && options.active !== 'all') query.set('active', options.active);
     if (options.stock && options.stock !== 'all') query.set('stock', options.stock);
     if (options.tracking && options.tracking !== 'all') query.set('tracking', options.tracking);
@@ -333,8 +334,8 @@ export const api = {
   },
   purchaseCatalog: (token: string, businessId: number, search = '', page = 1) =>
     request<{ items: PurchaseCatalogItem[]; next_page: number | null }>(`businesses/${businessId}/products/purchase-catalog/?search=${encodeURIComponent(search)}&page=${page}`, 'GET', undefined, token),
-  barcodeLookup: (token: string, businessId: number, code: string) =>
-    request<{ target: BarcodeTarget }>(`businesses/${businessId}/products/barcodes/lookup/?code=${encodeURIComponent(code)}`, 'GET', undefined, token),
+  barcodeLookup: (token: string, businessId: number, code: string, locationId?: number) =>
+    request<{ target: BarcodeTarget }>(`businesses/${businessId}/products/barcodes/lookup/?code=${encodeURIComponent(code)}${locationId ? `&location_id=${locationId}` : ''}`, 'GET', undefined, token),
   productBarcodeLabelUrl: (businessId: number, productId: string, options: { variantId?: string; unitId?: string; paper: string; count: number }) => {
     const query = new URLSearchParams({ paper: options.paper, count: String(options.count) });
     if (options.variantId) query.set('variant_id', options.variantId);
@@ -426,9 +427,11 @@ export const api = {
   expenseCategories: (token: string, businessId: number) =>
     request<{ categories: { id: number; name: string; type?: string }[] }>(`businesses/${businessId}/money/expense-categories/`, 'GET', undefined, token),
   incomeCategories: (token: string, businessId: number) =>
-    request<{ categories: { id: number; name: string; type?: string }[] }>(`businesses/${businessId}/money/income-categories/`, 'GET', undefined, token),
+    request<{ categories: { id: number; name: string; type?: string; can_edit: boolean }[] }>(`businesses/${businessId}/money/income-categories/`, 'GET', undefined, token),
   createFinancialCategory: (token: string, businessId: number, type: 'expense' | 'income', name: string) =>
     request<{ category: { id: number; name: string; type: string } }>(`businesses/${businessId}/money/${type}-categories/`, 'POST', { name, type }, token),
+  renameIncomeCategory: (token: string, businessId: number, categoryId: number, name: string) =>
+    request<{ category: { id: number; name: string; type: string } }>(`businesses/${businessId}/money/income-categories/${categoryId}/`, 'PATCH', { name }, token),
   contacts: (token: string, businessId: number, page = 1, search = '', role: 'all' | 'customer' | 'supplier' = 'all') =>
     request<{ contacts: Contact[]; next_page: number | null }>(`businesses/${businessId}/contacts/?page=${page}&search=${encodeURIComponent(search)}&role=${role}`, 'GET', undefined, token),
   createContact: (token: string, businessId: number, data: { name?: string; phone?: string; customer_type?: 'regular' | 'wholesale'; address?: string; district?: string; area?: string; notes?: string; is_customer: boolean; is_supplier: boolean }) =>

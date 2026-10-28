@@ -13,7 +13,7 @@ from accounts.views import body, current_member, current_session, error
 
 from .models import Contact, ExpenseCategory, IncomeCategory, JournalEntry, JournalLine, LedgerAccount, MoneyAccount, MoneyTransaction, normalize_customer_phone
 from .services import (AccountingError, balance, command_uuid, contact_position,
-                       create_money_account, money_operation, create_financial_category,
+                       create_money_account, money_operation, create_financial_category, rename_income_category,
                        reverse, setup_business, ensure_party_accounts)
 from .formatting import decimal_text
 from stockkeeper.services import business_today
@@ -344,7 +344,11 @@ def financial_categories(request, business_id, category_type):
             return JsonResponse({'category': {'id': item.pk, 'name': item.name, 'type': category_type}}, status=201)
         except (ValueError, ValidationError, AccountingError) as exc:
             return error('invalid_input', str(exc))
-    return JsonResponse({'categories': [{'id': item.pk, 'name': item.name, 'type': category_type} for item in model.objects.filter(business_id=business_id).order_by('name')]})
+    return JsonResponse({'categories': [
+        {'id': item.pk, 'name': item.name, 'type': category_type,
+         'can_edit': category_type == 'income' and item.name.casefold() != 'sales'
+         and item.ledger_account.code != 'MISC_INCOME'}
+        for item in model.objects.filter(business_id=business_id).select_related('ledger_account').order_by('name')]})
 
 
 @csrf_exempt
@@ -355,3 +359,19 @@ def expense_categories(request, business_id):
 @csrf_exempt
 def income_categories(request, business_id):
     return financial_categories(request, business_id, 'income')
+
+
+@csrf_exempt
+def income_category_detail(request, business_id, category_id):
+    if request.method != 'PATCH':
+        return error('method_not_allowed', 'Use PATCH.', 405)
+    member, problem = owner(request, business_id)
+    if problem:
+        return problem
+    try:
+        data = body(request)
+        item = rename_income_category(member.business, current_session(request).user,
+                                      category_id, data.get('name'))
+        return JsonResponse({'category': {'id': item.pk, 'name': item.name, 'type': 'income'}})
+    except (ValueError, ValidationError, AccountingError) as exc:
+        return error('invalid_input', str(exc))

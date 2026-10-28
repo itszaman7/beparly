@@ -6,6 +6,7 @@ import { useKeyboardVisible } from '@/hooks/use-keyboard-visible';
 
 import { AppSymbol, type AppSymbolName } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { DateField } from '@/components/date-field';
 import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { BarcodeScanner } from '@/features/sales/barcode-scanner';
 import { palette, spacing } from '@/constants/design-system';
@@ -50,7 +51,8 @@ export default function NewSale() {
   const [cart, setCart] = useState<Record<string, number>>({});
   const [customerId, setCustomerId] = useState('');
   const [locationId, setLocationId] = useState<number | null>(null);
-  const [saleLocationId, setSaleLocationId] = useState<number | null>(null);
+  const locationRef = useRef(locationId);
+  const catalogRequest = useRef(0);
   const [accountId, setAccountId] = useState('');
   const tier: 'retail' | 'wholesale' = mode === 'quick' ? 'retail' : 'wholesale';
   const [paymentMode, setPaymentMode] = useState<'full' | 'partial' | 'due' | ''>('');
@@ -75,12 +77,11 @@ export default function NewSale() {
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [query, setQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
-  const [stockFilter, setStockFilter] = useState<'all' | 'in_stock' | 'out_of_stock'>('all');
   const [sort, setSort] = useState<'name' | 'price_asc' | 'price_desc'>('name');
-  const [filterOpen, setFilterOpen] = useState(false);
   const [showLocationPicker, setShowLocationPicker] = useState(false);
   const [error, setError] = useState('');
   const [catalogLoading, setCatalogLoading] = useState(true);
+  const [catalogRefresh, setCatalogRefresh] = useState(0);
   const [saving, setSaving] = useState(false);
   const [pending, setPending] = useState<CheckoutCommand | null>(null);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
@@ -173,45 +174,68 @@ export default function NewSale() {
 
   const refreshChoices = useCallback(async () => {
     if (!session || !businessId) return;
-    setCatalogLoading(true);
     try {
-      const [productResult, options, locationResult, categoryResult] = await Promise.all([api.products(session.token, businessId, { sort }), api.salesOptions(session.token, businessId), api.locations(session.token, businessId), api.categories(session.token, businessId)]);
-      setProducts(productResult.products.filter((item) => item.is_active));
-      setCatalogNextPage(productResult.next_page);
+      const [options, locationResult, categoryResult] = await Promise.all([api.salesOptions(session.token, businessId), api.locations(session.token, businessId), api.categories(session.token, businessId)]);
       setContacts(options.contacts);
-      setLocations(locationResult.locations.filter((item) => item.is_active));
-      setLocationId((current) => locationResult.locations.some((item) => item.is_active && item.id === current) ? current : locationResult.locations.find((item) => item.is_active && item.is_default)?.id ?? locationResult.locations.find((item) => item.is_active)?.id ?? null);
+      const activeLocations = locationResult.locations.filter((item) => item.is_active);
+      setLocations(activeLocations);
+      const nextLocationId = activeLocations.some((item) => item.id === locationRef.current) ? locationRef.current : activeLocations.find((item) => item.is_default)?.id ?? activeLocations[0]?.id ?? null;
+      if (nextLocationId !== locationRef.current) {
+        catalogRequest.current += 1;
+        setCart({}); setPinnedItems([]); setScannedItems([]);
+        setProducts([]); setSearchProducts([]); setCatalogLoading(true);
+      }
+      locationRef.current = nextLocationId;
+      setLocationId(nextLocationId);
       setAccounts(options.accounts.filter((item) => item.is_active));
       setAccountId((current) => options.accounts.some((item) => item.is_active && item.id === current) ? current : options.accounts.find((item) => item.is_active && item.is_default)?.id || options.accounts.find((item) => item.is_active)?.id || '');
       setCatalogCategories(categoryResult.categories.filter((category) => category.is_active));
+      setCatalogRefresh((current) => current + 1);
       setError('');
     } catch (problem) { setError(problem instanceof Error ? problem.message : 'Could not load sale options.'); }
-    finally { setCatalogLoading(false); }
-  }, [session, businessId, sort]);
+  }, [session, businessId]);
   useEffect(() => { const timeout = setTimeout(() => { void refreshChoices(); }, 0); return () => clearTimeout(timeout); }, [refreshChoices]);
 
   useEffect(() => {
-    if (!session || !businessId || !query.trim()) return;
+    const requestId = ++catalogRequest.current;
+    const timeout = setTimeout(() => {
+      setProducts([]); setSearchProducts([]); setCatalogNextPage(null); setSearchNextPage(null);
+      if (!session || !businessId || !locationId) { setCatalogLoading(false); return; }
+      setCatalogLoading(true);
+      void api.products(session.token, businessId, { locationId, stock: 'in_stock', sort }).then((result) => {
+        if (catalogRequest.current !== requestId) return;
+        setProducts(result.products.filter((item) => item.is_active));
+        setCatalogNextPage(result.next_page);
+        setError('');
+      }).catch((problem) => { if (catalogRequest.current === requestId) setError(problem instanceof Error ? problem.message : 'Could not load products for this location.'); })
+        .finally(() => { if (catalogRequest.current === requestId) setCatalogLoading(false); });
+    }, 0);
+    return () => clearTimeout(timeout);
+  }, [session, businessId, locationId, sort, catalogRefresh]);
+
+  useEffect(() => {
+    if (!session || !businessId || !locationId || !query.trim()) return;
     let active = true;
     const timeout = setTimeout(() => {
-      void api.products(session.token, businessId, { search: query.trim(), sort }).then(result => {
-        if (!active) return;
+      void api.products(session.token, businessId, { locationId, stock: 'in_stock', search: query.trim(), sort }).then(result => {
+        if (!active || locationRef.current !== locationId) return;
         setSearchProducts(result.products.filter(item => item.is_active));
         setSearchNextPage(result.next_page);
         setSearchTerm(query.trim());
       }).catch(problem => { if (active) setError(problem instanceof Error ? problem.message : 'Product search failed.'); });
     }, 250);
     return () => { active = false; clearTimeout(timeout); };
-  }, [session, businessId, query, sort]);
+  }, [session, businessId, locationId, query, sort]);
 
   async function loadMoreProducts() {
-    if (!session || !businessId || loadingMore) return;
+    if (!session || !businessId || !locationId || loadingMore) return;
     const searching = !!query.trim();
     const page = searching ? (searchTerm === query.trim() ? searchNextPage : null) : catalogNextPage;
     if (!page) return;
     setLoadingMore(true);
     try {
-      const result = await api.products(session.token, businessId, { page, search: searching ? query.trim() : '', sort });
+      const result = await api.products(session.token, businessId, { locationId, stock: 'in_stock', page, search: searching ? query.trim() : '', sort });
+      if (locationRef.current !== locationId) return;
       const merge = (old: Product[]) => [...old, ...result.products.filter(item => !old.some(existing => existing.id === item.id))];
       if (searching) { setSearchProducts(merge); setSearchNextPage(result.next_page); }
       else { setProducts(merge); setCatalogNextPage(result.next_page); }
@@ -234,7 +258,7 @@ export default function NewSale() {
     const matchesSearch = `${product.name} ${variant?.label ?? ''} ${variant?.sku ?? product.sku}`.toLowerCase().includes(query.toLowerCase());
     const hasTierPrice = salePrice(item, tier) != null;
     const stock = Number(variant?.sellable_stock ?? product.sellable_stock ?? (product.out_of_stock ? 0 : 1));
-    return matchesSearch && hasTierPrice && (categoryFilter === 'all' || product.category === categoryFilter) && (stockFilter === 'all' || (stockFilter === 'in_stock' ? stock > 0 : stock <= 0));
+    return matchesSearch && hasTierPrice && stock > 0 && (categoryFilter === 'all' || product.category === categoryFilter);
   }).sort((a, b) => {
     if (sort === 'name') return `${a.product.name}${a.variant?.label ?? ''}`.localeCompare(`${b.product.name}${b.variant?.label ?? ''}`);
     const price = (item: CatalogItem) => Number(sort === 'price_asc' || sort === 'price_desc' ? salePrice(item, tier) : 0);
@@ -249,7 +273,7 @@ export default function NewSale() {
   const cartCount = Object.values(cart).reduce((sum, quantity) => sum + quantity, 0);
   const selectedCustomer = contacts.find((contact) => contact.id === customerId);
   const selectedLocation = locations.find((location) => location.id === locationId);
-  const effectiveSaleLocation = locations.find((location) => location.id === (saleLocationId ?? locationId));
+  const effectiveSaleLocation = selectedLocation;
   const selectedAccount = accounts.find((account) => account.id === accountId);
 
   function changeQuantity(productId: string, delta: number) {
@@ -267,27 +291,31 @@ export default function NewSale() {
   function scanBarcode(rawCode: string) {
     const code = rawCode.trim();
     setScanValue('');
-    if (!code || !session || !businessId) return;
+    if (!code || !session || !businessId || !locationId) return;
+    const scannedLocationId = locationId;
     scanSerial.current = scanSerial.current.catch(() => {}).then(async () => {
       setScanBusy(true); setError('');
       try {
-        const { target } = await api.barcodeLookup(session.token, businessId, code);
+        const { target } = await api.barcodeLookup(session.token, businessId, code, scannedLocationId);
+        if (locationRef.current !== scannedLocationId) return;
         const key = target.unit_id ? `${target.product_id}:${target.variant_id}:${target.unit_id}` :
           target.product_type === 'simple' ? target.product_id : `${target.product_id}:${target.variant_id}`;
         let item = catalogItems.find(row => row.key === key);
         if (!item) {
           const detail = await api.product(session.token, businessId, target.product_id);
+          if (locationRef.current !== scannedLocationId) return;
           const product = { ...detail.product, sellable_stock: target.sellable_stock };
           const variant = target.product_type === 'variant'
             ? (detail.variants?.find(row => row.id === target.variant_id) ??
               (await api.variant(session.token, businessId, target.product_id, target.variant_id)).variant) : undefined;
+          if (locationRef.current !== scannedLocationId) return;
           item = { key, product, ...(variant ? { variant: { ...variant, sellable_stock: target.sellable_stock } } : {}),
             ...(target.unit_id ? { unitId: target.unit_id, unitName: target.unit_name,
               retailPrice: target.retail_price, wholesalePrice: target.wholesale_price } : {}) };
           setScannedItems(current => current.some(row => row.key === key) ? current : [...current, item!]);
           setPinnedItems(current => current.some(row => row.key === key) ? current : [...current, item!]);
         }
-        if (Number(target.sellable_stock) <= 0) { setError(`${target.product_name} is out of stock.`); return; }
+        if (Number(target.sellable_stock) <= 0) { setError(`${target.product_name} is out of stock at this location.`); return; }
         if (salePrice(item, tier) == null) { setError(`Add a ${tier} price for ${target.product_name}.`); return; }
         changeQuantity(key, 1);
       } catch (problem) { setError(problem instanceof Error ? problem.message : 'Barcode lookup failed.'); }
@@ -305,17 +333,17 @@ export default function NewSale() {
     if (deliveryFee && (!/^\d+(?:\.\d{1,2})?$/.test(deliveryFee) || Number(deliveryFee) < 0)) { setError('Enter a valid delivery charge with up to two decimal places.'); return; }
     if (Number(deliveryFee || 0) > 0 && !deliveryAddress.trim()) { setError('Add the delivery address for this charge.'); return; }
     if (paymentMode !== 'full' && !customerId) { setError('Choose a registered customer for partial payment or due.'); return; }
-    if (Number(paidAmount) < total && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) { setError('Enter a due date as YYYY-MM-DD.'); return; }
+    if (Number(paidAmount) < total && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) { setError('Choose a due date.'); return; }
     setSaving(true); setError('');
     try {
       const payload: CheckoutPayload = {
-        mode, price_tier: tier, location_id: saleLocationId ?? locationId,
+        mode, price_tier: tier, location_id: locationId,
         ...(customerId ? { customer_id: customerId } : {}), paid: paidAmount,
         ...(Number(paidAmount) < total ? { due_date: dueDate } : {}),
         ...(Number(paidAmount) > 0 ? { account_id: accountId } : {}),
         discount: discount || '0', discount_type: discountType,
         delivery_fee: deliveryFee.trim() || '0', delivery_address: deliveryAddress.trim(),
-        billing_address: { text: billingAddress, location_id: String(saleLocationId ?? locationId) },
+        billing_address: { text: billingAddress, location_id: String(locationId) },
         ...(saleSource.trim() ? { source: saleSource.trim() } : {}), ...(saleNotes.trim() ? { notes: saleNotes.trim() } : {}),
         lines: catalogItems.filter((item) => cart[item.key] > 0).map((item) => ({ product_id: item.product.id, ...(item.variant ? { variant_id: item.variant.id } : {}), ...(item.unitId ? { unit_id: item.unitId } : {}), quantity: String(cart[item.key]) })),
       };
@@ -388,7 +416,7 @@ export default function NewSale() {
           <View style={styles.locationCopy}><Text style={styles.locationLabel}>SELLING FROM</Text><Text style={styles.locationName}>{selectedLocation?.name ?? 'Select shop'}</Text></View>
           <AppSymbol name={showLocationPicker ? 'up' : 'down'} size={18} color={palette.primaryDeep} />
         </Pressable>
-        {showLocationPicker ? <View style={styles.locationMenu}>{locations.map((location) => <Pressable key={location.id} onPress={() => { setLocationId(location.id); setShowLocationPicker(false); }} style={styles.locationOption}><View style={styles.locationOptionCopy}><Text style={styles.locationOptionName}>{location.name}</Text><Text style={styles.locationOptionMeta}>{location.type === 'warehouse' ? 'Warehouse' : 'Shop'}{location.is_default ? ' · Default' : ''}</Text></View>{location.id === locationId ? <AppSymbol name="activate" size={18} color={palette.primaryDeep} /> : null}</Pressable>)}</View> : null}
+        {showLocationPicker ? <View style={styles.locationMenu}>{locations.map((location) => <Pressable key={location.id} onPress={() => { if (location.id !== locationId) { locationRef.current = location.id; catalogRequest.current += 1; setLocationId(location.id); setCart({}); setPinnedItems([]); setScannedItems([]); setProducts([]); setSearchProducts([]); setCatalogLoading(true); setError(''); } setShowLocationPicker(false); }} style={styles.locationOption}><View style={styles.locationOptionCopy}><Text style={styles.locationOptionName}>{location.name}</Text><Text style={styles.locationOptionMeta}>{location.type === 'warehouse' ? 'Warehouse' : 'Shop'}{location.is_default ? ' · Default' : ''}</Text></View>{location.id === locationId ? <AppSymbol name="activate" size={18} color={palette.primaryDeep} /> : null}</Pressable>)}</View> : null}
         <View style={styles.searchBox}>
           <AppSymbol name="products" size={18} color={palette.muted} />
           <TextInput value={query} onChangeText={setQuery} placeholder="Search products or SKU" placeholderTextColor={palette.muted} style={styles.searchInput} />
@@ -402,8 +430,7 @@ export default function NewSale() {
           {scanBusy ? <ActivityIndicator color={palette.primaryDeep} /> : null}
           <Pressable accessibilityRole="button" accessibilityLabel="Open camera scanner" onPress={() => setCameraOpen(true)}><AppSymbol name="barcode" size={22} color={palette.primaryDeep} /></Pressable>
         </View>
-        <View style={styles.controlRow}><Pressable onPress={() => setFilterOpen((open) => !open)} style={[styles.controlButton, stockFilter !== 'all' && styles.controlButtonActive]}><AppSymbol name="adjustment" size={16} color={palette.primaryDeep} /><Text style={styles.controlText}>{stockFilter === 'all' ? 'Filters' : stockFilter === 'in_stock' ? 'In stock' : 'Out of stock'}</Text></Pressable><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sortRow}><Chip label="Name A–Z" selected={sort === 'name'} onPress={() => setSort('name')} /><Chip label="Price low" selected={sort === 'price_asc'} onPress={() => setSort('price_asc')} /><Chip label="Price high" selected={sort === 'price_desc'} onPress={() => setSort('price_desc')} /></ScrollView></View>
-        {filterOpen ? <View style={styles.filterPanel}><Text style={styles.filterTitle}>Stock availability</Text><View style={styles.inlineChips}><Chip label="All stock" selected={stockFilter === 'all'} onPress={() => { setStockFilter('all'); setFilterOpen(false); }} /><Chip label="In stock" selected={stockFilter === 'in_stock'} onPress={() => { setStockFilter('in_stock'); setFilterOpen(false); }} /><Chip label="Out of stock" selected={stockFilter === 'out_of_stock'} onPress={() => { setStockFilter('out_of_stock'); setFilterOpen(false); }} /></View></View> : null}
+        <View style={styles.controlRow}><Text style={styles.controlText}>In stock here</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sortRow}><Chip label="Name A–Z" selected={sort === 'name'} onPress={() => setSort('name')} /><Chip label="Price low" selected={sort === 'price_asc'} onPress={() => setSort('price_asc')} /><Chip label="Price high" selected={sort === 'price_desc'} onPress={() => setSort('price_desc')} /></ScrollView></View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll} contentContainerStyle={styles.categoryRow}>
           <Chip label="All products" selected={categoryFilter === 'all'} onPress={() => setCategoryFilter('all')} />
           {productCategories.map((category) => <Chip key={category.id} label={category.name} selected={categoryFilter === category.id} onPress={() => setCategoryFilter(category.id)} />)}
@@ -434,7 +461,7 @@ export default function NewSale() {
           {(query.trim() ? (searchTerm === query.trim() ? searchNextPage : null) : catalogNextPage) ? <Pressable accessibilityRole="button" disabled={loadingMore} onPress={() => void loadMoreProducts()} style={styles.smallAction}><Text style={styles.smallActionText}>{loadingMore ? 'Loading…' : 'Load more products'}</Text></Pressable> : null}
           {filtered.length === 0 ? <View style={styles.emptyState}>
             {catalogLoading ? <ActivityIndicator color={palette.primaryDeep} /> : <AppSymbol name="products" size={28} color={palette.muted} />}
-            <Text style={styles.muted}>{catalogLoading ? 'Loading products…' : error ? 'Could not load products. Pull down to retry.' : query ? 'No matching products.' : mode === 'manual' && catalogItems.length > 0 && !hasWholesalePricedItems ? 'No products have a wholesale price yet. Set wholesale prices in Products, or make a retail sale.' : mode === 'quick' && catalogItems.length > 0 && !hasRetailPricedItems ? 'No products have a retail price yet. Set retail prices in Products.' : products.length > 0 ? 'No products match these filters.' : 'No saleable products found.'}</Text>
+            <Text style={styles.muted}>{catalogLoading ? 'Loading products…' : error ? 'Could not load products. Pull down to retry.' : query ? 'No matching products at this location.' : mode === 'manual' && catalogItems.length > 0 && !hasWholesalePricedItems ? 'No products here have a wholesale price yet. Set wholesale prices in Products, or make a retail sale.' : mode === 'quick' && catalogItems.length > 0 && !hasRetailPricedItems ? 'No products here have a retail price yet. Set retail prices in Products.' : products.length > 0 ? 'No products match this category.' : selectedLocation ? `No stock available at ${selectedLocation.name}. Transfer or receive stock before selling.` : 'Select a stock location to sell from.'}</Text>
             {!catalogLoading && catalogItems.length > 0 && !(mode === 'manual' ? hasWholesalePricedItems : hasRetailPricedItems) && !query ? <View style={styles.inlineChips}>
               <Pressable onPress={() => { blurWebFocus(); router.push('/products' as Href); }} style={styles.smallAction}><Text style={styles.smallActionText}>Open Products</Text></Pressable>
               {mode === 'manual' ? <Pressable onPress={() => { blurWebFocus(); router.replace('/sales/checkout?mode=quick' as Href); }} style={styles.smallAction}><Text style={styles.smallActionText}>Retail Sale</Text></Pressable> : null}
@@ -494,14 +521,13 @@ export default function NewSale() {
             <Text style={styles.dueText}>Remaining due · ৳{Math.max(0, total - Number(paid || 0)).toFixed(2)}</Text>
           </> : null}
           {paymentMode === 'due' && customerId ? <Text style={styles.dueText}>Full amount due · ৳{total.toFixed(2)}</Text> : null}
-          {paymentMode !== 'full' && paymentMode !== '' ? <View style={{ gap: 7 }}><Text style={styles.fieldLabel}>Due date *</Text><TextInput value={dueDate} onChangeText={setDueDate} placeholder="YYYY-MM-DD" keyboardType="numbers-and-punctuation" style={styles.formInput} accessibilityLabel="Customer due date" /></View> : null}
+          {paymentMode !== 'full' && paymentMode !== '' ? <View style={{ gap: 7 }}><Text style={styles.fieldLabel}>Due date *</Text><DateField label="Customer due date" value={dueDate} onChange={setDueDate} /></View> : null}
           {paymentMode === 'full' || paymentMode === 'partial' ? <>
             <Text style={styles.fieldLabel}>Payment account · {selectedAccount?.name ?? 'Choose account'}</Text>
             {accounts.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.inlineChips}>{accounts.map((account) => <Chip key={account.id} label={account.name} selected={accountId === account.id} onPress={() => setAccountId(account.id)} />)}</ScrollView> : <Text style={styles.muted}>No payment account is set up yet.</Text>}
             <Pressable onPress={() => router.push('/money/accounts' as Href)} style={{ minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 6 }}><AppSymbol name="plus" size={15} color={palette.primaryDeep} /><Text style={styles.changeText}>{accounts.length ? 'Manage payment accounts' : 'Add payment account'}</Text></Pressable>
           </> : null}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 11, padding: 12, backgroundColor: palette.primarySoft, borderWidth: 1, borderColor: palette.border, borderRadius: 15 }}><View style={styles.locationIcon}><AppSymbol name="location" size={17} color={palette.primaryDeep} /></View><View style={styles.customerCopy}><Text style={styles.customerName}>Shop address · {effectiveSaleLocation?.name ?? 'Selected shop'}</Text><Text style={styles.customerHint}>{effectiveSaleLocation?.address || 'Shop address is required'}</Text></View>{effectiveSaleLocation?.address ? <AppSymbol name="activate" size={18} color={palette.primaryDeep} /> : null}</View>
-          <View style={{ gap: 8 }}><Text style={styles.fieldLabel}>Stock location</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.inlineChips}>{locations.map((location) => <Chip key={location.id} label={location.name} selected={(saleLocationId ?? locationId) === location.id} onPress={() => setSaleLocationId(location.id)} />)}</ScrollView></View>
           <View style={{ gap: 8 }}><Text style={styles.fieldLabel}>Sale source <Text style={styles.muted}>(optional)</Text></Text><TextInput value={saleSource} onChangeText={setSaleSource} placeholder="e.g. Facebook, phone, counter" placeholderTextColor={palette.muted} style={styles.formInput} /><Text style={styles.fieldLabel}>Sales notes <Text style={styles.muted}>(optional)</Text></Text><TextInput value={saleNotes} onChangeText={setSaleNotes} placeholder="Add a note for this sale" placeholderTextColor={palette.muted} style={[styles.formInput, { minHeight: 68 }]} multiline /></View>
           {error ? <><Text style={styles.error}>{error}</Text>{error.toLowerCase().includes('income category') ? <Pressable onPress={() => router.push('/money/income-categories' as Href)} style={{ minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 6 }}><AppSymbol name="plus" size={15} color={palette.primaryDeep} /><Text style={styles.changeText}>Set up income category</Text></Pressable> : null}</> : null}
         </RefreshableScrollView>

@@ -109,6 +109,37 @@ def create_financial_category(business, actor, name, category_type):
     return category
 
 
+@transaction.atomic
+def rename_income_category(business, actor, category_id, name):
+    Business.objects.select_for_update().get(pk=business.pk)
+    category = IncomeCategory.objects.select_for_update().select_related('ledger_account').filter(
+        business=business, pk=category_id).first()
+    if not category:
+        raise AccountingError('Income category not found.')
+    if category.name.casefold() == 'sales' or category.ledger_account.code == 'MISC_INCOME':
+        raise AccountingError('This built-in category cannot be renamed.')
+    name = str(name or '').strip()
+    if not name or len(name) > 100:
+        raise AccountingError('Enter a category name up to 100 characters.')
+    if name.casefold() == 'sales':
+        raise AccountingError('Sales is reserved for product sales.')
+    if IncomeCategory.objects.filter(business=business, name__iexact=name).exclude(pk=category.pk).exists():
+        raise AccountingError('A category with this name already exists.')
+    if category.name == name:
+        return category
+    previous = category.name
+    category.name = name
+    category.save(update_fields=['name'])
+    category.ledger_account.name = name
+    category.ledger_account.save(update_fields=['name'])
+    from audit.services import record
+
+    record(business_id=business.pk, actor=actor, entity_type='income_category',
+           entity_id=category.pk, action='updated', subject=name,
+           changes={'name': {'before': previous, 'after': name}})
+    return category
+
+
 def ledger(business, code):
     account = LedgerAccount.objects.filter(business=business, code=code, is_active=True).first()
     if not account:

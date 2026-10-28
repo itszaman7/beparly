@@ -52,6 +52,11 @@ class LocationApiTests(TestCase):
         payload = {'data': json.dumps(data), 'content_type': 'application/json'} if data is not None else {}
         return getattr(self.client, method)(path, **payload, **headers)
 
+    def test_new_default_shop_inherits_business_address(self):
+        business = Business.objects.create(name='Addressed Shop', address='42 Bazaar Road, Dhaka')
+        location = StockLocation.objects.get(business=business, is_default=True)
+        self.assertEqual(location.address, business.address)
+
     def test_default_location_for_each_business_and_list_isolation(self):
         self.assertEqual(StockLocation.objects.filter(business=self.business, is_default=True).count(), 1)
         self.assertEqual(StockLocation.objects.filter(business=self.other_business, is_default=True).count(), 1)

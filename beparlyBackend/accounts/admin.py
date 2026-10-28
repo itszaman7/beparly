@@ -63,6 +63,18 @@ class BusinessOwnerForm(forms.ModelForm):
         model = Business
         fields = '__all__'
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.instance.pk:
+            self.fields['address'].required = True
+            self.fields['address'].help_text = 'The default Main Shop will use this address.'
+
+    def clean_address(self):
+        address = self.cleaned_data['address'].strip()
+        if not self.instance.pk and not address:
+            raise forms.ValidationError('Enter the business address for the default shop.')
+        return address
+
     def clean(self):
         data = super().clean()
         if self.instance.pk:

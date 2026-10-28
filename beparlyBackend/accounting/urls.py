@@ -22,6 +22,7 @@ urlpatterns = [
     path('businesses/<int:business_id>/money/transactions/<uuid:transaction_id>/reverse/', views.reverse_transaction),
     path('businesses/<int:business_id>/money/expense-categories/', views.expense_categories),
     path('businesses/<int:business_id>/money/income-categories/', views.income_categories),
+    path('businesses/<int:business_id>/money/income-categories/<int:category_id>/', views.income_category_detail),
     path('businesses/<int:business_id>/contacts/', views.contacts),
     path('businesses/<int:business_id>/contacts/<uuid:contact_id>/', views.contact_detail),
 ]

@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppText as Text } from '@/components/app-text';
 import { AppSymbol } from '@/components/app-symbol';
+import { DateField } from '@/components/date-field';
 import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { palette, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
@@ -265,7 +266,13 @@ export function QuotationForm({ id, initialTier, draftKey }: { id?: string; init
     {step === 'catalog' && <Pressable style={styles.primary} onPress={() => input.lines.length ? (setStep('review'), setError('')) : setError('Add at least one product to continue.')}><Text style={styles.primaryText}>Review quotation ({itemCount} {itemCount === 1 ? 'item' : 'items'})</Text></Pressable>}
     {step === 'review' && <><View style={styles.row}><View style={styles.half}><Field label="Discount (৳)" value={input.discount} onChangeText={discount => change({ discount })} keyboardType="decimal-pad" /></View><View style={styles.half}><Field label="Delivery (৳)" value={input.delivery_fee} onChangeText={delivery_fee => change({ delivery_fee })} keyboardType="decimal-pad" /></View></View>
     <Field label="Delivery address" value={input.delivery_address ?? ''} onChangeText={delivery_address => change({ delivery_address })} />
-    <Field label="Valid until (YYYY-MM-DD, optional)" value={input.valid_until ?? ''} onChangeText={valid_until => change({ valid_until })} />
+    <View><Text style={styles.label}>Valid until (optional)</Text>
+      <DateField label="Quotation valid until" value={input.valid_until ?? ''} onChange={valid_until => change({ valid_until })} />
+      {!!input.valid_until && <Pressable accessibilityRole="button" accessibilityLabel="Clear quotation valid until date"
+        onPress={() => change({ valid_until: '' })} style={{ minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start' }}>
+        <Text style={styles.link}>Clear date</Text>
+      </Pressable>}
+    </View>
     <Field label="Notes" value={input.notes ?? ''} onChangeText={notes => change({ notes })} />
     {!!error && <Text style={styles.danger}>{error}</Text>}
     {draft?.state === 'conflict' && draft.serverId && <Pressable style={styles.chip} onPress={() => void saveConflictAsCopy()} disabled={saving}><Text style={styles.link}>Save my edits as a new draft</Text></Pressable>}

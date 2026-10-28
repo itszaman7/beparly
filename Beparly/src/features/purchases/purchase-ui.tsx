@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol, type AppSymbolName } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { DateField } from '@/components/date-field';
 import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { RecordAttachments } from '@/features/attachments/record-attachments';
 import { PartyAvatar, PartyButton, PartyInfo, PartyMetric } from '@/features/contacts/party-ui';
@@ -343,7 +344,7 @@ export function PurchaseDetailScreen() {
   useFocusEffect(useCallback(() => { void load(); }, [load]));
   async function complete() {
     if (!session?.account || !purchase) return;
-    if (Number(paid) < Number(purchase.total) && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) { setError('Enter a due date as YYYY-MM-DD.'); return; }
+    if (Number(paid) < Number(purchase.total) && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) { setError('Choose a due date.'); return; }
     setBusy(true); setError('');
     try {
       const result = await api.completePurchase(session.token, session.account.business.id, purchase.id,
@@ -414,7 +415,7 @@ export function PurchaseDetailScreen() {
         <Text style={styles.muted}>Total ৳{purchase.total} · Received at {purchase.location_name}</Text>
         <Action label="Edit draft" icon="edit" secondary onPress={() => router.push(`/purchases/${purchase.id}/edit` as Href)} />
         <Field label="Pay now ৳" value={paid} onChangeText={setPaid} keyboardType="decimal-pad" />
-        {Number(paid) < Number(purchase.total) && <Field label="Due date * (YYYY-MM-DD)" value={dueDate} onChangeText={setDueDate} keyboardType="default" />}
+        {Number(paid) < Number(purchase.total) && <View style={styles.field}><Text style={styles.label}>Due date *</Text><DateField label="Supplier due date" value={dueDate} onChange={setDueDate} /></View>}
         {Number(paid) > 0 && <View style={styles.row}>{activeAccounts.map(item => <Choice key={item.id} label={item.name} selected={accountId === item.id} onPress={() => setAccountId(item.id)} />)}</View>}
         <Text style={styles.muted}>Completing confirms the purchase and updates stock and supplier balance.</Text>
         <Action label={busy ? 'Completing…' : 'Complete purchase'} icon="default" disabled={busy} onPress={() => void complete()} />

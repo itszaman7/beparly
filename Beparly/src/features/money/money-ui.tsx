@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Input, Text, XStack, YStack } from 'tamagui';
 
 import { AppSymbol } from '@/components/app-symbol';
+import { DateField } from '@/components/date-field';
 import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { elevation, palette } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
@@ -58,7 +59,7 @@ function Choice({ selected, label, onPress }: { selected: boolean; label: string
 }
 
 function ErrorText({ message }: { message: string }) {
-  return message ? <Text accessibilityRole="alert" color="#A62925" fontSize={13}>{message}</Text> : null;
+  return message ? <Text role="alert" color="#A62925" fontSize={13}>{message}</Text> : null;
 }
 
 function useBusiness() {
@@ -287,7 +288,8 @@ export function MoneyForm() {
       <Text color={ink}>Dr {selectedMoneyAccount?.name ?? 'Choose receiving account'} {bdt(amount || '0')}</Text>
       <Text color={ink}>Cr {selectedIncomeAccount?.name ?? 'Choose income account'} {bdt(amount || '0')}</Text>
     </Card>}
-    {kind === 'expense' && <Field label="Expense date (YYYY-MM-DD)" value={eventDate} onChangeText={(value) => changed(() => setEventDate(value))} />}
+    {kind === 'expense' && <YStack gap={7}><Text color={ink} fontWeight="700">Expense date</Text>
+      <DateField label="Expense date" value={eventDate} onChange={(value) => changed(() => setEventDate(value))} /></YStack>}
     <Field label="Note (optional)" value={note} onChangeText={(value) => changed(() => setNote(value))} />
     {mode === 'transfer' && reviewing && <Card><Text color={ink} fontWeight="700">Review transfer</Text><Text color={ink}>{accounts.find((item) => item.id === accountId)?.name} → {accounts.find((item) => item.id === destinationId)?.name}</Text><Text color={ink}>{bdt(amount || '0')}</Text></Card>}
     <ErrorText message={error} /><Button backgroundColor={green} height={54} disabled={busy || kind === 'other_income' && (!selectedMoneyAccount || !selectedIncomeAccount)} onPress={() => mode === 'transfer' && !reviewing ? setReviewing(true) : void submit()}><Text color="white" fontWeight="700">{busy ? 'Saving…' : mode === 'transfer' && !reviewing ? 'Review transfer' : 'Confirm'}</Text></Button>

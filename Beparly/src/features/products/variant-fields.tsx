@@ -4,6 +4,7 @@ import { toast } from 'tamagui/toast';
 
 import { AppSymbol } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { DateField } from '@/components/date-field';
 import { palette, radius, spacing } from '@/constants/design-system';
 import { validDecimal } from '@/features/products/product-rules';
 import { StockUnitPicker, TrackingPicker } from '@/features/products/product-options';
@@ -181,7 +182,8 @@ export function VariantFields({ attributes, setAttributes, drafts, setDrafts, lo
         <Pressable key={location.id} accessibilityRole="button" accessibilityState={{ selected: (draft?.locationId ?? defaultLocationId) === location.id }}
           onPress={() => edit({ locationId: location.id })} style={[styles.choice, (draft?.locationId ?? defaultLocationId) === location.id && styles.selected]}><Text style={styles.choiceText}>{location.name}</Text></Pressable>)}</View></>}
       {Number(draft?.opening) > 0 && draft?.tracking !== 'simple' && <Field label="Opening batch identifier *" value={draft?.lot ?? ''} onChange={(lot) => edit({ lot })} />}
-      {Number(draft?.opening) > 0 && draft?.tracking === 'expiry' && <Field label="Expiry date YYYY-MM-DD *" value={draft?.expiry ?? ''} onChange={(expiry) => edit({ expiry })} />}
+      {Number(draft?.opening) > 0 && draft?.tracking === 'expiry' && <View style={styles.field}><Text style={styles.label}>Expiry date *</Text>
+        <DateField label="Opening batch expiry date" value={draft?.expiry ?? ''} onChange={(expiry) => edit({ expiry })} /></View>}
       <Pressable accessibilityRole="button" accessibilityState={{ expanded: moreOpen }} onPress={() => setMoreOpen(!moreOpen)} style={styles.moreButton}>
         <AppSymbol name="category" size={20} color={palette.primary} /><Text style={styles.moreText}>More options</Text>
         <AppSymbol name={moreOpen ? 'up' : 'down'} size={20} color={palette.primary} />

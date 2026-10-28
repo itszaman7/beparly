@@ -6,8 +6,9 @@ import { Button, Input, Text, XStack, YStack } from 'tamagui';
 
 import { AppSymbol } from '@/components/app-symbol';
 import { RecordAttachments, uploadPendingAttachments } from '@/features/attachments/record-attachments';
-import { elevation, palette } from '@/constants/design-system';
+import { palette } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
+import { useKeyboardVisible } from '@/hooks/use-keyboard-visible';
 import { formatBdt } from '@/features/products/product-rules';
 import { api, type MoneyAccount, type PendingAttachment } from '@/services/api';
 import { blurWebFocus } from '@/utils/web-focus';
@@ -34,6 +35,7 @@ function ChoiceField({ label, value, onPress }: { label: string; value: string; 
 }
 
 export function ExpenseScreen() {
+  const keyboardVisible = useKeyboardVisible();
   const { session } = useAuth();
   const token = session?.token;
   const businessId = session?.account?.business.id;
@@ -44,6 +46,7 @@ export function ExpenseScreen() {
     return `${value('year')}-${value('month')}-${value('day')}`;
   };
   const [amount, setAmount] = useState('');
+  const [amountFocused, setAmountFocused] = useState(false);
   const [categories, setCategories] = useState<Category[]>([]);
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
   const [categoryId, setCategoryId] = useState<number | null>(null);
@@ -147,14 +150,17 @@ export function ExpenseScreen() {
     </XStack>
     <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={{ padding: 18, paddingBottom: 40, alignItems: 'center' }} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefreshCount((count) => count + 1)} />}>
       <YStack width="100%" maxWidth={560} gap={18}>
-        {postedId ? <Text color={palette.ink}>Expense saved. Retry the document upload below.</Text> : <YStack backgroundColor={palette.surface} borderWidth={1} borderColor={palette.border} borderRadius={20} padding={20} gap={12} {...elevation.card}>
-          <Text color={palette.secondary} fontSize={13} fontWeight="700">Amount spent</Text>
-          <XStack alignItems="center" gap={9}>
-            <Text color={palette.primaryDeep} fontSize={34} fontWeight="800">৳</Text>
+        {postedId ? <Text color={palette.ink}>Expense saved. Retry the document upload below.</Text> : <YStack gap={8}>
+          <Text color={palette.ink} fontSize={15} fontWeight="800">Amount spent (৳) *</Text>
+          <XStack alignItems="center" gap={10} height={66} paddingHorizontal={16} borderWidth={2}
+            borderColor={amountFocused ? palette.primaryDeep : palette.border} borderRadius={14} backgroundColor={palette.surface}>
+            <Text color={palette.primaryDeep} fontSize={24} fontWeight="800">৳</Text>
             <Input flex={1} value={amount} onChangeText={(value) => change(() => setAmount(value))} keyboardType="decimal-pad"
-              placeholder="0.00" aria-label="Expense amount" backgroundColor={palette.surface} borderWidth={0}
-              color={palette.ink} fontSize={34} fontWeight="800" height={58} style={{ paddingHorizontal: 0 }} />
+              onFocus={() => setAmountFocused(true)} onBlur={() => setAmountFocused(false)}
+              placeholder="Enter amount, e.g. 500.00" aria-label="Amount spent in taka" backgroundColor="transparent" borderWidth={0}
+              color={palette.ink} fontSize={18} height={56} style={{ paddingHorizontal: 0 }} />
           </XStack>
+          <Text color={palette.secondary} fontSize={12}>Tap the box to enter how much you spent.</Text>
         </YStack>}
         {!postedId && (loading ? <ActivityIndicator color={palette.primaryDeep} /> : <>
           <ChoiceField label="Category" value={selectedCategory?.name ?? 'Choose a category'} onPress={() => openPicker('category')} />
@@ -176,18 +182,18 @@ export function ExpenseScreen() {
             <RecordAttachments kind="expense" pending={attachments} onChange={setAttachments} showUploadButton={false} />
           </YStack>}
         </>)}
-        {postedId && <RecordAttachments kind="expense" pending={attachments} onChange={setAttachments}
+        {Boolean(postedId) && <RecordAttachments kind="expense" pending={attachments} onChange={setAttachments}
           recordId={postedId} showUploadButton={false} />}
       </YStack>
     </ScrollView>
-    <YStack backgroundColor={palette.surface} borderTopWidth={1} borderColor={palette.border} paddingHorizontal={18} paddingTop={12} paddingBottom={10} alignItems="center">
+    {!keyboardVisible && <YStack backgroundColor={palette.surface} borderTopWidth={1} borderColor={palette.border} paddingHorizontal={18} paddingTop={12} paddingBottom={10} alignItems="center">
       <YStack width="100%" maxWidth={560} gap={8}>
-        {error ? <Text accessibilityRole="alert" color="#A62925" fontSize={13}>{error}</Text> : null}
+        {error ? <Text role="alert" color="#A62925" fontSize={13}>{error}</Text> : null}
         <Button height={54} backgroundColor={palette.primaryDeep} borderRadius={15} disabled={(!postedId && !canSave) || busy || loading} onPress={() => void save()}>
           <Text color="white" fontWeight="800" fontSize={16}>{busy ? 'Saving…' : postedId ? 'Finish document upload' : 'Save Expense'}</Text>
         </Button>
       </YStack>
-    </YStack>
+    </YStack>}
     <Modal visible={picker !== null} transparent animationType="fade" onRequestClose={closePicker}>
       <View style={{ flex: 1, justifyContent: 'flex-end' }}>
         <Pressable accessibilityRole="button" accessibilityLabel="Dismiss choices" onPress={closePicker}
@@ -218,7 +224,7 @@ export function ExpenseScreen() {
                   placeholder="Opening balance (optional)" aria-label="Account opening balance" keyboardType="decimal-pad"
                   height={52} backgroundColor={palette.surface} borderColor={palette.border} color={palette.ink} />
               </>}
-              {sheetError ? <Text accessibilityRole="alert" color="#A62925">{sheetError}</Text> : null}
+              {sheetError ? <Text role="alert" color="#A62925">{sheetError}</Text> : null}
               <Button height={52} backgroundColor={palette.primaryDeep} disabled={creating || !newName.trim()} onPress={() => void createChoice()}>
                 <Text color="white" fontWeight="800">{creating ? 'Saving…' : 'Save and select'}</Text></Button>
               <Button height={44} backgroundColor={palette.background} disabled={creating} onPress={() => setAdding(false)}>

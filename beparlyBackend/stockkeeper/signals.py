@@ -14,9 +14,10 @@ def create_default_location(sender, instance, created, **kwargs):
             business=instance,
             name='Main Shop',
             type=StockLocation.SHOP,
+            address=instance.address,
             is_default=True,
         )
         record(business_id=instance.pk, actor=None, entity_type='location',
                entity_id=location.pk, subject=location.name, location_id=location.pk, action='created',
-               changes={'after': {'name': location.name, 'type': location.type,
+               changes={'after': {'name': location.name, 'type': location.type, 'address': location.address,
                                   'is_default': True, 'is_active': True}})

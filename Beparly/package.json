@@ -30,6 +30,7 @@
     "expo-symbols": "~58.0.4",
     "expo-system-ui": "~58.0.6",
     "expo-web-browser": "~58.0.6",
+    "lucide-react-native": "^1.63.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-native": "0.88.0",
@@ -37,6 +38,7 @@
     "react-native-reanimated": "4.7.1",
     "react-native-safe-area-context": "~5.10.1",
     "react-native-screens": "~4.30.0",
+    "react-native-svg": "15.16.0",
     "react-native-web": "~0.21.4",
     "react-native-worklets": "0.13.0",
     "tamagui": "^3.0.18"
@@ -56,7 +58,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "test:products": "node --test src/features/products/product-rules.test.js src/features/products/stock-rules.test.js",
-    "test:checkout": "node --test src/features/sales/checkout-command.test.mjs src/features/sales/checkout-command-store.web.test.mjs"
+    "test:checkout": "node --test src/features/sales/checkout-command.test.mjs src/features/sales/checkout-command-store.web.test.mjs",
+    "test:sales-list": "node --test src/features/sales/sales-list-rules.test.mjs"
   },
   "private": true
 }

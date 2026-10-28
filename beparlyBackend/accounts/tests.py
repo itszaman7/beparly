@@ -296,6 +296,10 @@ class AccountApiTests(TestCase):
         self.assertAlmostEqual(float(box[2]), 101.6 * 72 / 25.4, delta=0.1)
 
 
+@override_settings(STORAGES={
+    'default': {'BACKEND': 'django.core.files.storage.FileSystemStorage'},
+    'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+})
 class AdminRegistrationTests(TestCase):
     def setUp(self):
         self.admin_user = User.objects.create_superuser('01711111111', 'AdminPass#83')
@@ -303,10 +307,11 @@ class AdminRegistrationTests(TestCase):
 
     def test_admin_can_create_business_and_new_owner_together(self):
         from accounting.models import MoneyAccount
+        from audit.models import AuditEvent
         from stockkeeper.models import StockLocation
 
         created = self.client.post('/admin/accounts/business/add/', {
-            'name': 'Pilot Shop', 'new_owner_phone': '+8801812345678',
+            'name': 'Pilot Shop', 'address': '  12 Market Road, Dhaka  ', 'new_owner_phone': '+8801812345678',
             'new_owner_first_name': 'Nadia',
             'new_owner_password1': 'StrongShopPass#83',
             'new_owner_password2': 'StrongShopPass#83',
@@ -314,7 +319,10 @@ class AdminRegistrationTests(TestCase):
         self.assertEqual(created.status_code, 302, created.context['adminform'].form.errors if created.context else None)
         business = Business.objects.get(name='Pilot Shop')
         self.assertTrue(MoneyAccount.objects.filter(business=business, is_default=True).exists())
-        self.assertTrue(StockLocation.objects.filter(business=business, is_default=True).exists())
+        self.assertEqual(business.address, '12 Market Road, Dhaka')
+        self.assertEqual(StockLocation.objects.get(business=business, is_default=True).address, business.address)
+        self.assertEqual(AuditEvent.objects.get(business=business, entity_type='location', action='created')
+                         .changes['after']['address'], business.address)
         user = User.objects.get(phone='01812345678')
         self.assertEqual(user.first_name, 'Nadia')
         self.assertFalse(user.is_staff)
@@ -327,7 +335,7 @@ class AdminRegistrationTests(TestCase):
         self.assertEqual(login.json()['businesses'][0]['name'], 'Pilot Shop')
 
     def test_admin_rejects_invalid_new_owner_without_creating_business(self):
-        data = {'name': 'Invalid Shop', 'new_owner_phone': '01812345678',
+        data = {'name': 'Invalid Shop', 'address': 'Dhaka', 'new_owner_phone': '01812345678',
                 'new_owner_password1': 'weak', 'new_owner_password2': 'weak'}
         response = self.client.post('/admin/accounts/business/add/', data)
         self.assertEqual(response.status_code, 200)
@@ -348,8 +356,23 @@ class AdminRegistrationTests(TestCase):
         self.assertIn('owner', response.context['adminform'].form.errors)
         self.assertFalse(Business.objects.filter(name='Invalid Shop').exists())
 
+    def test_admin_requires_business_address_before_creating_shop(self):
+        from stockkeeper.models import StockLocation
+
+        for address in ('', '   '):
+            with self.subTest(address=address):
+                response = self.client.post('/admin/accounts/business/add/', {
+                    'name': 'No Address Shop', 'address': address,
+                })
+                self.assertEqual(response.status_code, 200)
+                self.assertIn('address', response.context['adminform'].form.errors)
+                self.assertFalse(Business.objects.filter(name='No Address Shop').exists())
+                self.assertFalse(StockLocation.objects.filter(business__name='No Address Shop').exists())
+
     def test_admin_can_save_business_before_assigning_owner(self):
-        response = self.client.post('/admin/accounts/business/add/', {'name': 'Owner Later Shop'})
+        response = self.client.post('/admin/accounts/business/add/', {
+            'name': 'Owner Later Shop', 'address': 'Chattogram',
+        })
         self.assertEqual(response.status_code, 302, response.context['adminform'].form.errors if response.context else None)
         self.assertTrue(Business.objects.filter(name='Owner Later Shop').exists())
         self.assertFalse(BusinessMember.objects.filter(business__name='Owner Later Shop').exists())
@@ -385,7 +408,9 @@ class AdminRegistrationTests(TestCase):
 
     def test_admin_can_assign_existing_user_when_creating_business(self):
         owner = User.objects.create_user('01812345678', password='StrongShopPass#83')
-        created = self.client.post('/admin/accounts/business/add/', {'name': 'Second Shop', 'owner': owner.pk})
+        created = self.client.post('/admin/accounts/business/add/', {
+            'name': 'Second Shop', 'address': 'Khulna', 'owner': owner.pk,
+        })
         self.assertEqual(created.status_code, 302, created.context['adminform'].form.errors if created.context else None)
         self.assertTrue(BusinessMember.objects.filter(business__name='Second Shop', user=owner,
                                                        role=BusinessMember.OWNER).exists())

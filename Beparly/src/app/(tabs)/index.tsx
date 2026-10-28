@@ -88,7 +88,6 @@ export default function HomeScreen() {
             <Entrance>
               <View style={styles.header}>
                 <View style={styles.headerCopy}>
-                  <Text style={styles.brand}>GOTIBOOKS</Text>
                   <PressScale onPress={() => setPickerOpen(true)} accessibilityRole="button" accessibilityLabel="Switch business" style={styles.businessButton}>
                     <View style={styles.businessRow}>
                       <Text style={styles.businessName} numberOfLines={1}>{account.business.name}</Text>
@@ -198,7 +197,7 @@ function BusinessStart({ name }: { name: string }) {
       <ScrollView contentContainerStyle={styles.startScroll} keyboardShouldPersistTaps="handled">
         <View style={styles.startContent}>
           <View style={styles.startHeader}>
-            <View><Text style={styles.startBrand}>GOTIBOOKS</Text><Text style={styles.startGreeting}>Welcome{name ? `, ${name}` : ''}</Text></View>
+            <Text style={styles.startGreeting}>Welcome{name ? `, ${name}` : ''}</Text>
             <PressScale onPress={() => setProfileMenuOpen(true)} accessibilityRole="button" accessibilityLabel="Open account menu">
               <View style={styles.startAvatar}><AppSymbol name="account" color={palette.primary} size={23} /></View>
             </PressScale>
@@ -253,7 +252,6 @@ const styles = StyleSheet.create({
   startScroll: { flexGrow: 1, alignItems: 'center', paddingBottom: 90 },
   startContent: { width: '100%', maxWidth: 480, padding: spacing.xl },
   startHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing.xxxl },
-  startBrand: { color: palette.primaryDark, fontSize: 11, fontWeight: '700', letterSpacing: 2, marginBottom: spacing.sm },
   startGreeting: { color: palette.secondary, fontSize: 14 },
   startAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: palette.primarySoft, alignItems: 'center', justifyContent: 'center' },
   startTitle: { color: palette.ink, fontSize: 26, fontWeight: '700', letterSpacing: -0.4 },
@@ -266,7 +264,6 @@ const styles = StyleSheet.create({
   hero: { backgroundColor: palette.primary, paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.xxxl, borderBottomLeftRadius: radius.xl, borderBottomRightRadius: radius.xl },
   header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.md, marginBottom: spacing.xxl },
   headerCopy: { flex: 1 },
-  brand: { color: palette.primaryDark, fontSize: typography.eyebrow, fontWeight: '700', letterSpacing: 2, marginBottom: spacing.sm },
   businessButton: { alignSelf: 'flex-start', maxWidth: '100%', minHeight: 36, justifyContent: 'center' },
   businessRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   businessName: { color: palette.ink, fontSize: typography.title, fontWeight: '700', flexShrink: 1, letterSpacing: -0.4 },

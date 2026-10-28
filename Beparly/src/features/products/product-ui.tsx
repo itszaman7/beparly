@@ -9,6 +9,7 @@ import { toast } from 'tamagui/toast';
 
 import { AppSymbol } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { DateField } from '@/components/date-field';
 import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { palette, spacing, radius, appFontFamily } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
@@ -374,7 +375,8 @@ export function ProductFormScreen({ editing = false }: { editing?: boolean }) {
         {!!openingQuantity && Number(openingQuantity) > 0 && <>
           <Text style={styles.label}>Stock location *</Text><View style={styles.modeRow}>{locations.map((location) => <Pressable key={location.id} onPress={() => setLocationId(location.id)} style={[styles.mode, locationId === location.id && styles.modeActive]}><Text style={styles.muted}>{location.name}</Text></Pressable>)}</View></>}
         {!!openingQuantity && Number(openingQuantity) > 0 && tracking !== 'simple' && <><Field label="Opening batch identifier *" value={openingLot} onChangeText={setOpeningLot} />
-          {tracking === 'expiry' && <Field label="Expiry date (YYYY-MM-DD) *" value={openingExpiry} onChangeText={setOpeningExpiry} />}</>}
+          {tracking === 'expiry' && <View style={styles.field}><Text style={styles.label}>Expiry date *</Text>
+            <DateField label="Opening batch expiry date" value={openingExpiry} onChange={setOpeningExpiry} /></View>}</>}
       </View>}</>}
       {(productType === 'single' || editing) && <SimpleAttributes items={simpleAttributes} onChange={setSimpleAttributes} />}
       {editing && productType === 'variant' && <Text style={styles.muted}>Prices and stock settings are edited on each variant.</Text>}

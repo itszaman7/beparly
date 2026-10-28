@@ -26,7 +26,10 @@ class ProductVariantSerializer(serializers.ModelSerializer):
     def get_sellable_stock(self, obj):
         from django.utils import timezone
         today = timezone.localdate()
-        total = obj.balances.filter(quantity__gt=0).filter(
+        balances = obj.balances.filter(quantity__gt=0)
+        if self.context.get('location_id') is not None:
+            balances = balances.filter(location_id=self.context['location_id'])
+        total = balances.filter(
             models.Q(batch__isnull=True) | models.Q(batch__expires_on__isnull=True) | models.Q(batch__expires_on__gte=today)
         ).aggregate(total=Sum('quantity'))['total']
         return str(total or 0)
@@ -185,7 +188,7 @@ class ProductListSerializer(serializers.ModelSerializer):
         today = business_today(obj.business)
         grouped = {}
         for row in obj.balances.all():
-            if row.variant.is_active and (not row.batch or not row.batch.expires_on or row.batch.expires_on >= today):
+            if (self.context.get('location_id') is None or row.location_id == self.context['location_id']) and row.variant.is_active and (not row.batch or not row.batch.expires_on or row.batch.expires_on >= today):
                 unit = row.variant.base_unit
                 grouped[unit] = grouped.get(unit, 0) + row.quantity
         return [{'unit': unit, 'quantity': str(amount)} for unit, amount in sorted(grouped.items())]
@@ -193,7 +196,7 @@ class ProductListSerializer(serializers.ModelSerializer):
     def get_variants(self, obj):
         if obj.product_type == 'simple':
             return []
-        return ProductVariantSerializer(obj.variants.filter(is_active=True).exclude(is_default=True), many=True).data
+        return ProductVariantSerializer(obj.variants.filter(is_active=True).exclude(is_default=True), many=True, context=self.context).data
 
     def get_low_stock(self, obj):
         return bool(obj.minimum_stock and obj.sellable_sum > 0 and obj.sellable_sum <= obj.minimum_stock)

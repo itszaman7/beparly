@@ -1,10 +1,12 @@
-import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { toast } from 'tamagui/toast';
 
 import { AppText as Text } from '@/components/app-text';
+import { AppSymbol } from '@/components/app-symbol';
+import { DateField } from '@/components/date-field';
 import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { palette, radius, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
@@ -21,8 +23,14 @@ function baseQuantity(quantity: string, unitId: string, units: ProductUnit[]) {
   const result = raw / 1000n; return `${result / 1000n}.${String(result % 1000n).padStart(3, '0')}`;
 }
 
+function leaveStockScreen(locationId?: string) {
+  if (router.canGoBack()) router.back();
+  else router.replace(locationId ? `/stock/${locationId}` as Href : '/stock');
+}
+
 function Page({ title, children }: { title: string; children: React.ReactNode }) {
-  return <SafeAreaView style={styles.safe}><Pressable onPress={() => router.back()} style={styles.back}><Text style={styles.link}>Back</Text></Pressable><Text style={styles.title}>{title}</Text>{children}</SafeAreaView>;
+  const { id } = useLocalSearchParams<{ id?: string }>();
+  return <SafeAreaView style={styles.safe}><Pressable onPress={() => leaveStockScreen(id)} style={styles.back}><Text style={styles.link}>Back</Text></Pressable><Text style={styles.title}>{title}</Text>{children}</SafeAreaView>;
 }
 
 export function LocationStockScreen({ movements = false }: { movements?: boolean }) {
@@ -114,9 +122,9 @@ export function ManualStockScreen() {
     setBusy(true);
     const payload = { product_id: selected, ...(selectedVariant ? { variant_id: selectedVariant } : {}), location_id: locationId, quantity, increase, ...(increase ? { unit_cost: unitCost } : {}), reason: reason.trim(), financial_reason: financialReason, ...(financialReason === 'opening_correction' ? { opening_movement_id: openingId } : {}), ...(batchId ? { batch_id: batchId } : {}), ...(unitId ? { unit_id: unitId } : {}) };
     const command = uuid();
-    try { await api.adjustment(token, businessId, payload, command); toast.success(increase ? 'Stock added.' : 'Stock reduced.'); router.back(); }
+    try { await api.adjustment(token, businessId, payload, command); toast.success(increase ? 'Stock added.' : 'Stock reduced.'); leaveStockScreen(id); }
     catch (cause) { if (cause instanceof ApiError && cause.status === 0) {
-      try { await queueStock(command, businessId, 'adjustment', payload, baseQuantity(quantity, unitId, units)); toast.info('Stock change pending sync.'); router.back(); }
+      try { await queueStock(command, businessId, 'adjustment', payload, baseQuantity(quantity, unitId, units)); toast.info('Stock change pending sync.'); leaveStockScreen(id); }
       catch (storageError) { toast.error(storageError instanceof Error ? storageError.message : 'Could not save offline.'); }
     } else toast.error(cause instanceof Error ? cause.message : 'Could not post stock.'); }
     finally { setBusy(false); }
@@ -141,7 +149,8 @@ export function ManualStockScreen() {
     {units.length > 0 && <><Text style={styles.name}>Packaging</Text><Pressable onPress={() => setUnitId('')} style={[styles.card, !unitId && styles.selected]}><Text>{product?.base_unit ?? 'Base unit'}</Text></Pressable>{units.map((unit) => <Pressable key={unit.id} onPress={() => setUnitId(unit.id)} style={[styles.card, unitId === unit.id && styles.selected]}><Text>{unit.name} = {unit.factor} {product?.base_unit}</Text></Pressable>)}</>}
     {activeVariant && activeVariant.tracking_mode !== 'simple' && <><Text style={styles.name}>Batch *</Text>{batches.map((batch) => <Pressable key={`${batch.id}-${batch.location_id}`} onPress={() => setBatchId(batch.id)} style={[styles.card, batchId === batch.id && styles.selected]}><Text>{batch.lot_code}{batch.expires_on ? ` · ${batch.expires_on}` : ''}</Text></Pressable>)}
       <TextInput style={styles.input} placeholder="New batch identifier (to create) *" value={lot} onChangeText={setLot} />
-      {activeVariant.tracking_mode === 'expiry' && <TextInput style={styles.input} placeholder="Expiry YYYY-MM-DD (to create) *" value={expiry} onChangeText={setExpiry} />}
+      {activeVariant.tracking_mode === 'expiry' && <><Text style={styles.name}>Expiry date (new batch) *</Text>
+        <DateField label="New batch expiry date" value={expiry} onChange={setExpiry} /></>}
       <Pressable onPress={() => void addBatch()}><Text style={styles.link}>+ Create batch</Text></Pressable></>}
     <Text style={styles.name}>Quantity *</Text><TextInput style={styles.input} placeholder="Enter quantity" keyboardType="decimal-pad" value={quantity} onChangeText={setQuantity} />
     {increase && <><Text style={styles.name}>Actual cost per base unit (৳) *</Text><TextInput style={styles.input} placeholder="Cost paid for this stock" keyboardType="decimal-pad" value={unitCost} onChangeText={setUnitCost} /><Text style={styles.muted}>Use the actual cost of these goods. The saved buying price is only a reference.</Text></>}
@@ -160,6 +169,7 @@ export function StockActionScreen({ kind }: { kind: 'waste' | 'transfer' }) {
   const [units, setUnits] = useState<ProductUnit[]>([]); const [unitId, setUnitId] = useState('');
   const [batches, setBatches] = useState<StockBatch[]>([]); const [batchId, setBatchId] = useState('');
   const [quantity, setQuantity] = useState(''); const [reason, setReason] = useState('damaged'); const [busy, setBusy] = useState(false);
+  const [openChoice, setOpenChoice] = useState<'product' | 'source' | 'destination' | 'variant' | 'unit' | 'batch' | null>(null);
   const refreshChoices = useCallback(async () => {
     if (!token || !businessId) return;
     try {
@@ -192,6 +202,12 @@ export function StockActionScreen({ kind }: { kind: 'waste' | 'transfer' }) {
   }, [token, businessId, selected, selectedVariant]));
   const product = products.find((item) => item.id === selected);
   const activeVariant = selectedVariant ? variants.find((item) => item.id === selectedVariant) : product;
+  const sourceLocation = locations.find((item) => item.id === source);
+  const destinationLocation = locations.find((item) => item.id === destination);
+  const chosenUnit = units.find((item) => item.id === unitId);
+  const chosenBatch = batches.find((item) => item.id === batchId && item.location_id === source);
+  const availableBatches = batches.filter((item) => item.location_id === source && Number(item.physical) > 0);
+  const toggleChoice = (choice: typeof openChoice) => setOpenChoice((current) => current === choice ? null : choice);
   async function save() {
     if (!token || !businessId || !selected || !source || product?.product_type === 'variant' && !selectedVariant || !/^\d+(\.\d{1,3})?$/.test(quantity) || Number(quantity) <= 0 || activeVariant?.tracking_mode !== 'simple' && !batchId || kind === 'transfer' && (!destination || destination === source)) { toast.error('Choose product, variant, location, batch if needed, and a valid quantity.'); return; }
     setBusy(true);
@@ -201,20 +217,63 @@ export function StockActionScreen({ kind }: { kind: 'waste' | 'transfer' }) {
       if (kind === 'waste') await api.waste(token, businessId, { ...common, reason }, command);
       else await api.transfer(token, businessId, { ...common, destination_id: destination }, command);
       toast.success(kind === 'waste' ? 'Waste recorded.' : 'Stock transferred.');
-      router.back();
+      leaveStockScreen(id);
     } catch (cause) { if (cause instanceof ApiError && cause.status === 0) {
       try { const common = { product_id: selected, ...(selectedVariant ? { variant_id: selectedVariant } : {}), location_id: source, quantity, ...(batchId ? { batch_id: batchId } : {}), ...(unitId ? { unit_id: unitId } : {}) };
         await queueStock(command, businessId, kind, kind === 'waste' ? { ...common, reason } : { ...common, destination_id: destination }, baseQuantity(quantity, unitId, units));
-        toast.info('Stock change pending sync.'); router.back();
+        toast.info('Stock change pending sync.'); leaveStockScreen(id);
       } catch (storageError) { toast.error(storageError instanceof Error ? storageError.message : 'Could not save offline.'); }
     } else toast.error(cause instanceof Error ? cause.message : 'Could not post stock change.'); }
     finally { setBusy(false); }
   }
+  if (kind === 'transfer') return <Page title="Transfer Stock"><RefreshableScrollView onRefresh={refreshChoices} style={{ flex: 1 }} contentContainerStyle={styles.transferBody} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+    <Text style={styles.transferIntro}>Move stock from one location to another.</Text>
+
+    <View style={styles.transferSection}>
+      <Text style={styles.transferSectionTitle}>Product *</Text>
+      <Pressable accessibilityRole="button" accessibilityLabel="Choose product" accessibilityState={{ expanded: openChoice === 'product' }} onPress={() => toggleChoice('product')} style={styles.choiceField}>
+        <View style={styles.choiceIcon}><AppSymbol name="products" size={20} color={palette.primaryDeep} /></View>
+        <View style={styles.choiceContent}><Text style={product ? styles.choiceValue : styles.choicePlaceholder}>{product?.name ?? 'Choose a product'}</Text>{product?.sku ? <Text style={styles.choiceDetail}>SKU {product.sku}</Text> : null}</View>
+        <AppSymbol name={openChoice === 'product' ? 'up' : 'down'} size={20} color={palette.secondary} />
+      </Pressable>
+      {openChoice === 'product' && <View style={styles.choiceList}>
+        <TextInput style={styles.choiceSearch} placeholder="Search name, SKU or barcode" placeholderTextColor={palette.muted} value={productSearch} onChangeText={setProductSearch} autoFocus />
+        {products.slice(0, 8).map((item) => <Pressable key={item.id} accessibilityRole="button" onPress={() => { setSelected(item.id); setSelectedVariant(''); setBatchId(''); setUnitId(''); setOpenChoice(null); }} style={styles.choiceOption}><Text style={styles.choiceOptionTitle}>{item.name}</Text>{item.sku ? <Text style={styles.choiceDetail}>{item.sku}</Text> : null}{selected === item.id && <AppSymbol name="activate" size={19} color={palette.primaryDeep} />}</Pressable>)}
+        {!products.length && <Text style={styles.choiceEmpty}>No products found. Try another search.</Text>}
+        {products.length > 8 && <Text style={styles.choiceHint}>Search to narrow the results.</Text>}
+      </View>}
+      {product?.product_type === 'variant' && <><Text style={styles.transferFieldLabel}>Variant</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="Choose variant" accessibilityState={{ expanded: openChoice === 'variant' }} onPress={() => toggleChoice('variant')} style={styles.choiceField}><View style={styles.choiceContent}><Text style={selectedVariant ? styles.choiceValue : styles.choicePlaceholder}>{variants.find((item) => item.id === selectedVariant)?.label ?? 'Choose a variant'}</Text></View><AppSymbol name={openChoice === 'variant' ? 'up' : 'down'} size={20} color={palette.secondary} /></Pressable>
+        {openChoice === 'variant' && <View style={styles.choiceList}>{variants.map((item) => <Pressable key={item.id} onPress={() => { setSelectedVariant(item.id); setBatchId(''); setUnitId(''); setOpenChoice(null); }} style={styles.choiceOption}><Text style={styles.choiceOptionTitle}>{item.label}</Text><Text style={styles.choiceDetail}>{item.sku}</Text></Pressable>)}{!variants.length && <Text style={styles.choiceEmpty}>No variants available.</Text>}</View>}
+      </>}
+    </View>
+
+    <View style={styles.transferSection}>
+      <Text style={styles.transferSectionTitle}>Move between locations *</Text>
+      <View style={styles.routeCard}>
+        <View style={styles.routeRow}><View style={[styles.routeMarker, styles.routeMarkerFrom]}><Text style={styles.routeMarkerText}>A</Text></View><View style={styles.routeContent}><Text style={styles.routeLabel}>FROM</Text><Pressable accessibilityRole="button" accessibilityLabel="Choose source location" accessibilityState={{ expanded: openChoice === 'source' }} onPress={() => toggleChoice('source')} style={styles.routeChoice}><Text style={sourceLocation ? styles.routeValue : styles.choicePlaceholder}>{sourceLocation?.name ?? 'Choose a location'}</Text><AppSymbol name="down" size={19} color={palette.secondary} /></Pressable></View></View>
+        {openChoice === 'source' && <View style={styles.routeOptions}>{locations.map((item) => <Pressable key={item.id} onPress={() => { setSource(item.id); if (destination === item.id) setDestination(0); setBatchId(''); setOpenChoice(null); }} style={styles.choiceOption}><Text style={styles.choiceOptionTitle}>{item.name}</Text><Text style={styles.choiceDetail}>{item.type === 'warehouse' ? 'Warehouse' : 'Shop'}</Text>{source === item.id && <AppSymbol name="activate" size={19} color={palette.primaryDeep} />}</Pressable>)}{!locations.length && <Text style={styles.choiceEmpty}>No active locations available.</Text>}</View>}
+        <View style={styles.routeDivider}><View style={styles.routeLine} /><View style={styles.routeArrow}><AppSymbol name="down" size={17} color={palette.primaryDeep} /></View><View style={styles.routeLine} /></View>
+        <View style={styles.routeRow}><View style={[styles.routeMarker, styles.routeMarkerTo]}><Text style={styles.routeMarkerText}>B</Text></View><View style={styles.routeContent}><Text style={styles.routeLabel}>TO</Text><Pressable accessibilityRole="button" accessibilityLabel="Choose destination location" accessibilityState={{ expanded: openChoice === 'destination' }} onPress={() => toggleChoice('destination')} style={styles.routeChoice}><Text style={destinationLocation ? styles.routeValue : styles.choicePlaceholder}>{destinationLocation?.name ?? 'Choose a location'}</Text><AppSymbol name="down" size={19} color={palette.secondary} /></Pressable></View></View>
+        {openChoice === 'destination' && <View style={styles.routeOptions}>{locations.filter((item) => item.id !== source).map((item) => <Pressable key={item.id} onPress={() => { setDestination(item.id); setOpenChoice(null); }} style={styles.choiceOption}><Text style={styles.choiceOptionTitle}>{item.name}</Text><Text style={styles.choiceDetail}>{item.type === 'warehouse' ? 'Warehouse' : 'Shop'}</Text>{destination === item.id && <AppSymbol name="activate" size={19} color={palette.primaryDeep} />}</Pressable>)}{locations.filter((item) => item.id !== source).length === 0 && <Text style={styles.choiceEmpty}>Add another location before transferring stock.</Text>}</View>}
+      </View>
+    </View>
+
+    <View style={styles.transferSection}>
+      <Text style={styles.transferSectionTitle}>Quantity *</Text>
+      <View style={styles.quantityRow}><TextInput style={styles.quantityInput} placeholder="0" placeholderTextColor={palette.muted} keyboardType="decimal-pad" value={quantity} onChangeText={setQuantity} accessibilityLabel="Quantity to transfer" />
+        <Pressable accessibilityRole="button" accessibilityLabel="Choose unit" accessibilityState={{ expanded: openChoice === 'unit' }} onPress={() => units.length && toggleChoice('unit')} style={styles.unitChoice}><Text style={styles.unitValue}>{chosenUnit?.name ?? product?.base_unit ?? 'Unit'}</Text>{units.length > 0 && <AppSymbol name="down" size={18} color={palette.secondary} />}</Pressable></View>
+      {openChoice === 'unit' && <View style={styles.choiceList}><Pressable onPress={() => { setUnitId(''); setOpenChoice(null); }} style={styles.choiceOption}><Text style={styles.choiceOptionTitle}>{product?.base_unit ?? 'Base unit'}</Text></Pressable>{units.map((item) => <Pressable key={item.id} onPress={() => { setUnitId(item.id); setOpenChoice(null); }} style={styles.choiceOption}><Text style={styles.choiceOptionTitle}>{item.name}</Text><Text style={styles.choiceDetail}>= {item.factor} {product?.base_unit}</Text></Pressable>)}</View>}
+      {activeVariant && activeVariant.tracking_mode !== 'simple' && <><Text style={styles.transferFieldLabel}>Batch</Text><Pressable accessibilityRole="button" accessibilityLabel="Choose batch" accessibilityState={{ expanded: openChoice === 'batch' }} onPress={() => toggleChoice('batch')} style={styles.choiceField}><View style={styles.choiceContent}><Text style={chosenBatch ? styles.choiceValue : styles.choicePlaceholder}>{chosenBatch?.lot_code ?? 'Choose a batch at the source'}</Text></View><AppSymbol name="down" size={20} color={palette.secondary} /></Pressable>
+        {openChoice === 'batch' && <View style={styles.choiceList}>{availableBatches.map((item) => <Pressable key={item.id} onPress={() => { setBatchId(item.id); setOpenChoice(null); }} style={styles.choiceOption}><Text style={styles.choiceOptionTitle}>{item.lot_code}</Text><Text style={styles.choiceDetail}>{item.physical} available{item.expires_on ? ` · Expires ${item.expires_on}` : ''}</Text></Pressable>)}{!availableBatches.length && <Text style={styles.choiceEmpty}>No batches with stock at this location.</Text>}</View>}
+      </>}
+    </View>
+    <Pressable disabled={busy} onPress={() => void save()} style={[styles.transferAction, busy && styles.transferActionBusy]} accessibilityRole="button"><Text style={styles.actionText}>{busy ? 'Transferring…' : 'Transfer stock'}</Text><AppSymbol name="chevron" size={19} color={palette.surface} /></Pressable>
+  </RefreshableScrollView></Page>;
   return <Page title={kind === 'waste' ? 'Record Waste' : 'Transfer Stock'}><RefreshableScrollView onRefresh={refreshChoices} style={{ flex: 1 }} contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
     <Text style={styles.name}>Product *</Text><TextInput style={styles.input} placeholder="Search name, SKU or barcode" value={productSearch} onChangeText={setProductSearch} />{products.map((item) => <Pressable key={item.id} onPress={() => { setSelected(item.id); setSelectedVariant(''); setBatchId(''); setUnitId(''); }} style={[styles.card, selected === item.id && styles.selected]}><Text>{item.name}</Text></Pressable>)}
     {product?.product_type === 'variant' && <><Text style={styles.name}>Variant *</Text>{variants.map((item) => <Pressable key={item.id} onPress={() => { setSelectedVariant(item.id); setBatchId(''); setUnitId(''); }} style={[styles.card, selectedVariant === item.id && styles.selected]}><Text>{item.label} · {item.sku}</Text></Pressable>)}</>}
     <Text style={styles.name}>From location *</Text>{locations.map((item) => <Pressable key={item.id} onPress={() => setSource(item.id)} style={[styles.card, source === item.id && styles.selected]}><Text>{item.name}</Text></Pressable>)}
-    {kind === 'transfer' && <><Text style={styles.name}>To location *</Text>{locations.filter((item) => item.id !== source).map((item) => <Pressable key={item.id} onPress={() => setDestination(item.id)} style={[styles.card, destination === item.id && styles.selected]}><Text>{item.name}</Text></Pressable>)}</>}
     {units.length > 0 && <><Text style={styles.name}>Unit</Text><Pressable onPress={() => setUnitId('')} style={[styles.card, !unitId && styles.selected]}><Text>{product?.base_unit}</Text></Pressable>{units.map((item) => <Pressable key={item.id} onPress={() => setUnitId(item.id)} style={[styles.card, unitId === item.id && styles.selected]}><Text>{item.name} = {item.factor} {product?.base_unit}</Text></Pressable>)}</>}
     {activeVariant && activeVariant.tracking_mode !== 'simple' && <><Text style={styles.name}>Batch *</Text>{batches.filter((item) => item.location_id === source && Number(item.physical) > 0).map((item) => <Pressable key={item.id} onPress={() => setBatchId(item.id)} style={[styles.card, batchId === item.id && styles.selected]}><Text>{item.lot_code} · {item.physical} physical{item.expires_on ? ` · ${item.expires_on}` : ''}</Text></Pressable>)}</>}
     <Text style={styles.name}>Quantity *</Text><TextInput style={styles.input} placeholder="Enter quantity" keyboardType="decimal-pad" value={quantity} onChangeText={setQuantity} />
@@ -223,4 +282,46 @@ export function StockActionScreen({ kind }: { kind: 'waste' | 'transfer' }) {
   </RefreshableScrollView></Page>;
 }
 
-const styles = StyleSheet.create({ safe: { flex: 1, backgroundColor: palette.surface }, back: { width: '100%', maxWidth: 640, alignSelf: 'center', padding: spacing.lg }, link: { color: palette.primary, fontWeight: '700' }, title: { width: '100%', maxWidth: 640, alignSelf: 'center', fontSize: 24, fontWeight: '700', color: palette.ink, paddingHorizontal: spacing.lg }, body: { width: '100%', maxWidth: 640, alignSelf: 'center', padding: spacing.lg, gap: 12 }, card: { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1, borderRadius: radius.sm, padding: spacing.lg }, selected: { borderColor: palette.primary, backgroundColor: palette.primarySoft }, name: { color: palette.ink, fontSize: 15, fontWeight: '700' }, muted: { color: palette.secondary, fontSize: 13 }, error: { color: palette.rose }, input: { minHeight: 52, backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border, borderRadius: radius.sm, paddingHorizontal: spacing.lg }, action: { minHeight: 54, justifyContent: 'center', alignItems: 'center', backgroundColor: palette.primary, borderRadius: radius.sm }, actionText: { color: '#fff', fontWeight: '700' } });
+const baseStyles = StyleSheet.create({ safe: { flex: 1, backgroundColor: palette.surface }, back: { width: '100%', maxWidth: 640, alignSelf: 'center', padding: spacing.lg }, link: { color: palette.primary, fontWeight: '700' }, title: { width: '100%', maxWidth: 640, alignSelf: 'center', fontSize: 24, fontWeight: '700', color: palette.ink, paddingHorizontal: spacing.lg }, body: { width: '100%', maxWidth: 640, alignSelf: 'center', padding: spacing.lg, gap: 12 }, card: { backgroundColor: palette.surface, borderColor: palette.border, borderWidth: 1, borderRadius: radius.sm, padding: spacing.lg }, selected: { borderColor: palette.primary, backgroundColor: palette.primarySoft }, name: { color: palette.ink, fontSize: 15, fontWeight: '700' }, muted: { color: palette.secondary, fontSize: 13 }, error: { color: palette.rose }, input: { minHeight: 52, backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border, borderRadius: radius.sm, paddingHorizontal: spacing.lg }, action: { minHeight: 54, justifyContent: 'center', alignItems: 'center', backgroundColor: palette.primary, borderRadius: radius.sm }, actionText: { color: '#fff', fontWeight: '700' } });
+
+const transferStyles = StyleSheet.create({
+  transferBody: { width: '100%', maxWidth: 640, alignSelf: 'center', paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.xxxl, gap: spacing.xl },
+  transferIntro: { color: palette.secondary, fontSize: 14, lineHeight: 21 },
+  transferSection: { gap: spacing.sm },
+  transferSectionTitle: { color: palette.ink, fontSize: 16, fontWeight: '700', marginBottom: spacing.xs },
+  transferFieldLabel: { color: palette.secondary, fontSize: 13, fontWeight: '600', marginTop: spacing.sm },
+  choiceField: { minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, borderRadius: radius.md, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface },
+  choiceIcon: { width: 36, height: 36, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.primarySoft },
+  choiceContent: { flex: 1, gap: 2 },
+  choiceValue: { color: palette.ink, fontSize: 15, fontWeight: '600' },
+  choicePlaceholder: { color: palette.muted, fontSize: 15 },
+  choiceDetail: { color: palette.secondary, fontSize: 12 },
+  choiceList: { borderWidth: 1, borderColor: palette.border, borderRadius: radius.md, backgroundColor: palette.surface, overflow: 'hidden' },
+  choiceSearch: { minHeight: 48, paddingHorizontal: spacing.lg, borderBottomWidth: 1, borderBottomColor: palette.border, color: palette.ink },
+  choiceOption: { minHeight: 52, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, flexDirection: 'row', alignItems: 'center', gap: spacing.sm, borderBottomWidth: 1, borderBottomColor: palette.border },
+  choiceOptionTitle: { flex: 1, color: palette.ink, fontSize: 14, fontWeight: '500' },
+  choiceEmpty: { color: palette.secondary, fontSize: 13, padding: spacing.lg },
+  choiceHint: { color: palette.secondary, fontSize: 12, padding: spacing.md },
+  routeCard: { borderRadius: radius.lg, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.surface, padding: spacing.lg },
+  routeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  routeMarker: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  routeMarkerFrom: { backgroundColor: palette.blueSoft },
+  routeMarkerTo: { backgroundColor: palette.primarySoft },
+  routeMarkerText: { color: palette.primaryDeep, fontSize: 12, fontWeight: '800' },
+  routeContent: { flex: 1, gap: spacing.xs },
+  routeLabel: { color: palette.secondary, fontSize: 11, fontWeight: '700', letterSpacing: 0.8 },
+  routeChoice: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
+  routeValue: { flex: 1, color: palette.ink, fontSize: 16, fontWeight: '600' },
+  routeOptions: { marginLeft: 44, borderRadius: radius.sm, borderWidth: 1, borderColor: palette.border, overflow: 'hidden' },
+  routeDivider: { width: 32, alignItems: 'center', paddingVertical: spacing.xs },
+  routeLine: { width: 1, height: 8, backgroundColor: palette.border },
+  routeArrow: { width: 24, height: 24, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.primarySoft },
+  quantityRow: { flexDirection: 'row', gap: spacing.sm },
+  quantityInput: { flex: 1, minHeight: 56, borderRadius: radius.md, borderWidth: 1, borderColor: palette.border, paddingHorizontal: spacing.lg, color: palette.ink, fontSize: 18, fontWeight: '600' },
+  unitChoice: { minWidth: 96, minHeight: 56, flexDirection: 'row', gap: spacing.xs, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.md, borderRadius: radius.md, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.background },
+  unitValue: { color: palette.ink, fontSize: 14, fontWeight: '600' },
+  transferAction: { minHeight: 56, borderRadius: radius.md, backgroundColor: palette.primary, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  transferActionBusy: { opacity: 0.6 },
+});
+
+const styles = { ...baseStyles, ...transferStyles };

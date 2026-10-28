@@ -30,7 +30,7 @@ export default function More() {
         </Button>)}
       {!!signOutError && <Text color="#A62925" fontSize={13}>{signOutError}</Text>}
       <Button height={54} marginTop={8} backgroundColor="white" borderWidth={1} borderColor="#E5ECE9" borderRadius={15}
-        disabled={signingOut} accessibilityLabel="Sign out" onPress={async () => {
+        disabled={signingOut} aria-label="Sign out" onPress={async () => {
           if (signingOut) return;
           setSigningOut(true);
           setSignOutError('');

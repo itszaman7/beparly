@@ -5,8 +5,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Input, Text, XStack, YStack } from 'tamagui';
 
 import { AppSymbol, type AppSymbolName } from '@/components/app-symbol';
-import { elevation, palette } from '@/constants/design-system';
+import { palette } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
+import { useKeyboardVisible } from '@/hooks/use-keyboard-visible';
 import { formatBdt } from '@/features/products/product-rules';
 import { api, type Contact, type MoneyAccount } from '@/services/api';
 import { blurWebFocus } from '@/utils/web-focus';
@@ -42,6 +43,7 @@ function PickerRow({ label, value, icon, onPress }: { label: string; value: stri
 }
 
 export function MoneyInScreen() {
+  const keyboardVisible = useKeyboardVisible();
   const { session } = useAuth();
   const token = session?.token;
   const businessId = session?.account?.business.id;
@@ -55,6 +57,10 @@ export function MoneyInScreen() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [customers, setCustomers] = useState<Contact[]>([]);
   const [picker, setPicker] = useState<Picker>(null);
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [categoryBusy, setCategoryBusy] = useState(false);
+  const [categoryError, setCategoryError] = useState('');
   const [addingAccount, setAddingAccount] = useState(false);
   const [newAccountName, setNewAccountName] = useState('');
   const [newAccountKind, setNewAccountKind] = useState<MoneyAccount['kind']>('cash');
@@ -94,6 +100,11 @@ export function MoneyInScreen() {
   }, [token, businessId, refreshCount]));
 
   function change(update: () => void) { update(); setCommand(commandId()); setError(''); }
+  function closePicker() {
+    if (categoryBusy || accountBusy) return;
+    setPicker(null); setAddingCategory(false); setCategoryError('');
+    setAddingAccount(false); setAccountError('');
+  }
   const selectedReason = reasons.find((item) => item.id === reason) ?? reasons[0];
   const selectedAccount = accounts.find((item) => item.id === accountId);
   const selectedCategory = categories.find((item) => item.id === categoryId);
@@ -134,8 +145,20 @@ export function MoneyInScreen() {
     finally { setAccountBusy(false); }
   }
 
+  async function addIncomeCategory() {
+    if (!token || !businessId || !newCategoryName.trim() || categoryBusy) return;
+    setCategoryBusy(true); setCategoryError('');
+    try {
+      const result = await api.createFinancialCategory(token, businessId, 'income', newCategoryName.trim());
+      setCategories((current) => current.some((item) => item.id === result.category.id) ? current : [...current, result.category]);
+      change(() => setCategoryId(result.category.id));
+      setNewCategoryName(''); setAddingCategory(false); setPicker(null);
+    } catch (cause) { setCategoryError(cause instanceof Error ? cause.message : 'Could not add income category.'); }
+    finally { setCategoryBusy(false); }
+  }
+
   const pickerTitle = picker === 'reason' ? 'Why did you receive this money?' : picker === 'account' ? addingAccount ? 'Add receiving account' : 'Received into' :
-    picker === 'category' ? 'Income category' : 'Customer';
+    picker === 'category' ? 'What was this income from?' : 'Customer';
   const choices = picker === 'reason' ? reasons.map((item) => ({ id: item.id, label: item.label, detail: item.detail, icon: item.icon })) :
     picker === 'account' ? accounts.map((item) => ({ id: item.id, label: item.name, detail: item.kind === 'wallet' ? 'Mobile wallet' : item.kind, icon: 'money' as AppSymbolName })) :
     picker === 'category' ? categories.map((item) => ({ id: String(item.id), label: item.name, detail: '', icon: 'category' as AppSymbolName })) :
@@ -150,20 +173,27 @@ export function MoneyInScreen() {
     </XStack>
     <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={{ padding: 18, paddingBottom: 28, alignItems: 'center' }} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefreshCount((count) => count + 1)} />}>
       <YStack width="100%" maxWidth={560} gap={18}>
-        <YStack backgroundColor={palette.surface} borderWidth={1} borderColor={focused === 'amount' ? palette.primaryDeep : palette.border} borderRadius={20} padding={20} gap={12} {...elevation.card}>
-          <Text color={palette.secondary} fontSize={13} fontWeight="700">Amount received</Text>
-          <XStack alignItems="center" gap={9}>
-            <Text color={palette.primaryDeep} fontSize={34} fontWeight="800">৳</Text>
+        <YStack gap={8}>
+          <Text color={palette.ink} fontSize={15} fontWeight="800">Amount received (৳) *</Text>
+          <XStack alignItems="center" gap={10} height={66} paddingHorizontal={16} borderWidth={2}
+            borderColor={focused === 'amount' ? palette.primaryDeep : palette.border} borderRadius={14} backgroundColor={palette.surface}>
+            <Text color={palette.primaryDeep} fontSize={24} fontWeight="800">৳</Text>
             <Input flex={1} value={amount} onChangeText={(value) => change(() => setAmount(value))}
               onFocus={() => setFocused('amount')} onBlur={() => setFocused(null)}
-              keyboardType="decimal-pad" placeholder="0.00" aria-label="Amount received"
-              backgroundColor={palette.surface} borderWidth={0} color={palette.ink} fontSize={34} fontWeight="800" height={58} style={{ paddingHorizontal: 0 }} />
+              keyboardType="decimal-pad" placeholder="Enter amount, e.g. 500.00" aria-label="Amount received in taka"
+              backgroundColor="transparent" borderWidth={0} color={palette.ink} fontSize={18} height={56}
+              style={{ paddingHorizontal: 0 }} />
           </XStack>
+          <Text color={palette.secondary} fontSize={12}>Tap the box to enter the money you received.</Text>
         </YStack>
         {loading ? <ActivityIndicator color={palette.primaryDeep} /> : <>
           <PickerRow label="Why did you receive this money?" value={selectedReason.label} icon={selectedReason.icon} onPress={() => setPicker('reason')} />
           <PickerRow label="Received into" value={selectedAccount?.name ?? 'Choose an account'} icon="money" onPress={() => setPicker('account')} />
-          {reason === 'other_income' && <PickerRow label="Income category" value={selectedCategory?.name ?? 'Choose a category'} icon="category" onPress={() => setPicker('category')} />}
+          {reason === 'other_income' && <YStack gap={7}>
+            <PickerRow label="What was this income from?" value={selectedCategory?.name ?? 'Choose an income type'} icon="category" onPress={() => setPicker('category')} />
+            <Text color={palette.secondary} fontSize={12} lineHeight={18}>Choose a type for money earned outside product sales, such as commission or a service fee. This keeps it separate from sales in reports.</Text>
+            <Pressable accessibilityRole="link" onPress={() => router.push('/money/income-categories' as Href)} style={{ minHeight: 44, justifyContent: 'center' }}><Text color={palette.primaryDeep} fontWeight="700">Add or rename income types</Text></Pressable>
+          </YStack>}
           {reason === 'customer_advance' && <PickerRow label="Customer" value={selectedCustomer?.name ?? 'Choose a customer'} icon="parties" onPress={() => setPicker('customer')} />}
           <YStack gap={7}><Text color={palette.secondary} fontSize={12} fontWeight="700">Note (optional)</Text>
             <Input value={note} onChangeText={(value) => change(() => setNote(value))} placeholder="Add a short note"
@@ -179,30 +209,40 @@ export function MoneyInScreen() {
           <Pressable accessibilityRole="link" onPress={() => router.push('/dues' as Href)} style={{ minHeight: 44, justifyContent: 'center' }}>
             <Text color={palette.primaryDeep} fontWeight="700">Collecting an existing customer due? Open Dues</Text>
           </Pressable>
-          {reason === 'other_income' && !selectedCategory && <Pressable accessibilityRole="link" onPress={() => router.push('/money/income-categories' as Href)} style={{ minHeight: 44, justifyContent: 'center' }}>
-            <Text color={palette.primaryDeep} fontWeight="700">Set up an income category in Settings</Text>
-          </Pressable>}
         </>}
       </YStack>
     </ScrollView>
-    <YStack backgroundColor={palette.surface} borderTopWidth={1} borderColor={palette.border} paddingHorizontal={18} paddingTop={12} paddingBottom={10} alignItems="center">
+    {!keyboardVisible && <YStack backgroundColor={palette.surface} borderTopWidth={1} borderColor={palette.border} paddingHorizontal={18} paddingTop={12} paddingBottom={10} alignItems="center">
       <YStack width="100%" maxWidth={560} gap={8}>
-        {error ? <Text accessibilityRole="alert" color="#A62925" fontSize={13}>{error}</Text> : null}
+        {error ? <Text role="alert" color="#A62925" fontSize={13}>{error}</Text> : null}
         <Button height={54} backgroundColor={palette.primaryDeep} borderRadius={15} disabled={!canSubmit || busy || loading} onPress={() => void submit()}>
           <Text color="white" fontWeight="800" fontSize={16}>{busy ? 'Recording…' : 'Record Money In'}</Text>
         </Button>
       </YStack>
-    </YStack>
-    <Modal visible={picker !== null} transparent animationType="fade" onRequestClose={() => setPicker(null)}>
+    </YStack>}
+    <Modal visible={picker !== null} transparent animationType="fade" onRequestClose={closePicker}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-      <Pressable onPress={() => setPicker(null)} style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15, 25, 22, 0.42)' }}>
+      <Pressable onPress={closePicker} style={{ flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15, 25, 22, 0.42)' }}>
         <Pressable onPress={(event) => event.stopPropagation()} style={{ backgroundColor: palette.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '75%', minHeight: 0, padding: 20 }}>
           <XStack justifyContent="space-between" alignItems="center" marginBottom={14}>
             <Text color={palette.ink} fontSize={20} fontWeight="800">{pickerTitle}</Text>
-            <Pressable accessibilityRole="button" accessibilityLabel="Close choices" onPress={() => setPicker(null)} style={{ width: 38, height: 38, alignItems: 'center', justifyContent: 'center' }}><AppSymbol name="close" size={20} color={palette.secondary} /></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="Close choices" onPress={closePicker} style={{ width: 38, height: 38, alignItems: 'center', justifyContent: 'center' }}><AppSymbol name="close" size={20} color={palette.secondary} /></Pressable>
           </XStack>
           <ScrollView style={{ flexShrink: 1, minHeight: 0 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
-            {addingAccount && picker === 'account' ? <YStack gap={16} paddingBottom={10}>
+            {addingCategory && picker === 'category' ? <YStack gap={14} paddingBottom={12}>
+              <Text color={palette.secondary} fontSize={13}>Name the money earned outside product sales.</Text>
+              <Input value={newCategoryName} onChangeText={(value) => { setNewCategoryName(value); setCategoryError(''); }}
+                autoFocus maxLength={100} placeholder="e.g. Commission" aria-label="New income category name"
+                height={52} backgroundColor={palette.surface} borderColor={palette.border} color={palette.ink}
+                style={{ borderRadius: 12, paddingHorizontal: 14 }} />
+              {categoryError ? <Text role="alert" color="#A62925" fontSize={13}>{categoryError}</Text> : null}
+              <Button height={52} backgroundColor={palette.primaryDeep} disabled={categoryBusy || !newCategoryName.trim()} onPress={() => void addIncomeCategory()}>
+                <Text color="white" fontWeight="800">{categoryBusy ? 'Saving…' : 'Save and select category'}</Text>
+              </Button>
+              <Button height={44} backgroundColor={palette.background} disabled={categoryBusy} onPress={() => { setAddingCategory(false); setCategoryError(''); }}>
+                <Text color={palette.primaryDeep} fontWeight="700">Back to categories</Text>
+              </Button>
+            </YStack> : addingAccount && picker === 'account' ? <YStack gap={16} paddingBottom={10}>
               <YStack gap={7}><Text color={palette.secondary} fontSize={12} fontWeight="700">Account name</Text>
                 <Input value={newAccountName} onChangeText={(value) => { setNewAccountName(value); setAccountCommand(commandId()); setAccountError(''); }}
                   placeholder="e.g. bKash or City Bank" aria-label="Account name" height={52} backgroundColor={palette.surface}
@@ -228,7 +268,7 @@ export function MoneyInScreen() {
                   keyboardType="decimal-pad" placeholder="0.00" aria-label="Opening balance" height={52} backgroundColor={palette.surface}
                   borderColor={palette.border} color={palette.ink} style={{ borderRadius: 12, paddingHorizontal: 14 }} />
               </YStack>
-              {accountError ? <Text accessibilityRole="alert" color="#A62925" fontSize={13}>{accountError}</Text> : null}
+              {accountError ? <Text role="alert" color="#A62925" fontSize={13}>{accountError}</Text> : null}
               <Button height={52} backgroundColor={palette.primaryDeep} disabled={accountBusy || !newAccountName.trim()} onPress={() => void addReceivingAccount()}>
                 <Text color="white" fontWeight="800">{accountBusy ? 'Saving…' : 'Save and select account'}</Text>
               </Button>
@@ -248,6 +288,11 @@ export function MoneyInScreen() {
               style={{ minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 12, paddingTop: 10 }}>
               <View style={{ width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.primarySoft }}><AppSymbol name="plus" size={20} color={palette.primaryDeep} /></View>
               <Text color={palette.primaryDeep} fontSize={15} fontWeight="800">Add receiving account</Text>
+            </Pressable>}
+            {picker === 'category' && <Pressable accessibilityRole="button" onPress={() => { setAddingCategory(true); setNewCategoryName(''); setCategoryError(''); }}
+              style={{ minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 12, paddingTop: 10 }}>
+              <View style={{ width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.primarySoft }}><AppSymbol name="plus" size={20} color={palette.primaryDeep} /></View>
+              <Text color={palette.primaryDeep} fontSize={15} fontWeight="800">Add new income category</Text>
             </Pressable>}
             </>}
           </ScrollView>

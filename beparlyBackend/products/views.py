@@ -21,7 +21,7 @@ from .models import CatalogCommand, Category, Product, ProductAttribute, Product
 from .serializers import CategorySerializer, ProductListSerializer, ProductSerializer, ProductVariantSerializer, ProductUnitSerializer, StockBatchSerializer
 from .variants import make_attributes, make_variant
 from .barcodes import BarcodeConflict, assert_barcode_available, exact_barcode_target, generated_barcode
-from stockkeeper.models import StockMovement
+from stockkeeper.models import StockLocation, StockMovement
 from audit.services import differences, record, snapshot
 
 
@@ -55,6 +55,12 @@ class BarcodeLookupView(APIView):
         _, problem = access(request, business_id)
         if problem:
             return problem
+        location_id = request.query_params.get('location_id')
+        if location_id:
+            if not location_id.isdecimal():
+                return error('invalid_input', 'Choose a valid stock location.')
+            if not StockLocation.objects.filter(business_id=business_id, pk=location_id).exists():
+                return error('not_found', 'Stock location not found.', 404)
         code = request.query_params.get('code', '').strip()
         if not code or len(code) > 100:
             return error('invalid_input', 'Scan a valid barcode.')
@@ -66,7 +72,13 @@ class BarcodeLookupView(APIView):
             return error('not_found', 'No active product has this barcode.', 404)
         variant, unit = target
         from stockkeeper.models import StockBalance
-        available = StockBalance.objects.filter(variant=variant).aggregate(total=Sum('quantity'))['total'] or 0
+        balances = StockBalance.objects.filter(variant=variant)
+        if location_id:
+            from stockkeeper.services import business_today
+            balances = balances.filter(location_id=location_id).filter(
+                Q(batch__isnull=True) | Q(batch__expires_on__isnull=True) |
+                Q(batch__expires_on__gte=business_today(variant.product.business)))
+        available = balances.aggregate(total=Sum('quantity'))['total'] or 0
         return JsonResponse({'target': {
             'product_id': str(variant.product_id), 'variant_id': str(variant.pk),
             'product_type': variant.product.product_type, 'sellable_stock': str(available),
@@ -263,16 +275,18 @@ def descendants(business_id, root_id):
     return result
 
 
-def catalog_stock(business_id):
+def catalog_stock(business_id, location_id=None):
     from accounts.models import Business
     from stockkeeper.services import business_today
 
     today = business_today(Business.objects.get(pk=business_id))
     quantity_field = DecimalField(max_digits=18, decimal_places=3)
+    stock_filter = Q(balances__batch__expires_on__isnull=True) | Q(balances__batch__expires_on__gte=today)
+    if location_id is not None:
+        stock_filter &= Q(balances__location_id=location_id)
     return Product.objects.filter(business_id=business_id).select_related('business').annotate(
         sellable_sum=Coalesce(
-            Sum('balances__quantity', filter=Q(balances__batch__expires_on__isnull=True) |
-                Q(balances__batch__expires_on__gte=today)),
+            Sum('balances__quantity', filter=stock_filter),
             Value(Decimal('0'), output_field=quantity_field), output_field=quantity_field,
         ),
     )
@@ -331,7 +345,14 @@ class CatalogView(APIView):
         _, problem = access(request, business_id)
         if problem:
             return problem
-        query = catalog_stock(business_id)
+        location_id = request.query_params.get('location_id')
+        if location_id:
+            if not location_id.isdecimal():
+                return error('invalid_input', 'Choose a valid stock location.')
+            if not StockLocation.objects.filter(business_id=business_id, pk=location_id).exists():
+                return error('not_found', 'Stock location not found.', 404)
+            location_id = int(location_id)
+        query = catalog_stock(business_id, location_id)
         search = request.query_params.get('search', '').strip()[:100]
         if search:
             matches = ProductVariant.objects.filter(product_id=OuterRef('pk')).filter(
@@ -386,7 +407,7 @@ class CatalogView(APIView):
             return error('invalid_input', 'Choose a valid sort order.')
         query = query.order_by(*ordering[sort])
         rows = list(query[(page - 1) * 30:page * 30 + 1].prefetch_related('variants', 'balances__variant', 'balances__batch'))
-        return JsonResponse({'products': ProductListSerializer(rows[:30], many=True).data,
+        return JsonResponse({'products': ProductListSerializer(rows[:30], many=True, context={'location_id': location_id}).data,
                              'next_page': page + 1 if len(rows) > 30 else None})
 
     def post(self, request, business_id):

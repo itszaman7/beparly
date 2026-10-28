@@ -4,6 +4,7 @@ import { ActivityIndicator, FlatList, Image, KeyboardAvoidingView, Modal, Platfo
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppText as Text } from '@/components/app-text';
 import { AppSymbol } from '@/components/app-symbol';
+import { DateField } from '@/components/date-field';
 import { palette, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
 import { api, Contact, MoneyAccount, QuotationRecord, QuotationSaleDraft, resolveAssetUrl } from '@/services/api';
@@ -73,7 +74,7 @@ export default function QuotationDetail() {
     finally { setBusy(false); }
   }
   async function checkout() {
-    if (quote && Number(paid || 0) < Number(quote.total) && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) { setError('Enter a due date as YYYY-MM-DD.'); return; }
+    if (quote && Number(paid || 0) < Number(quote.total) && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) { setError('Choose a due date.'); return; }
     if (!session || !businessId || !draft) return;
     setBusy(true); setError('');
     try { const result = await api.quotationCheckout(session.token, businessId, draft.id, {
@@ -107,7 +108,7 @@ export default function QuotationDetail() {
         </Pressable>
         {session.account.role === 'owner' && quote.lines?.map((line, index) => <View key={line.id}><Text style={styles.label}>{line.product_name} price (owner)</Text><TextInput style={styles.input} keyboardType="decimal-pad" value={prices[index] ?? line.unit_price} onChangeText={value => setPrices(old => old.map((price, position) => position === index ? value : price))} /></View>)}
         <Text style={styles.label}>Amount received now (৳)</Text><TextInput style={styles.input} keyboardType="decimal-pad" value={paid} onChangeText={setPaid} placeholder={quote.total} />
-        {Number(paid || 0) < Number(quote.total) && <><Text style={styles.label}>Due date *</Text><TextInput style={styles.input} value={dueDate} onChangeText={setDueDate} placeholder="YYYY-MM-DD" keyboardType="numbers-and-punctuation" accessibilityLabel="Customer due date" /></>}
+        {Number(paid || 0) < Number(quote.total) && <><Text style={styles.label}>Due date *</Text><DateField label="Customer due date" value={dueDate} onChange={setDueDate} /></>}
         {Number(paid) > 0 && <View style={styles.wrap}>{accounts.map(account => <Button key={account.id} label={`${account.name}${accountId === account.id ? ' ✓' : ''}`} onPress={() => setAccountId(account.id)} />)}</View>}
         <Button label="Complete sale" onPress={() => void checkout()} />
       </View>}
