@@ -1,7 +1,7 @@
 import { router, type Href } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { CheckSquare2, FileText, ListChecks, Pencil, Printer, RotateCcw, StickyNote, X } from 'lucide-react-native';
+import { CheckSquare2, FileText, ListChecks, Pencil, Printer, RotateCcw, StickyNote, X } from '@/components/sales-icons';
 import { AppText as Text } from '@/components/app-text';
 import { useAuth } from '@/features/auth/auth-context';
 import { api } from '@/services/api';

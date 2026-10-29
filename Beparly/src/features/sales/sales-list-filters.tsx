@@ -4,7 +4,7 @@ import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { AppText as Text } from '@/components/app-text';
 import { DateField } from '@/components/date-field';
 import { palette } from '@/constants/design-system';
-import { X } from 'lucide-react-native';
+import { X } from '@/components/sales-icons';
 import { defaultSalesFilters, type SalesFilters, type SalesPeriod, type SalesTier } from './sales-list-rules';
 
 const periods: { value: SalesPeriod; label: string }[] = [

@@ -2,7 +2,7 @@ import { router, useFocusEffect, usePathname, type Href } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { Image, Keyboard, Modal, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Barcode, Camera, ChevronDown, ChevronLeft, Eye, FileText, Funnel, MoreHorizontal, Plus, Printer, RotateCcw, Search, Share2, X } from 'lucide-react-native';
+import { Barcode, Camera, ChevronDown, ChevronLeft, Eye, FileText, Funnel, MoreHorizontal, Plus, Printer, RotateCcw, Search, Share2, X } from '@/components/sales-icons';
 
 import { AppSymbol } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
