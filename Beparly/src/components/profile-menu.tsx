@@ -1,11 +1,13 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Modal, Pressable, StyleSheet, View } from 'react-native';
+import { Modal, Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AppSymbol, type AppSymbolName } from '@/components/app-symbol';
+import { AccountAvatar } from '@/components/account-avatar';
 import { AppText as Text } from '@/components/app-text';
 import { elevation, palette, radius, spacing } from '@/constants/design-system';
+import { TABLET_WIDTH } from '@/constants/responsive';
 import { useAuth } from '@/features/auth/auth-context';
 
 type ProfileMenuProps = {
@@ -17,6 +19,7 @@ type ProfileMenuProps = {
 export function ProfileMenu({ visible, onClose, onSwitchBusiness }: ProfileMenuProps) {
   const { session, signOut } = useAuth();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const [signingOut, setSigningOut] = useState(false);
   const [error, setError] = useState('');
 
@@ -46,12 +49,15 @@ export function ProfileMenu({ visible, onClose, onSwitchBusiness }: ProfileMenuP
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.overlay}>
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close account menu" />
-        <View style={[styles.anchor, { paddingTop: insets.top + 78 }]} pointerEvents="box-none">
+        <View style={[styles.anchor, width >= TABLET_WIDTH && styles.wideAnchor, { paddingTop: insets.top + 78 }]} pointerEvents="box-none">
           <View style={styles.card}>
             <View style={styles.identity}>
-              <Text style={styles.name} numberOfLines={1}>{name}</Text>
-              <Text style={styles.phone}>{session.user.phone}</Text>
-              {session.account && <Text style={styles.business} numberOfLines={1}>{session.account.business.name} · {session.account.role}</Text>}
+              <AccountAvatar size={42} />
+              <View style={styles.identityCopy}>
+                <Text style={styles.name} numberOfLines={1}>{name}</Text>
+                <Text style={styles.phone}>{session.user.phone}</Text>
+                {session.account && <Text style={styles.business} numberOfLines={1}>{session.account.business.name} · {session.account.role}</Text>}
+              </View>
             </View>
             <MenuItem label="Account & team" icon="account" onPress={() => open('/explore')} />
             {onSwitchBusiness && <MenuItem label="Switch business" icon="down" onPress={() => {
@@ -86,9 +92,11 @@ function MenuItem({ label, icon, onPress, danger = false, disabled = false }: {
 const styles = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.2)' },
   anchor: { width: '100%', maxWidth: 480, alignSelf: 'center', alignItems: 'flex-end', paddingHorizontal: spacing.lg },
+  wideAnchor: { maxWidth: '100%', paddingHorizontal: spacing.xxl },
   card: { width: 264, maxWidth: '100%', backgroundColor: palette.surface, borderRadius: radius.md,
     borderWidth: 1, borderColor: palette.border, paddingVertical: spacing.xs, ...elevation.card },
-  identity: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.xs },
+  identity: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.sm, flexDirection: 'row', alignItems: 'center' },
+  identityCopy: { flex: 1, minWidth: 0, gap: spacing.xs },
   name: { color: palette.ink, fontSize: 16, fontWeight: '700' },
   phone: { color: palette.secondary, fontSize: 13 },
   business: { color: palette.muted, fontSize: 12 },

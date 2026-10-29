@@ -40,6 +40,7 @@ class User(AbstractUser):
     phone = models.CharField(max_length=11, unique=True)
     first_name = models.CharField(max_length=150, blank=True)
     last_name = models.CharField(max_length=150, blank=True)
+    avatar = models.ImageField(upload_to='account_avatars/', blank=True, null=True)
 
     USERNAME_FIELD = 'phone'
     REQUIRED_FIELDS = []

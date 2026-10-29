@@ -66,7 +66,8 @@ def current_member(session, business_id):
 
 def account_data(user):
     return {
-        'user': {'id': user.id, 'name': user.first_name, 'phone': user.phone},
+        'user': {'id': user.id, 'name': user.first_name, 'phone': user.phone,
+                 'avatar_url': user.avatar.url if user.avatar else None},
         'businesses': [
             {'id': member.business_id, 'name': member.business.name, 'phone': member.business.phone,
              'address': member.business.address, 'logo_url': member.business.logo.url if member.business.logo else None,
@@ -123,6 +124,61 @@ def me(request):
     if not session:
         return error('unauthorized', 'Please sign in.', 401)
     return JsonResponse(account_data(session.user))
+
+
+@csrf_exempt
+def account_profile(request):
+    if request.method != 'PATCH':
+        return error('method_not_allowed', 'Use PATCH.', 405)
+    session = current_session(request)
+    if not session:
+        return error('unauthorized', 'Please sign in.', 401)
+    try:
+        name = required_text(body(request), 'name', 'Name', 150)
+    except ValueError as exc:
+        return error('invalid_input', str(exc))
+    session.user.first_name = name
+    session.user.save(update_fields=['first_name'])
+    return JsonResponse({'user': account_data(session.user)['user']})
+
+
+@csrf_exempt
+def account_avatar(request):
+    if request.method not in ('POST', 'DELETE'):
+        return error('method_not_allowed', 'Use POST or DELETE.', 405)
+    session = current_session(request)
+    if not session:
+        return error('unauthorized', 'Please sign in.', 401)
+    user = session.user
+    old_avatar = user.avatar.name if user.avatar else None
+    if request.method == 'POST':
+        upload = request.FILES.get('image')
+        if not upload or upload.size > 5 * 1024 * 1024:
+            return error('invalid_image', 'Choose a photo smaller than 5 MB.')
+        try:
+            image = Image.open(upload)
+            image.verify()
+            upload.seek(0)
+            image = Image.open(upload)
+            if image.format not in ('JPEG', 'PNG', 'WEBP') or image.width * image.height > 25_000_000:
+                return error('invalid_image', 'Choose a JPG, PNG or WebP image.')
+            image.thumbnail((512, 512))
+            if image.mode not in ('RGB', 'RGBA'):
+                image = image.convert('RGB')
+            output = BytesIO()
+            image.save(output, format='PNG')
+        except (UnidentifiedImageError, OSError, ValueError):
+            return error('invalid_image', 'The selected file is not a valid image.')
+        user.avatar.save(f'{uuid4().hex}.png', ContentFile(output.getvalue()), save=True)
+    else:
+        user.avatar = None
+        user.save(update_fields=['avatar'])
+    if old_avatar:
+        try:
+            user.avatar.storage.delete(old_avatar)
+        except OSError:
+            pass
+    return JsonResponse({'user': account_data(user)['user']})
 
 
 @csrf_exempt

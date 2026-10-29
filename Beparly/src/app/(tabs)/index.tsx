@@ -1,13 +1,15 @@
 import { router, useLocalSearchParams, type Href } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { RefreshControl, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol, symbols } from '@/components/app-symbol';
+import { AccountAvatar } from '@/components/account-avatar';
 import { AppText as Text } from '@/components/app-text';
 import { BusinessPicker } from '@/components/business-picker';
 import { Entrance, PressScale } from '@/components/motion';
 import { ProfileMenu } from '@/components/profile-menu';
+import { DESKTOP_WIDTH, TABLET_WIDTH } from '@/constants/responsive';
 import { elevation, palette, radius, spacing, typography } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
 import { useDashboard, type DashboardActivity } from '@/features/dashboard/use-dashboard';
@@ -41,6 +43,9 @@ const actionRoutes: Partial<Record<(typeof actions)[number]['label'], string>> =
 const amountOrDash = (value: string | null | undefined) => value == null ? '—' : formatBdt(value);
 
 export default function HomeScreen() {
+  const { width } = useWindowDimensions();
+  const wide = width >= TABLET_WIDTH;
+  const desktop = width >= DESKTOP_WIDTH;
   const { session } = useAuth();
   const { businessPicker } = useLocalSearchParams<{ businessPicker?: string }>();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -83,7 +88,7 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false} refreshControl={<RefreshControl refreshing={dashboard.refreshing} onRefresh={dashboard.refresh} tintColor={palette.primaryDeep} />}>
-        <View style={styles.content}>
+        <View style={[styles.content, wide && styles.wideContent]}>
           <View style={styles.hero}>
             <Entrance>
               <View style={styles.header}>
@@ -97,7 +102,7 @@ export default function HomeScreen() {
                   <Text style={styles.greeting}>Good to see you, {displayName}</Text>
                 </View>
                 <PressScale onPress={() => setProfileMenuOpen(true)} accessibilityRole="button" accessibilityLabel="Open account menu" style={styles.avatarHit}>
-                  <View style={styles.avatar}><Text style={styles.avatarText}>{displayName.charAt(0).toUpperCase()}</Text></View>
+                  <View style={styles.avatar}><AccountAvatar size={42} /></View>
                 </PressScale>
               </View>
             </Entrance>
@@ -121,13 +126,13 @@ export default function HomeScreen() {
             </Entrance>
           </View>
 
-          <View style={styles.body}>
+          <View style={[styles.body, wide && styles.wideBody]}>
             <View>
               <Entrance delay={130}><SectionTitle title="Quick actions" /></Entrance>
               <View style={styles.actionGrid}>
                 {actions.filter((action) => (owner || action.label !== 'Receive' && action.label !== 'Expense') &&
                   (action.label !== 'Purchase' || owner || account.can_manage_purchases)).map((action, index) => (
-                  <Entrance key={action.label} delay={160 + index * 45} style={styles.actionSlot}>
+                  <Entrance key={action.label} delay={160 + index * 45} style={[styles.actionSlot, desktop && styles.desktopActionSlot]}>
                     <PressScale
                       onPress={() => {
                         const route = actionRoutes[action.label];
@@ -150,7 +155,7 @@ export default function HomeScreen() {
               <SectionTitle title="At a glance" />
               <View style={styles.overviewGrid}>
                 {overview.map((item) => (
-                  <PressScale key={item.label} onPress={() => router.push(item.route as Href)} accessibilityRole="button" accessibilityLabel={`${item.label}, ${item.value}. ${item.detail}`} style={styles.overviewPressable}>
+                  <PressScale key={item.label} onPress={() => router.push(item.route as Href)} accessibilityRole="button" accessibilityLabel={`${item.label}, ${item.value}. ${item.detail}`} style={[styles.overviewPressable, wide && styles.wideOverviewPressable]}>
                     <View style={styles.overviewCard}>
                       <View style={styles.overviewTop}>
                         <View style={[styles.overviewIcon, { backgroundColor: item.background }]}><AppSymbol name={item.icon} size={19} color={item.color} /></View>
@@ -167,12 +172,13 @@ export default function HomeScreen() {
                 <Text style={styles.partialNote}>Some money figures are unavailable. Pull down to try again.</Text> : null}
             </Entrance>
 
-            <Entrance delay={360}>
+            <View style={[wide && styles.lowerGrid]}>
+            <Entrance delay={360} style={wide && styles.lowerColumn}>
               <SectionTitle title="Sales · last 7 days" />
               <SalesTrend days={dashboard.sales?.value?.last_seven_days ?? null} error={dashboard.sales?.error ?? ''} />
             </Entrance>
 
-            <Entrance delay={400}>
+            <Entrance delay={400} style={wide && styles.lowerColumn}>
               <SectionTitle title="Recent activity" />
               {dashboard.activity?.error ? <Text accessibilityRole="alert" style={styles.loadError}>{dashboard.activity.error}</Text> :
                 dashboard.activity?.value?.length ? <View style={styles.activityCard}>{dashboard.activity.value.map((event, index) =>
@@ -181,6 +187,7 @@ export default function HomeScreen() {
                   <Text style={styles.emptyTitle}>{dashboard.activity ? 'No posted activity yet' : 'Loading recent activity…'}</Text>
                   {dashboard.activity ? <Text style={styles.emptyDetail}>Sales and purchases will appear here.</Text> : null}</View>}
             </Entrance>
+            </View>
           </View>
         </View>
       </ScrollView>
@@ -261,6 +268,7 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1, backgroundColor: palette.primary },
   scroll: { flexGrow: 1, backgroundColor: palette.background, alignItems: 'center', paddingBottom: 102 },
   content: { width: '100%', maxWidth: 480 },
+  wideContent: { maxWidth: 1320 },
   hero: { backgroundColor: palette.primary, paddingHorizontal: spacing.xl, paddingTop: spacing.lg, paddingBottom: spacing.xxxl, borderBottomLeftRadius: radius.xl, borderBottomRightRadius: radius.xl },
   header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.md, marginBottom: spacing.xxl },
   headerCopy: { flex: 1 },
@@ -270,7 +278,6 @@ const styles = StyleSheet.create({
   greeting: { color: palette.primaryDark, fontSize: typography.body, marginTop: spacing.xs },
   avatarHit: { marginTop: spacing.sm },
   avatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#D6F8F2' },
-  avatarText: { color: palette.ink, fontSize: 19, fontWeight: '700' },
   salesCard: { backgroundColor: palette.surface, borderRadius: radius.lg, padding: spacing.xl, ...elevation.hero },
   salesTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm },
   salesTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexShrink: 1 },
@@ -285,17 +292,22 @@ const styles = StyleSheet.create({
   salesMetaValue: { color: palette.ink, fontSize: 17, fontWeight: '700', marginTop: spacing.xs },
   loadError: { color: '#A62925', fontSize: 12, lineHeight: 17, marginTop: spacing.sm },
   body: { paddingHorizontal: spacing.lg, paddingTop: spacing.xxl, gap: spacing.xxl },
+  wideBody: { paddingHorizontal: spacing.xxl },
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md },
   sectionTitle: { color: palette.ink, fontSize: typography.section, fontWeight: '700', letterSpacing: -0.2 },
   sectionRule: { flex: 1, height: 1, backgroundColor: palette.border },
   actionGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   actionSlot: { width: '22%' },
+  desktopActionSlot: { width: '13.4%' },
   actionPressable: { width: '100%' },
   actionCell: { backgroundColor: palette.surface, borderRadius: radius.md, borderWidth: 1, borderColor: palette.border, minHeight: 99, alignItems: 'center', justifyContent: 'center', gap: spacing.sm, paddingHorizontal: spacing.xs, ...elevation.card },
   actionIcon: { width: 46, height: 46, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   actionLabel: { color: palette.ink, fontSize: typography.action, fontWeight: '600', textAlign: 'center' },
   overviewGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   overviewPressable: { width: '48%', flexGrow: 1 },
+  wideOverviewPressable: { width: '23%', flexGrow: 1 },
+  lowerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xl },
+  lowerColumn: { flexBasis: '47%', flexGrow: 1, minWidth: 300 },
   overviewCard: { backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border, borderRadius: radius.md, padding: spacing.lg, minHeight: 148, ...elevation.card },
   overviewTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.md },
   overviewIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },

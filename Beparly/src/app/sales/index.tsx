@@ -1,11 +1,12 @@
 import { router, useFocusEffect, usePathname, type Href } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
-import { Image, Keyboard, Modal, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Image, Keyboard, Modal, Pressable, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Barcode, Camera, ChevronDown, ChevronLeft, Eye, FileText, Funnel, MoreHorizontal, Plus, Printer, RotateCcw, Search, Share2, X } from '@/components/sales-icons';
 
 import { AppSymbol } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { TABLET_WIDTH } from '@/constants/responsive';
 import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { palette, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
@@ -21,6 +22,8 @@ type SymbolName = React.ComponentProps<typeof AppSymbol>['name'];
 const dismissInput = () => { Keyboard.dismiss(); blurWebFocus(); };
 
 export default function SalesHome() {
+  const { width } = useWindowDimensions();
+  const wide = width >= TABLET_WIDTH;
   const isTab = usePathname() === '/sales-hub';
   const { session } = useAuth();
   const [sales, setSales] = useState<SaleRecord[]>([]);
@@ -87,7 +90,7 @@ export default function SalesHome() {
   };
   const openSale = (sale: SaleRecord) => { setActionSale(null); router.push(`/sales/${sale.id}/details` as Href); };
 
-  return <SafeAreaView style={styles.safe} edges={isTab ? ['top'] : ['top', 'bottom']}><View style={styles.screen}>
+  return <SafeAreaView style={styles.safe} edges={isTab ? ['top'] : ['top', 'bottom']}><View style={[styles.screen, wide && styles.wideScreen]}>
     <View style={styles.header}>
       {!isTab && <Pressable onPress={() => router.canGoBack() ? router.back() : router.replace('/' as Href)} accessibilityRole="button" accessibilityLabel="Back" style={styles.back}><ChevronLeft size={23} color={palette.ink} /></Pressable>}
       <View style={styles.headerCopy}><Text style={styles.title}>Sales</Text><Text style={styles.subtitle}>Invoices and checkout</Text></View>
@@ -130,16 +133,16 @@ export default function SalesHome() {
     </RefreshableScrollView>
 
     {filterOpen && <SalesFilterSheet value={filters} onClose={() => setFilterOpen(false)} onApply={(next) => { selection.clear(); setFilters(next); setPage(1); setFilterOpen(false); }} />}
-    <Modal visible={salePickerOpen} transparent animationType="fade" onRequestClose={() => setSalePickerOpen(false)}><View style={styles.modalBackdrop}>
+    <Modal visible={salePickerOpen} transparent animationType="fade" onRequestClose={() => setSalePickerOpen(false)}><View style={[styles.modalBackdrop, wide && styles.centeredBackdrop]}>
       <Pressable style={StyleSheet.absoluteFill} onPress={() => setSalePickerOpen(false)} accessibilityLabel="Close sale type chooser" />
-      <View style={styles.salePicker}><View style={styles.pickerHeader}><Text style={styles.pickerTitle}>Choose sale type</Text><Pressable onPress={() => setSalePickerOpen(false)} accessibilityLabel="Close" style={styles.closeButton}><X size={20} color={palette.ink} /></Pressable></View>
+      <View style={[styles.salePicker, wide && styles.centeredSheet]}><View style={styles.pickerHeader}><Text style={styles.pickerTitle}>Choose sale type</Text><Pressable onPress={() => setSalePickerOpen(false)} accessibilityLabel="Close" style={styles.closeButton}><X size={20} color={palette.ink} /></Pressable></View>
         <Pressable onPress={() => newSale('retail')} style={styles.saleTypeCard}><AppSymbol name="sale" size={22} color={palette.primaryDeep} /><View style={styles.saleTypeCopy}><Text style={styles.saleTypeTitle}>Retail Sale</Text><Text style={styles.saleTypeHint}>Quick checkout with retail prices</Text></View></Pressable>
         <Pressable onPress={() => newSale('wholesale')} style={styles.saleTypeCard}><AppSymbol name="products" size={22} color="#A35C00" /><View style={styles.saleTypeCopy}><Text style={styles.saleTypeTitle}>Wholesale Sale</Text><Text style={styles.saleTypeHint}>Party sale with wholesale prices</Text></View></Pressable>
       </View>
     </View></Modal>
-    <Modal visible={!!actionSale} transparent animationType="fade" onRequestClose={() => setActionSale(null)}><View style={styles.modalBackdrop}>
+    <Modal visible={!!actionSale} transparent animationType="fade" onRequestClose={() => setActionSale(null)}><View style={[styles.modalBackdrop, wide && styles.centeredBackdrop]}>
       <Pressable style={StyleSheet.absoluteFill} onPress={() => setActionSale(null)} accessibilityLabel="Close sale actions" />
-      {actionSale && <View style={styles.actionSheet}>
+      {actionSale && <View style={[styles.actionSheet, wide && styles.centeredSheet]}>
         <View style={styles.pickerHeader}><View><Text style={styles.pickerTitle}>Sale actions</Text><Text style={styles.actionSubtitle}>{displayDocumentNumber(actionSale.invoice_number)}</Text></View><Pressable onPress={() => setActionSale(null)} accessibilityLabel="Close" style={styles.closeButton}><X size={20} color={palette.ink} /></Pressable></View>
         <SaleAction icon={Eye} label="View details" onPress={() => openSale(actionSale)} />
         {actionSale.status === 'completed' && <>
@@ -192,6 +195,7 @@ function StatusPill({ status, paid, due }: { status: SaleRecord['status']; paid:
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background }, screen: { flex: 1, width: '100%', maxWidth: 860, alignSelf: 'center', backgroundColor: palette.background },
+  wideScreen: { maxWidth: 1100 },
   header: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: spacing.lg, paddingVertical: 12, backgroundColor: palette.surface, borderBottomWidth: 1, borderBottomColor: palette.border },
   back: { width: 44, height: 44, borderRadius: 22, backgroundColor: palette.background, alignItems: 'center', justifyContent: 'center' },
   headerCopy: { flex: 1, minWidth: 0 }, title: { color: palette.ink, fontSize: 23, fontWeight: '800' }, subtitle: { color: palette.muted, fontSize: 11, marginTop: 2 },
@@ -215,6 +219,8 @@ const styles = StyleSheet.create({
   pagination: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingTop: 5 }, pageButton: { minHeight: 44, justifyContent: 'center', paddingHorizontal: 13, borderRadius: 10, backgroundColor: palette.primarySoft }, pageDisabled: { opacity: 0.4 }, pageText: { color: palette.primaryDeep, fontSize: 11, fontWeight: '800' }, pageNumber: { color: palette.muted, fontSize: 11 },
   olderButton: { minHeight: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 12, backgroundColor: palette.primarySoft }, olderText: { color: palette.primaryDeep, fontSize: 12, fontWeight: '800' }, empty: { alignItems: 'center', padding: 40, gap: 8 }, emptyTitle: { color: palette.ink, fontSize: 16, fontWeight: '800' }, emptyCopy: { color: palette.muted, fontSize: 12, textAlign: 'center' }, error: { color: '#B42318', fontSize: 12 },
   modalBackdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(15,25,22,.42)' }, salePicker: { width: '100%', maxWidth: 620, alignSelf: 'center', padding: spacing.lg, gap: 10, borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: palette.surface }, actionSheet: { width: '100%', maxWidth: 620, maxHeight: '85%', alignSelf: 'center', padding: spacing.lg, gap: 5, borderTopLeftRadius: 24, borderTopRightRadius: 24, backgroundColor: palette.surface },
+  centeredBackdrop: { justifyContent: 'center', padding: spacing.lg },
+  centeredSheet: { borderBottomLeftRadius: 24, borderBottomRightRadius: 24 },
   pickerHeader: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 5 }, pickerTitle: { color: palette.ink, fontSize: 20, fontWeight: '800' }, actionSubtitle: { color: palette.muted, fontSize: 12, marginTop: 3 }, closeButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
   saleTypeCard: { minHeight: 70, flexDirection: 'row', alignItems: 'center', gap: 12, padding: 13, borderRadius: 15, borderWidth: 1, borderColor: palette.border, backgroundColor: palette.background }, saleTypeCopy: { flex: 1, gap: 3 }, saleTypeTitle: { color: palette.ink, fontSize: 14, fontWeight: '800' }, saleTypeHint: { color: palette.muted, fontSize: 11 },
   actionRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 12, borderRadius: 10, backgroundColor: palette.background }, actionText: { color: palette.ink, fontSize: 14, fontWeight: '700' },

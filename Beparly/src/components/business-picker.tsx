@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { AppSymbol } from '@/components/app-symbol';
 import { AppText as Text } from '@/components/app-text';
+import { TABLET_WIDTH } from '@/constants/responsive';
 import { PressScale } from '@/components/motion';
 import { elevation, palette, radius, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
 import { api, type BusinessSwitcherStat } from '@/services/api';
 
 export function BusinessPicker({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  const { width } = useWindowDimensions();
+  const wide = width >= TABLET_WIDTH;
   const { session, selectBusiness } = useAuth();
   const [stats, setStats] = useState<BusinessSwitcherStat[] | null>(null);
   const [statsError, setStatsError] = useState(false);
@@ -31,9 +34,9 @@ export function BusinessPicker({ visible, onClose }: { visible: boolean; onClose
   const locations = currentStats?.reduce((total, item) => total + item.locations, 0);
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modal}>
+      <View style={[styles.modal, wide && styles.centeredModal]}>
         <Pressable style={styles.backdrop} onPress={onClose} accessibilityLabel="Close business picker" />
-        <SafeAreaView edges={['bottom']} style={styles.sheet}>
+        <SafeAreaView edges={wide ? [] : ['bottom']} style={[styles.sheet, wide && styles.centeredSheet]}>
           <View style={styles.handle} />
           <View style={styles.sheetHeading}>
             <View><Text style={styles.title}>Your businesses</Text><Text style={styles.subtitle}>Choose where you want to work.</Text></View>
@@ -79,8 +82,10 @@ export function BusinessPicker({ visible, onClose }: { visible: boolean; onClose
 
 const styles = StyleSheet.create({
   modal: { flex: 1, justifyContent: 'flex-end' },
+  centeredModal: { justifyContent: 'center', alignItems: 'center', padding: spacing.lg },
   backdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: 'rgba(11, 35, 31, 0.45)' },
   sheet: { backgroundColor: palette.background, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, maxHeight: '85%', ...elevation.hero },
+  centeredSheet: { width: '100%', maxWidth: 560, borderBottomLeftRadius: radius.xl, borderBottomRightRadius: radius.xl },
   handle: { width: 38, height: 4, borderRadius: 2, backgroundColor: palette.border, alignSelf: 'center', marginTop: spacing.sm },
   sheetHeading: { padding: spacing.xl, paddingBottom: spacing.md, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: spacing.md },
   headingActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },

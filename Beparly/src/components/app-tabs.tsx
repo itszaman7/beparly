@@ -1,11 +1,12 @@
 import { usePathname } from 'expo-router';
 import { Tabs, TabList, TabTrigger, TabSlot, type TabListProps, type TabTriggerSlotProps } from 'expo-router/ui';
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { useAnimatedStyle, useReducedMotion, useSharedValue, withTiming } from 'react-native-reanimated';
 
 import { AppSymbol } from '@/components/app-symbol';
+import { TABLET_WIDTH } from '@/constants/responsive';
 import { AppText as Text } from '@/components/app-text';
 import { palette, radius, spacing } from '@/constants/design-system';
 import { useAuth } from '@/features/auth/auth-context';
@@ -37,6 +38,7 @@ export default function AppTabs() {
 }
 
 function AppTabList({ selected, count, children, ...props }: TabListProps & { selected: number; count: number }) {
+  const { width: screenWidth } = useWindowDimensions();
   const keyboardVisible = useKeyboardVisible();
   const insets = useSafeAreaInsets();
   const reducedMotion = useReducedMotion();
@@ -52,7 +54,7 @@ function AppTabList({ selected, count, children, ...props }: TabListProps & { se
   }));
 
   return (
-    <View {...props} style={[styles.bar, { paddingBottom: Math.max(insets.bottom, 8) }, keyboardVisible && styles.hiddenBar]}>
+    <View {...props} style={[styles.bar, { paddingBottom: Math.max(insets.bottom, 8) }, (keyboardVisible || screenWidth >= TABLET_WIDTH) && styles.hiddenBar]}>
       <View style={styles.inner} onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
         {width > 0 && <Animated.View pointerEvents="none" style={[styles.indicator, { width: width / count - 6, left: 3 }, indicator]} />}
         {children}

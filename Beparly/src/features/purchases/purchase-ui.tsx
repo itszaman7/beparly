@@ -299,7 +299,7 @@ export function PurchasesScreen() {
     } catch (cause) { setError(message(cause)); }
   }, [session]);
   useFocusEffect(useCallback(() => { void load(); return clearSelection; }, [load, clearSelection]));
-  return <Screen title="Purchases" backTo="/more" onRefresh={() => load()}><Action label="New purchase" icon="plus" onPress={() => router.push('/purchases/new')} />
+  return <Screen title="Purchases" backTo="/more" wide onRefresh={() => load()}><Action label="New purchase" icon="plus" onPress={() => router.push('/purchases/new')} />
      <SelectionToolbar type="purchase" rows={rows} {...selection} onChanged={() => void load()} />
      <ErrorText value={error} />{rows.length === 0 && !error && <Text style={styles.muted}>No purchases yet.</Text>}
      {rows.map(item => <Pressable key={item.id} accessibilityRole="button" accessibilityLabel={`${item.number || 'Draft purchase'}, ${item.status}${selection.selecting ? ', tap to select' : ', long press to select'}`} accessibilityState={{ selected: selection.selected.includes(item.id) }} style={[styles.card, selection.selected.includes(item.id) && { borderColor: '#006D64', backgroundColor: '#DDF3EF' }]} onLongPress={() => selection.longPress(item.id)} onPress={() => selection.press(item.id, () => router.push(`/purchases/${item.id}` as Href))}>

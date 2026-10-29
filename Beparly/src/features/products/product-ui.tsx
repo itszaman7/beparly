@@ -2,7 +2,7 @@ import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect, useLocalSearchParams, type Href } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, FlatList, Image, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useKeyboardVisible } from '@/hooks/use-keyboard-visible';
 import { toast } from 'tamagui/toast';
@@ -12,6 +12,7 @@ import { AppText as Text } from '@/components/app-text';
 import { DateField } from '@/components/date-field';
 import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { palette, spacing, radius, appFontFamily } from '@/constants/design-system';
+import { TABLET_WIDTH } from '@/constants/responsive';
 import { useAuth } from '@/features/auth/auth-context';
 import { MediaPicker } from '@/features/media/media-picker';
 import { cancelProduct, cancelStock, correctStock, pendingProducts, pendingStock, queueProduct, stageProductImage, syncProducts, syncStock } from '@/features/products/product-outbox';
@@ -28,7 +29,8 @@ const commandId = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, 
 });
 
 function Shell({ title, children }: { title: string; children: React.ReactNode }) {
-  return <SafeAreaView style={styles.safe}><View style={styles.header}>
+  const { width } = useWindowDimensions();
+  return <SafeAreaView style={styles.safe}><View style={[styles.header, title === 'Products' && width >= TABLET_WIDTH && styles.wideListHeader]}>
     <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.back()} style={styles.back}><AppSymbol name="back" size={24} color={palette.primary} /></Pressable>
     <Text style={styles.title}>{title}</Text>
   </View>{children}</SafeAreaView>;
@@ -55,6 +57,7 @@ function ChoiceModal({ visible, title, onClose, children }: { visible: boolean; 
   </Modal>;
 }
 export function ProductListScreen() {
+  const { width } = useWindowDimensions();
   const { session } = useAuth();
   const { stock: stockParam } = useLocalSearchParams<{ stock?: string }>();
   const token = session?.token; const businessId = session?.account?.business.id;
@@ -127,7 +130,7 @@ export function ProductListScreen() {
     price_asc: 'Price: low to high', price_desc: 'Price: high to low',
     stock_asc: 'Stock: low to high', stock_desc: 'Stock: high to low',
   };
-  return <Shell title="Products"><View style={styles.listBody}>
+  return <Shell title="Products"><View style={[styles.listBody, width >= TABLET_WIDTH && styles.wideListBody]}>
     <View style={styles.kpiRow}>
       <Pressable accessibilityRole="button" accessibilityLabel="Show active products" onPress={() => { setActive('true'); setStock('all'); }} style={[styles.kpiCard, active === 'true' && stock === 'all' && styles.kpiSelected]}><AppSymbol name="products" size={18} color={palette.primary} /><Text style={styles.kpiValue}>{summary?.active_products ?? '—'}</Text><Text style={styles.kpiLabel}>Active</Text></Pressable>
       <Pressable accessibilityRole="button" accessibilityLabel="Show low stock products" onPress={() => { setStock('low_stock'); setActive('true'); }} style={[styles.kpiCard, stock === 'low_stock' && styles.kpiSelected]}><AppSymbol name="warning" size={18} color={palette.primary} /><Text style={styles.kpiValue}>{summary?.low_stock ?? '—'}</Text><Text style={styles.kpiLabel}>Low stock</Text></Pressable>
@@ -430,7 +433,9 @@ const styles = StyleSheet.create({
   formHeading: { flexDirection: 'row', alignItems: 'center', gap: 8 }, formHeadingText: { flex: 1, color: palette.ink, fontSize: 17, fontWeight: '700' },
   formInfo: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   safe: { flex: 1, backgroundColor: palette.surface }, header: { width: '100%', maxWidth: 640, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 12, padding: spacing.lg }, back: { width: 44, height: 44, justifyContent: 'center' }, title: { fontSize: 22, color: palette.ink, fontWeight: '700' },
+  wideListHeader: { maxWidth: 1100 },
   listBody: { flex: 1, width: '100%', maxWidth: 640, alignSelf: 'center', paddingHorizontal: spacing.lg, gap: 12, paddingBottom: spacing.lg }, input: { minHeight: 52, borderWidth: 1, borderColor: palette.border, borderRadius: radius.sm, backgroundColor: palette.surface, color: palette.ink, paddingHorizontal: 14, fontFamily: appFontFamily, fontSize: 15 },
+  wideListBody: { maxWidth: 1100 },
   kpiRow: { flexDirection: 'row', gap: 8 }, kpiCard: { flex: 1, minWidth: 0, minHeight: 94, padding: 10, borderWidth: 1, borderColor: palette.border, borderRadius: radius.sm, backgroundColor: palette.surface, justifyContent: 'space-between' }, kpiSelected: { borderColor: palette.primary, backgroundColor: palette.primarySoft }, kpiValue: { color: palette.ink, fontSize: 21, fontWeight: '700' }, kpiLabel: { color: palette.secondary, fontSize: 11, fontWeight: '600' },
   listControls: { flexDirection: 'row', gap: 8 }, controlButton: { flex: 1, minWidth: 0, minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: 8, borderWidth: 1, borderColor: palette.border, borderRadius: radius.sm }, controlText: { color: palette.ink, fontSize: 13, fontWeight: '600', flexShrink: 1 },
   action: { minHeight: 54, backgroundColor: palette.primary, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' }, actionText: { color: '#fff', fontSize: 16, fontWeight: '700' },

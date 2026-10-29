@@ -1,11 +1,14 @@
 import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider, useRootNavigationState, useSegments } from 'expo-router';
 import { useFonts } from 'expo-font';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import * as Device from 'expo-device';
+import * as ScreenOrientation from 'expo-screen-orientation';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { useEffect } from 'react';
 import { TamaguiProvider } from 'tamagui';
 import { Toast } from 'tamagui/toast';
 
 import { AppText } from '@/components/app-text';
+import { ResponsiveShell } from '@/components/responsive-shell';
 import { AuthProvider, useAuth } from '@/features/auth/auth-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { blurWebFocus } from '@/utils/web-focus';
@@ -30,6 +33,18 @@ function Navigation() {
   });
   const colorScheme = useColorScheme();
   useEffect(() => {
+    if (Platform.OS === 'web') return;
+    let active = true;
+    void Device.getDeviceTypeAsync().then((deviceType) => {
+      if (!active) return;
+      return ScreenOrientation.lockAsync(deviceType === Device.DeviceType.TABLET
+        ? ScreenOrientation.OrientationLock.DEFAULT : ScreenOrientation.OrientationLock.PORTRAIT_UP);
+    }).catch(() => {
+      if (active) void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(() => {});
+    });
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
     if (restoring || restoreError || !rootNavigationState?.key) return;
     const authRoute = segments[0] === 'sign-in' || segments[0] === 'register';
     if (!session && !authRoute) void router.replace('/sign-in');
@@ -41,7 +56,7 @@ function Navigation() {
       <Toast position="top-center" duration={4000}>
         <Toast.Viewport offset={64}><Toast.List /></Toast.Viewport>
         <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <Stack screenOptions={{ headerShown: false }} screenListeners={{ transitionStart: blurWebFocus, blur: blurWebFocus }}>
+          <ResponsiveShell><Stack screenOptions={{ headerShown: false }} screenListeners={{ transitionStart: blurWebFocus, blur: blurWebFocus }}>
             <Stack.Screen name="(tabs)" />
             <Stack.Screen name="businesses/new" />
             <Stack.Screen name="stock" />
@@ -57,7 +72,7 @@ function Navigation() {
             <Stack.Screen name="print-settings" />
             <Stack.Screen name="sign-in" />
             <Stack.Screen name="register" />
-          </Stack>
+          </Stack></ResponsiveShell>
           {showLoading && <View style={StyleSheet.absoluteFill}><SuspenseFallback /></View>}
           {!showLoading && restoreError && (
             <View style={[StyleSheet.absoluteFill, { backgroundColor: '#F6F8F7', alignItems: 'center', justifyContent: 'center', padding: 28 }]}>

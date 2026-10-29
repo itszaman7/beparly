@@ -3,7 +3,7 @@
     "name": "GotiBooks",
     "slug": "Beparly",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/images/android-chrome-512x512.png",
     "scheme": "beparly",
     "userInterfaceStyle": "automatic",
@@ -54,6 +54,17 @@
           "cameraPermission": "Allow GotiBooks to scan product barcodes",
           "recordAudioAndroid": false,
           "barcodeScannerEnabled": true
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "useLegacyPackaging": true,
+            "enableBundleCompression": true,
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true
+          }
         }
       ]
     ],

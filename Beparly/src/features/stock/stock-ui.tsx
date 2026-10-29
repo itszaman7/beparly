@@ -9,6 +9,7 @@ import { AppText as Text } from '@/components/app-text';
 import { RefreshableScrollView } from '@/components/refreshable-scroll-view';
 import { Entrance, PressScale } from '@/components/motion';
 import { appFontFamily, elevation, palette, radius, spacing, typography } from '@/constants/design-system';
+import { TABLET_WIDTH } from '@/constants/responsive';
 import { useAuth } from '@/features/auth/auth-context';
 import { api, type LocationInput, type LocationMovement, type LocationOverview, type StockLocation } from '@/services/api';
 import { formatBdt } from '@/features/products/product-rules';
@@ -41,22 +42,24 @@ function useLocation() {
 }
 
 function Page({ title, subtitle, children, floatingAction, root = false, onRefresh }: { title: string; subtitle?: string; children: React.ReactNode; floatingAction?: React.ReactNode; root?: boolean; onRefresh?: () => Promise<unknown> | void }) {
+  const { width } = useWindowDimensions();
+  const wideRoot = root && width >= TABLET_WIDTH;
   const keyboardVisible = useKeyboardVisible();
   const Scroller = onRefresh ? RefreshableScrollView : ScrollView;
   return <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-    <View style={styles.pageHeader}>
+    <View style={[styles.pageHeader, wideRoot && styles.widePageHeader]}>
       <Pressable accessibilityRole="button" accessibilityLabel="Go back" onPress={() => router.canGoBack() ? router.back() : router.replace(root ? '/' : '/stock' as Href)} style={styles.back}>
         <AppSymbol name="back" size={24} color={palette.primary} />
       </Pressable>
       <Text style={styles.headerTitle}>{title}</Text>
     </View>
     <Scroller onRefresh={onRefresh!} style={{ flex: 1 }} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={styles.scroll}>
-      <View style={styles.content}>
+      <View style={[styles.content, wideRoot && styles.wideContent]}>
         {subtitle && <Entrance><Text style={styles.subtitle}>{subtitle}</Text></Entrance>}
         <View style={styles.body}>{children}</View>
       </View>
     </Scroller>
-    {floatingAction && !keyboardVisible && <View style={styles.floatingWrap}>{floatingAction}</View>}
+    {floatingAction && !keyboardVisible && <View style={[styles.floatingWrap, wideRoot && styles.wideFloatingWrap]}>{floatingAction}</View>}
   </SafeAreaView>;
 }
 
@@ -364,9 +367,11 @@ export function PendingStockScreen({ kind }: { kind: keyof typeof pendingCopy })
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: palette.background },
   pageHeader: { minHeight: 76, width: '100%', maxWidth: 640, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 12, padding: spacing.lg, backgroundColor: palette.surface },
+  widePageHeader: { maxWidth: 1100 },
   headerTitle: { color: palette.ink, fontSize: 22, fontWeight: '700' },
   scroll: { flexGrow: 1, alignItems: 'center', paddingHorizontal: spacing.lg, paddingBottom: 112 },
   content: { width: '100%', maxWidth: 560 },
+  wideContent: { maxWidth: 1040 },
   back: { width: 44, height: 44, justifyContent: 'center' },
   subtitle: { color: palette.secondary, fontSize: 14, marginTop: 5 },
   body: { gap: 12, marginTop: 20 },
@@ -383,6 +388,7 @@ const styles = StyleSheet.create({
   listTitle: { color: palette.ink, fontSize: typography.section, fontWeight: '700' },
   listCount: { color: palette.secondary, fontSize: typography.caption, fontWeight: '700', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 12, backgroundColor: palette.border },
   floatingWrap: { position: 'absolute', bottom: spacing.xl, alignSelf: 'center', width: '100%', maxWidth: 560, paddingHorizontal: spacing.lg, alignItems: 'flex-end' },
+  wideFloatingWrap: { maxWidth: 1040 },
   floatingAdd: { width: 56, height: 56 },
   floatingFace: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.primary, ...elevation.hero },
   card: { backgroundColor: palette.surface, borderWidth: 1, borderColor: palette.border, borderRadius: radius.lg, padding: spacing.lg, gap: 8, ...elevation.card },

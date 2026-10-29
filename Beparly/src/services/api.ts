@@ -2,7 +2,7 @@ import { Platform } from 'react-native';
 import { File as ExpoFile, UploadType } from 'expo-file-system';
 
 export type Account = {
-  user: { id: number; name: string; phone: string };
+  user: { id: number; name: string; phone: string; avatar_url: string | null };
   business: { id: number; name: string; phone?: string; address?: string; logo_url?: string | null; show_currency_symbol?: boolean; invoice_footer_text?: string; label_print_settings?: LabelPrintSettings; invoice_paper?: 'A4' | 'A5'; receipt_paper?: '58mm' | '80mm'; timezone?: string };
   role: 'owner' | 'employee';
   can_manage_purchases?: boolean;
@@ -265,6 +265,12 @@ export const api = {
   quotationDocumentUrl: (businessId: number, id: string, size: 'a4' | 'a5') => `${apiBaseUrl()}/api/v1/businesses/${businessId}/quotations/${id}/documents/${size}/`,
   login: (data: { phone: string; password: string }) => request<AuthResult>('auth/login/', 'POST', data),
   me: (token: string) => request<Omit<AuthResult, 'token'>>('auth/me/', 'GET', undefined, token),
+  updateAccountProfile: (token: string, name: string) =>
+    request<{ user: Account['user'] }>('auth/profile/', 'PATCH', { name }, token),
+  uploadAccountAvatar: (token: string, uri: string) =>
+    uploadPublicImage('auth/profile/image/', token, uri, 'profile.jpg', 'Could not upload profile photo.') as Promise<{ user: Account['user'] }>,
+  removeAccountAvatar: (token: string) =>
+    request<{ user: Account['user'] }>('auth/profile/image/', 'DELETE', undefined, token),
   logout: (token: string) => request<{ ok: boolean }>('auth/logout/', 'POST', {}, token),
   businesses: (token: string) => request<{ user: Account['user']; businesses: BusinessProfile[] }>('businesses/', 'GET', undefined, token),
   businessSwitcherSummary: (token: string) => request<{ businesses: BusinessSwitcherStat[] }>('businesses/switcher-summary/', 'GET', undefined, token),

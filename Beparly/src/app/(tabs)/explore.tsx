@@ -5,6 +5,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Button, Text, XStack, YStack } from 'tamagui';
 
 import { useAuth } from '@/features/auth/auth-context';
+import { ProfileCard } from '@/features/auth/profile-card';
 import { api, Employee } from '@/services/api';
 
 const green = '#00B8A9';
@@ -50,11 +51,8 @@ export default function AccountScreen() {
     <SafeAreaView style={{ flex: 1, backgroundColor: '#F6F8F7' }}>
       <YStack padding={22} gap={18}>
         <Text color={ink} fontSize={25} fontWeight="700">Account</Text>
-        <YStack backgroundColor="white" borderRadius={18} padding={20} gap={8}>
-          <Text color={ink} fontSize={17} fontWeight="700">{session.user.name || session.user.phone}</Text>
-          <Text color={muted} fontSize={13}>{session.user.phone}</Text>
-          <Text color={muted} fontSize={13}>Ask your administrator to assign you to a business.</Text>
-        </YStack>
+        <ProfileCard />
+        <Text color={muted} fontSize={13}>Ask your administrator to assign you to a business.</Text>
         {!!error && <Text color="#A62925" fontSize={13}>{error}</Text>}
         <Button backgroundColor="#E5F8F4" onPress={() => router.push('/')}><Text color={green} fontWeight="600">Go to Home</Text></Button>
         <Button backgroundColor="white" onPress={logout} disabled={busy}><Text color="#A62925" fontWeight="600">Sign out</Text></Button>
@@ -110,8 +108,6 @@ export default function AccountScreen() {
     } finally { setSavingPermissionFor(null); }
   }
 
-  const accountLabel = account.user.name || (account.role === 'owner' ? 'Owner' : 'Employee');
-
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: '#F8FAF9' }}>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ alignItems: 'center', paddingBottom: 110 }} refreshControl={<RefreshControl refreshing={loading} onRefresh={() => setRefreshCount((count) => count + 1)} />}>
@@ -125,20 +121,7 @@ export default function AccountScreen() {
             <Text color={green} fontSize={14} fontWeight="700">Switch business profile</Text>
           </Button>
 
-          <YStack backgroundColor="white" borderRadius={22} borderWidth={1} borderColor="#E2EAE4" padding={20} gap={15}>
-            <XStack alignItems="center" gap={14}>
-              <YStack width={52} height={52} borderRadius={26} backgroundColor="#D8F0E2" alignItems="center" justifyContent="center">
-                <Text color={green} fontWeight="700" fontSize={21}>{accountLabel.charAt(0).toUpperCase()}</Text>
-              </YStack>
-              <YStack gap={3}>
-                <Text color={ink} fontSize={18} fontWeight="700">{accountLabel}</Text>
-                <Text color={muted} fontSize={13}>{account.role === 'owner' ? 'Business owner' : 'Employee'}</Text>
-              </YStack>
-            </XStack>
-            <YStack height={1} backgroundColor="#EEF1EE" />
-            <Text color={muted} fontSize={13}>Phone number</Text>
-            <Text color={ink} fontSize={16} fontWeight="600">{account.user.phone}</Text>
-          </YStack>
+          <ProfileCard role={account.role === 'owner' ? 'Business owner' : 'Employee'} />
 
           {account.role === 'owner' && (
             <YStack gap={14}>

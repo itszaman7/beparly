@@ -12,6 +12,53 @@ from .models import AuthSession, Business, BusinessMember, User, normalize_phone
 
 
 class AccountApiTests(TestCase):
+    def test_signed_in_user_can_edit_own_name(self):
+        token = self.create_user_token(username='Old name')
+        other = User.objects.create_user('01812345678', password='EmployeePass#89', first_name='Other person')
+        path = '/api/v1/auth/profile/'
+        self.assertEqual(self.client.patch(path, data=json.dumps({'name': 'Changed'}),
+            content_type='application/json').status_code, 401)
+        invalid = self.client.patch(path, data=json.dumps({'name': '  '}), content_type='application/json',
+                                    HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(invalid.status_code, 400)
+        changed = self.client.patch(path, data=json.dumps({'name': '  New name  '}), content_type='application/json',
+                                    HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(changed.status_code, 200, changed.content)
+        self.assertEqual(changed.json()['user']['name'], 'New name')
+        self.assertEqual(User.objects.get(phone='01712345678').first_name, 'New name')
+        self.assertEqual(User.objects.get(pk=other.pk).first_name, 'Other person')
+        me = self.client.get('/api/v1/auth/me/', HTTP_AUTHORIZATION=f'Bearer {token}')
+        self.assertEqual(me.json()['user']['name'], 'New name')
+
+    def test_signed_in_user_can_upload_replace_and_remove_own_photo(self):
+        token = self.create_user_token()
+        other = User.objects.create_user('01812345678', password='EmployeePass#89')
+        path = '/api/v1/auth/profile/image/'
+        image = BytesIO()
+        Image.new('RGB', (80, 80), '#126b5b').save(image, format='PNG')
+
+        def upload(auth, data=image.getvalue()):
+            return self.client.post(path, {'image': SimpleUploadedFile('profile.png', data, content_type='image/png')},
+                                    HTTP_AUTHORIZATION=f'Bearer {auth}')
+
+        with tempfile.TemporaryDirectory() as media_root, override_settings(MEDIA_ROOT=media_root):
+            self.assertEqual(upload('invalid').status_code, 401)
+            first = upload(token)
+            self.assertEqual(first.status_code, 200, first.content)
+            self.assertIn('account_avatars/', first.json()['user']['avatar_url'])
+            old_name = User.objects.get(phone='01712345678').avatar.name
+            self.assertEqual(upload(token, b'not an image').status_code, 400)
+            self.assertEqual(User.objects.get(phone='01712345678').avatar.name, old_name)
+            second = upload(token)
+            self.assertEqual(second.status_code, 200, second.content)
+            self.assertNotEqual(User.objects.get(phone='01712345678').avatar.name, old_name)
+            self.assertFalse(User.objects.get(phone='01712345678').avatar.storage.exists(old_name))
+            self.assertFalse(User.objects.get(pk=other.pk).avatar)
+            removed = self.client.delete(path, HTTP_AUTHORIZATION=f'Bearer {token}')
+            self.assertEqual(removed.status_code, 200, removed.content)
+            self.assertIsNone(removed.json()['user']['avatar_url'])
+            self.assertFalse(User.objects.get(phone='01712345678').avatar)
+
     def test_owner_can_upload_replace_and_remove_shop_logo(self):
         from .models import AuthSession
 
